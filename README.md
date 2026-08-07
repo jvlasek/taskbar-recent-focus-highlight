@@ -1,0 +1,201 @@
+# Taskbar Recent Focus Highlight
+
+A Windhawk mod that visually highlights the most recently used **apps** on the
+Windows 11 taskbar, and (optionally) the most recently used **window** inside
+multi-instance thumbnail previews.
+
+**Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
+**Author:** Jakub Vlášek / Grok Build
+**Status:** v0.7.8 — app ranks (left-bar default) + configurable thumbnail preview styles
+
+For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
+
+## Problem
+
+With many open applications (20–30+ icons), it becomes hard to quickly locate
+the programs you were most recently working with. With several windows of the
+same app (VS Code, Terminal, Calibre, …), hover previews look nearly identical
+too — so “which one did I just use?” is unclear.
+
+## Solution
+
+1. **App ranks** — track focus and highlight the top N recent **running** taskbar
+   icons (left bar, frame, full plate, or bottom running indicator).
+2. **Preview ranks** — separately track focus per **window** (`HWND`). When a
+   multi-window thumbnail flyout opens, mark the most recent window’s preview
+   (title bar, soft title tint, whole plate, or ring).
+
+## Features
+
+- Only affects **running apps** (pinned-only icons ignored)
+- Highlights the **top N** recent apps (default 3; configurable)
+- Icon styles: **left bar** (default), frame, full plate, bottom running bar
+- Optional subtle **icon size scaling** per rank
+- **Minimum focus time** — filters Alt+Tab noise (default 8s for apps)
+- **Decay** — apps drop out after idle (default 30 min)
+- **Exclude list** — paths / exe names / app IDs
+- **Tray-only filter** — ignore focus targets with no taskbar button (default on)
+- **Thumbnail previews** — multi-window flyouts only; own min-focus / decay / style
+- Fully configurable through Windhawk settings
+
+## Settings
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Enabled | Master toggle | On |
+| Number of highlighted apps | How many recent apps to boost (1–6 recommended) | 3 |
+| Minimum focus time (seconds) | App must stay focused this long to enter ranks | 8 |
+| Glow color | Accent / fixed / custom hex | Accent |
+| Glow intensity (Rank 1/2/3) | Strength per rank (0–100) | 100 / 70 / 45 |
+| Glow style | Left bar / Frame / Full / Bottom bar | **Left bar** |
+| Glow thickness | Border or bar thickness (px) | 3 |
+| Glow roundness (%) | Corner radius for frame/full | 28 |
+| Glow size (%) | Size vs icon panel / bar length | 92 |
+| Glow layers | Nested frames / soft bar layers (1–3) | 2 |
+| Fill opacity | Full plate / bars / preview plate strength | 40 |
+| Debug log glow metrics | Extra size/bind logging | Off |
+| Size boost (%) (Rank 1/2/3) | Icon scale (0 = off) | 10 / 6 / 3 |
+| Decay time (minutes) | Drop app from ranks after idle | 30 |
+| Only apps on the taskbar | Skip tray-only / popup focus targets | On |
+| Highlight recent window in thumbnails | Multi-window preview mark | On |
+| Preview highlight style | Title bar / Title bg / Plate / Ring | **Title bar** |
+| Preview minimum focus (seconds) | Window→preview recency (separate from apps) | 1 |
+| Preview decay (minutes) | Drop window from preview recency | 15 |
+| Exclude list | Never highlight (exe, path, or AppId) | (empty) |
+
+### Preview styles (multi-window flyout only)
+
+| Style | Look | Notes |
+|-------|------|--------|
+| **Title bar** (default) | Thin accent line under the window title | Good default; sits just below the text |
+| **Title background** | Soft wash behind the title | Kept light so text stays readable |
+| **Whole preview plate** | Tints the card chrome (`BackgroundBorder`) | Strong, clear signal |
+| **Ring** | Hollow frame around the card | Simple placeholder |
+
+Single-window flyouts are **never** marked (nothing to disambiguate).
+
+## Share / install (for testers)
+
+1. Install [Windhawk](https://windhawk.net/).
+2. Create a **local mod** (or update yours) and paste / load
+   `taskbar-recent-focus-highlight.wh.cpp`.
+3. Compile, enable (injects into `explorer.exe` only).
+4. Optional: enable **Debug logging** on the mod while testing.
+5. After updating the `.cpp`, recompile in Windhawk; a full **explorer restart**
+   is the cleanest way to pick up new hooks.
+
+## How to test
+
+1. Set app min-focus to `1`–`2`s (and preview min-focus to `0`–`1`) for faster trials.
+2. Focus several apps long enough → icon ranks 1 > 2 > 3 (left bar by default).
+3. Open **two+** windows of one app, focus one, hover the combined icon → that
+   preview should show the chosen preview style; the other should not.
+4. Same-title windows (e.g. two Calibre views of the same file) should still
+   track separately when TaskItem maps resolve (`how=group-order` / `taskitem`
+   in debug log).
+5. Useful log lines: `Confirmed focus:`, `Preview focus confirmed:`,
+   `Preview resolve:`, `sibling[`, `ApplyAllHighlights`.
+6. Disable the mod or toggle **Enabled** off → all chrome clears.
+
+---
+
+## Architecture (why things look the way they do)
+
+### Two different identities (apps)
+
+| Side | What we get | Example |
+|------|-------------|---------|
+| **Focus tracking** | `HWND` → process image path | `C:\…\WindowsTerminal.exe` |
+| **Taskbar UI** | XAML `TaskListButton` | Automation name `"Windows Terminal"` |
+
+Buttons are not HWNDs. The mod:
+
+1. Keeps a **recency list** keyed by process path.
+2. **Matches** buttons via taskband path cache (primary), then name scores.
+3. **Paints** only matched running buttons.
+
+### Window identity (previews)
+
+| Side | What we get | Example |
+|------|-------------|---------|
+| **Focus** | `HWND` + title | Calibre window A vs B |
+| **Flyout UI** | `TaskItemThumbnailView` | Two nearly identical cards |
+
+Preview matching prefers **TaskItem → HWND** maps from optional
+`TaskItemThumbnail` ctor hooks, then **group construction order** when
+DataContext does not line up with the map, then unique title assignment.
+Identical titles cannot be disambiguated by name alone.
+
+```
+  Focus (HWND / path)
+         │
+         ├─► App recency (path)  ──match──►  TaskListButton glow
+         │
+         └─► Window recency (HWND) ──match──►  Thumbnail glow (2+ cards)
+```
+
+### Other important decisions
+
+| Topic | Decision | Why |
+|-------|----------|-----|
+| App min focus | Default 8s | Alt+Tab should not reshuffle ranks |
+| Preview min focus | Default 1s (separate) | Snappier for multi-window |
+| Rank key | Full process path (UPPER) | Distinct installs of same exe name |
+| Icon default style | Left vertical bar | Clear without heavy chrome |
+| Preview default | Title bar under label | Light; plate available for stronger mark |
+| Focus hook | Dedicated WinEvent thread | Reliable timers + pump |
+| UI updates | XAML dispatcher only | Unsafe to touch tree off UI thread |
+| Glow chrome | Own named overlays | Avoid fighting hover/active storyboards |
+| Shell / UWP host | Skipped | Don’t rank explorer / AFH as the app |
+
+### High-level runtime flow
+
+1. User focuses an app long enough → process enters / refreshes app map → top N ranks.
+2. Matching binds ranks to `TaskListButton`s → icon style applied.
+3. Same focus path confirms **HWND** after preview min-focus → window map.
+4. Multi-window flyout opens → resolve each thumbnail to HWND → mark the most recent.
+5. Unload / disable → clear icon and preview chrome.
+
+---
+
+## Technical constraints
+
+- Injects into `explorer.exe` only (`@include explorer.exe`)
+- Windows 11 XAML taskbar (`Taskbar.View.dll` + `taskbar.dll` identity hooks)
+- Should coexist with **Windows 11 Taskbar Styler** where possible (own named
+  elements; not guaranteed conflict-free)
+- Must stay lightweight — taskbar is critical UI
+- Thumbnail symbol hooks are **optional**; missing symbols leave app ranks working
+
+## Implementation progress
+
+| Step | Status | What |
+|------|--------|------|
+| 1 | **Done** | Focus hook, min-focus, ranking, decay, exclude, settings |
+| 2 | **Done** | App match → `TaskListButton`; styles + size boost |
+| 3 | **Done** | Multi-layer / bars / bottom indicator; path cache (option C) |
+| 4 | **Done** | Thumbnail recency, styles (titleBar / titleBg / plate / ring), HWND maps |
+| 5 | Later | Composition shadow, reliable UWP AppId, less fuzzy app matching |
+
+## Potential future enhancements
+
+- Per-app custom boost strength
+- Temporary manual boost
+- Composition / true GPU outer glow
+- Stronger AppId / package identity for UWP
+- Classic (non-XAML) thumbnail path if still needed on some builds
+
+## Target users
+
+Power users with many simultaneously open applications who frequently switch
+between a small set of active programs — and often multiple windows per app.
+
+## Repo layout
+
+```
+whawk-lru/
+  README.md                              ← product + architecture (this file)
+  AGENTS.md                              ← design decisions for contributors/agents
+  taskbar-recent-focus-highlight.wh.cpp  ← the Windhawk mod (single file)
+  example/                               ← reference mods (read-only)
+```

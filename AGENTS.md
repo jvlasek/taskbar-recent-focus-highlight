@@ -1,0 +1,343 @@
+# Agent / contributor guide
+
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.7.x). Read this
+before changing focus tracking, button matching, thumbnail previews, or visuals.
+
+## What this project is
+
+A **Windhawk mod** injected into `explorer.exe` that:
+
+1. Watches which app/window the user is actually using (window focus).
+2. Maintains **app-level** recency ranking (top N processes) → taskbar icon glow.
+3. Maintains **window-level** recency (`HWND`) → multi-window thumbnail mark.
+4. Paints own-named XAML overlays (never permanent restyles that hover states wipe).
+
+Reference mods live in `example/` (icon size, thumbnail size, volume-per-app,
+taskbar styler). Patterns (Taskbar.View hooks, `FindChildByName`, settings YAML,
+LoadLibrary hooks, TaskItemThumbnail ctor maps) come from those files and from
+[ramensoftware/windhawk-mods](https://github.com/ramensoftware/windhawk-mods).
+
+---
+
+## Why “app matching” exists (important)
+
+Focus tracking and taskbar UI live in **two different worlds**. The mod must
+bridge them.
+
+### World A — focus / process identity
+
+`EVENT_SYSTEM_FOREGROUND` gives an `HWND`. From that we resolve:
+
+| Field | Example | Role |
+|--------|---------|------|
+| Process image path | `C:\…\WindowsTerminal.exe` | Stable **key** for app ranking |
+| File name | `WindowsTerminal.exe` | Logs, exclude list, fuzzy match |
+| PID | `12345` | Min-focus “still same app?” checks |
+| HWND | window handle | Preview recency map key |
+
+The app recency map is keyed by **uppercase full path**. That is deliberate: two
+different `foo.exe` binaries in different folders stay distinct.
+
+### World B — taskbar XAML buttons
+
+Highlights are applied to `Taskbar.TaskListButton` elements inside
+`Taskbar.View.dll`. A button is **not** an HWND and does not expose a simple
+“process path” property.
+
+What we *can* observe:
+
+- `AutomationProperties.Name` — human label, e.g. `"Windows Terminal"`
+- Visual states (`ActiveNormal`, …) — which button is currently active
+- `get_IsRunning` — running vs pinned-only
+- Child elements: `IconPanel`, `Icon`, `BackgroundElement`, …
+- Via taskband hooks: button → `ITaskItem` / group → `HWND` / PID → path
+
+### App matching (in practice)
+
+```
+ranked apps (path / exe)
+        │
+        ▼
+   path cache (option C) + name scores  ──►  TaskListButton
+        │
+        ▼
+   ApplyButtonHighlight(rank)  or  ClearButtonHighlight()
+```
+
+Order of preference:
+
+1. **Process path cache (option C)** — resolve button → HWND/PID → image path;
+   score 1000 exact / 900 same file name. Same stack as volume-per-app.
+2. **Cached automation name** — after learn `path → "Windows Terminal"`.
+3. **Fuzzy / title scores** — alphanumeric compare, greedy 1:1 assignment.
+4. **Active-button association** — on confirm, store active running button name.
+
+Pinned-only icons: no highlight (`IsRunning == false`).
+
+### Why not only match on “active button”?
+
+Only the **currently focused** app is Active. Ranks 2 and 3 are recent but
+**not** active, so they need identity matching.
+
+### Known gaps (app matching)
+
+| Gap | Impact | Possible fix |
+|-----|--------|----------------|
+| UWP / `ApplicationFrameHost.exe` | Skipped today | AppUserModelID / package family |
+| Fuzzy false positive/negative | Wrong or missing glow | Prefer path cache / AppId |
+| Combined icons | One button per app group | Correct for combined mode |
+| Localization of automation names | Fuzzy may fail | Path cache + active association |
+
+---
+
+## Window-level recency + thumbnail matching
+
+App ranks answer “which **app**?”. Thumbnail glow answers “which **window**?”.
+
+| Layer | Key | Timers |
+|-------|-----|--------|
+| App ranks | Process path (UPPER) | `minFocusSeconds`, `decayMinutes` |
+| Preview glow | `HWND` in `g_windowFocusMap` | `previewMinFocusSeconds`, `previewDecayMinutes` |
+
+### Product rules
+
+- Glow **only the most recent** window in a flyout (not a rank ladder).
+- **Skip** flyouts with ≤1 thumbnail.
+- Preview timers are **independent** of app timers.
+- Do **not** require the app to be in icon top-N.
+
+### Matching a `TaskItemThumbnailView` to an HWND
+
+```
+TaskItemThumbnail ctor (optional) → map { model, taskGroup, taskItem, hwnd }
+TaskItemThumbnailView::OnApplyTemplate → collect siblings → assign HWNDs → paint
+```
+
+Resolve order in `RefreshThumbnailFlyout_UIThread`:
+
+1. **TaskItem** — `DataContext` ↔ ctor map (COM identity compare). Often fails
+   in practice (projection mismatch) even when maps exist.
+2. **Group-order** — find `taskGroup` with N unique HWNDs matching sibling count,
+   or last N mapped HWNDs; assign index ↔ sibling (left→right ≈ ctor order).
+   This is what fixed same-title Calibre after explorer reload.
+3. **Title unique** — last resort; each HWND used once. **Ambiguous** when two
+   windows share the same title (both automation names often look like
+   `"file — App - 2 running windows"`).
+
+Hooks for thumbnails are **optional**. Missing symbols: app ranks still work;
+preview may fall back to title-only (weak for identical titles).
+
+### Preview visuals (must not break layout)
+
+Thumbnail cards use a Grid with **rows** (title | image). A normal child in
+cell (0,0) expands the title row (bar between icon and text + card grows).
+
+Rules:
+
+1. Overlay host **spans all rows/columns** (`SpanHostOverPanel`) + Stretch.
+2. Children positioned with **explicit size + `RenderTransform`** so measure
+   does not include visual offset.
+3. Own names: `WhRecentFocusThumbGlow`, `WhRecentFocusThumbTitleBar`,
+   `WhRecentFocusThumbTitleBg`, marker `WhRecentFocusThumbNative` for plate.
+
+| `previewStyle` | Implementation |
+|----------------|----------------|
+| `titleBar` | Thin rect just under title baseline (~2px gap) |
+| `titleBg` | Soft wash only (~22–55 alpha); host is above glyphs |
+| `plate` | Prefer tint `BackgroundBorder`; marker-cleared on clear |
+| `ring` | Hollow frame via transform (placeholder) |
+
+Clear always removes named overlays; plate clears local Background when marker present.
+
+---
+
+## Architecture overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Focus thread (message-only HWND + GetMessage loop)          │
+│  • SetWinEventHook(EVENT_SYSTEM_FOREGROUND) OUTOFCONTEXT    │
+│  • App min-focus timer + preview min-focus timer + decay    │
+│  • g_appFocusMap / g_rankedApps / g_windowFocusMap          │
+│  • RequestApplyVisuals / RequestApplyPreviewVisuals         │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+          ┌──────────────────┴──────────────────┐
+          ▼                                     ▼
+┌─────────────────────────┐       ┌─────────────────────────────┐
+│ Explorer UI — icons     │       │ Explorer UI — thumbnails    │
+│ TaskListButton hooks    │       │ TaskItemThumbnailView       │
+│ path cache + glow host  │       │ ctor maps + overlay host    │
+└─────────────────────────┘       └─────────────────────────────┘
+```
+
+### Why a dedicated focus thread?
+
+`WINEVENT_OUTOFCONTEXT` needs a message pump for timers + `PostMessage`. Keeps
+focus work off the critical taskbar paint path except when marshaling apply.
+
+### Why marshal to the UI thread?
+
+XAML must run on the tree’s dispatcher. `RunOnUiThread` uses a weak button
+anchor. Log “no dispatcher anchor” **once** until the first button is seen.
+
+### Why hook `UpdateVisualStates`?
+
+- Re-apply after Windows resets visuals
+- Register buttons (`g_trackedButtons`)
+- Same pattern as other taskbar mods
+
+`LoadLibraryExW` covers late `Taskbar.View.dll` load.
+
+---
+
+## Recency engine decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| App rank key | Full image path (UPPER) | Distinct same-named exes |
+| Window key | `HWND` | Multi-instance previews |
+| Display name | File name only | Logs / exclude UX |
+| App min focus | Default 8s | Alt+Tab noise |
+| Preview min focus | Default 1s | Snappier window mark |
+| Same-PID during app timer | Still same candidate | New top-level window of app |
+| App decay | Default 30 min | List stays “recent” |
+| Preview decay | Default 15 min | Separate |
+| Exclude list | Path / file / AppId, case-insensitive | Standard Windhawk UX |
+| Shell hosts ignored | explorer, AFH, SearchHost, … | Don’t rank the shell |
+| Highlight count | 0–16 (UI suggests 1–6) | Settings-capped |
+| Tray-only | `requireTaskbarButton` default on | No TaskListButton ⇒ not ranked |
+
+Promotion (apps):
+
+1. Foreground → `g_pendingFocus`
+2. After `minFocusSeconds` (or immediate if already tracked) → app map tick
+3. Sort → top `highlightCount` → `g_rankedApps`
+4. UI apply
+
+Promotion (windows): parallel with `previewMinFocusSeconds` → `g_windowFocusMap`.
+
+---
+
+## Visual decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Icon chrome | Own `WhRecentFocusGlow` only | Never style `BackgroundElement` |
+| Icon default | **Left bar** | Preferred product default |
+| Frame Z-order | Overlay last (above icon) | Stroke not covered |
+| Full Z-order | Overlay first (behind icon) | Plate under glyph |
+| Button identity | Option C path cache + fuzzy | Volume-per-app stack |
+| Path cache | First UVS + force on press; 2s debounce | Not every paint |
+| Rank match | Path 1000 / file 900 / fuzzy | 1:1 greedy |
+| Tray-only | `requireTaskbarButton` | Widgets / tray popups |
+| Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
+| Decay clear | Recompute + `g_pendingOverlaySweep` | No orphan plates |
+| Never | `ClearValue` BackgroundElement; clip null ancestors | Pale hover leftovers |
+| Preview layout | Span rows + RenderTransform | Title-row expansion bug |
+| Preview titleBar | ~2px under baseline | Not hugging image; not strikethrough |
+| Preview titleBg | Soft alpha only | Readable text |
+| Preview plate | BackgroundBorder tint | Strong signal |
+| Size boost | Icon `ScaleTransform` only | No layout width change |
+| Hit testing | `IsHitTestVisible=False` | Clicks pass through |
+| Coexistence | Own names; clear on unload | Taskbar Styler friendlier |
+| Pinned-only | No highlight | Product rule |
+
+**Not done yet:** Composition `DropShadow` / true GPU glow. Large spread may clip.
+
+---
+
+## Threading & state map
+
+| Object | Guard | Thread |
+|--------|--------|--------|
+| `g_appFocusMap`, `g_rankedApps`, `g_pendingFocus`, `g_keyToAutomationName`, `g_windowFocusMap` | `g_stateMutex` | Focus write; UI read under lock |
+| `g_trackedButtons`, `g_dispatcherAnchor` | `g_buttonsMutex` | UI primarily |
+| `g_buttonPathCache` | `g_buttonPathMutex` | UI / resolve |
+| `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
+| `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
+| `g_settings` | init / settings-changed | Read-mostly |
+| `g_unloading` | atomic | Any |
+
+Do **not** hold `g_stateMutex` across XAML or `Dispatcher` calls.
+
+---
+
+## Settings ↔ code
+
+| Setting key | Field |
+|-------------|--------|
+| `enabled` | `g_settings.enabled` |
+| `highlightCount` | `g_settings.highlightCount` |
+| `minFocusSeconds` | `g_settings.minFocusSeconds` |
+| `glowColor` / `customGlowColor` | color mode + hex |
+| `glowIntensityRank1..3` | `glowIntensity[3]` |
+| `sizeBoostRank1..3` | `sizeBoostPercent[3]` |
+| `glowStyle` | `LeftBar` / `Frame` / `Full` / `BottomBar` (default **leftBar**) |
+| `glowThickness` / `glowRoundness` / `glowSize` / `glowLayers` | metrics |
+| `glowFillOpacity` | Full / bars / plate-ish strength |
+| `glowDebugLog` | verbose bind + preview resolve logs |
+| `decayMinutes` | app decay |
+| `requireTaskbarButton` | tray-only filter |
+| `previewHighlightEnabled` | preview master (also needs `enabled`) |
+| `previewMinFocusSeconds` | window confirm |
+| `previewDecayMinutes` | window decay |
+| `previewStyle` | `titleBar` / `titleBg` / `plate` / `ring` |
+| `excludedPrograms[i]` | uppercase set |
+
+Ranks beyond 3 reuse rank-3 intensity/size. Preview reuses rank-1 color and
+shared thickness/roundness/fill opacity (no size boost on thumbnails).
+
+---
+
+## File layout
+
+```
+whawk-lru/
+  README.md                              # product + high-level architecture
+  AGENTS.md                              # this file
+  taskbar-recent-focus-highlight.wh.cpp  # single translation unit for Windhawk
+  example/                               # reference mods (read-only)
+```
+
+Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk builds.
+
+---
+
+## When changing code
+
+1. **Matching bugs (wrong icon):** prefer path cache / AppId over fuzzier names.
+2. **Matching bugs (wrong preview):** prefer TaskItem HWND maps / group-order;
+   never assign the same HWND to two siblings; don’t rely on title for twins.
+3. **Visual bugs:** [UWPSpy](https://ramensoftware.com/uwpspy); names vary by build.
+4. **Layout bugs on thumbnails:** never add sized children only to grid row 0;
+   use span + transform.
+5. **Crashes:** try/catch around XAML; don’t block focus hooks; clear on uninit.
+6. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
+7. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
+   for thumbnail symbols so older builds still load.
+8. **Test:** app min-focus 0–1s; preview 0–1s; two same-title windows; debug log
+   `Preview resolve:` + `sibling[` lines; disable clears all chrome.
+
+### Useful log substrings
+
+| Substring | Meaning |
+|-----------|---------|
+| `Focus candidate:` / `Confirmed focus:` | App recency |
+| `Preview focus confirmed:` | Window recency |
+| `Preview resolve:` / `sibling[` | Per-card HWND + `how=taskitem\|group-order\|title` |
+| `ApplyAllHighlights` | Icon apply / empty ranks |
+| `Hooked Taskbar.View.dll` | View symbols |
+| `thumbnail OnApplyTemplate unavailable` | Optional miss |
+| `no dispatcher anchor` | Before first button (logged once) |
+| `Button path cache:` | Option C resolve |
+
+---
+
+## Future work (ordered suggestions)
+
+1. Composition shadow / true GPU outer glow if XAML halo stays clipped.
+2. Reliable UWP identity (AppUserModelID / package).
+3. Stronger DataContext ↔ TaskItemThumbnail identity (less group-order reliance).
+4. Classic / non-XAML thumbnail path if still needed on some builds.
+5. Multi-monitor secondary taskbars if weak refs only cover primary.
