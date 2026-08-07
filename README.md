@@ -6,7 +6,7 @@ multi-instance thumbnail previews.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.7.8 — app ranks (left-bar default) + configurable thumbnail preview styles
+**Status:** v0.8.3 — app ranks (left-bar default) + configurable thumbnail preview styles
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -40,28 +40,44 @@ too — so “which one did I just use?” is unclear.
 
 ## Settings
 
+Windhawk’s settings schema does **not** support section headers (`$group` is
+rejected). Options are ordered and named with prefixes so groups stay clear in
+the flat list:
+
+### General
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Enabled | Master toggle | On |
+| Enabled | Master toggle (icons + previews) | On |
 | Number of highlighted apps | How many recent apps to boost (1–6 recommended) | 3 |
 | Minimum focus time (seconds) | App must stay focused this long to enter ranks | 8 |
-| Glow color | Accent / fixed / custom hex | Accent |
-| Glow intensity (Rank 1/2/3) | Strength per rank (0–100) | 100 / 70 / 45 |
-| Glow style | Left bar / Frame / Full / Bottom bar | **Left bar** |
-| Glow thickness | Border or bar thickness (px) | 3 |
-| Glow roundness (%) | Corner radius for frame/full | 28 |
-| Glow size (%) | Size vs icon panel / bar length | 92 |
-| Glow layers | Nested frames / soft bar layers (1–3) | 2 |
-| Fill opacity | Full plate / bars / preview plate strength | 40 |
-| Debug log glow metrics | Extra size/bind logging | Off |
-| Size boost (%) (Rank 1/2/3) | Icon scale (0 = off) | 10 / 6 / 3 |
+| When to skip min-focus | Immediate if in map / only if already top-N / always wait | Immediate if in map |
 | Decay time (minutes) | Drop app from ranks after idle | 30 |
 | Only apps on the taskbar | Skip tray-only / popup focus targets | On |
-| Highlight recent window in thumbnails | Multi-window preview mark | On |
+| Exclude list | Never highlight (exe, path, or AppId) | (empty) |
+
+### Taskbar icons
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Icon highlight style | Left bar / Frame / Full / Bottom bar | **Left bar** |
+| Glow color | Accent / fixed / custom hex (also used for previews) | Accent |
+| Intensity rank 1/2/3 | Strength per rank (0–100) | 100 / 70 / 45 |
+| Thickness / roundness / size / layers | Geometry of icon chrome | 3 / 28 / 92 / 2 |
+| Fill opacity | Full plate / left & bottom bar strength | 40 |
+| Size boost rank 1/2/3 (%) | Icon scale (0 = off) | 10 / 6 / 3 |
+
+### Thumbnail previews
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Highlight recent window in previews | Multi-window flyout mark | On |
 | Preview highlight style | Title bar / Title bg / Plate / Ring | **Title bar** |
+| Preview tint opacity | Plate + title-background wash (0–100) | 40 |
 | Preview minimum focus (seconds) | Window→preview recency (separate from apps) | 1 |
 | Preview decay (minutes) | Drop window from preview recency | 15 |
-| Exclude list | Never highlight (exe, path, or AppId) | (empty) |
+
+### Advanced
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Debug log (verbose) | Path binds + preview resolve details | Off |
 
 ### Preview styles (multi-window flyout only)
 

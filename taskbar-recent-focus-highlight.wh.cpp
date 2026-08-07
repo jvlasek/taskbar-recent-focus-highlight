@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.7.8
+// @version         0.8.3
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -51,18 +51,77 @@ See the repo README.md for full settings and architecture notes.
 
 // ==WindhawkModSettings==
 /*
+# Windhawk shows settings in this list order (no section headers — $group is
+# not allowed by the settings schema). Names use [General] / [Icons] /
+# [Previews] / [Advanced] prefixes so groups stay obvious in a flat list.
+
+# --- General ---
 - enabled: true
-  $name: Enabled
-  $description: Master toggle for highlighting
+  $name: "[General] Enabled"
+  $description: Master toggle for all highlighting (icons and previews)
 - highlightCount: 3
-  $name: Number of highlighted apps
-  $description: How many recent apps to boost (1–6 recommended)
+  $name: "[General] Number of highlighted apps"
+  $description: How many recent apps to boost on the taskbar (1–6 recommended)
 - minFocusSeconds: 8
-  $name: Minimum focus time (seconds)
-  $description: Only count as recent if focused for at least this long
+  $name: "[General] Minimum focus time (seconds)"
+  $description: >-
+    Only count an app as recent if it stays focused at least this long.
+    Filters Alt+Tab noise. (Preview windows use a separate timer under Previews.)
+    See “When to skip min-focus” for re-focus of apps already in the list.
+- promoteMode: immediateTracked
+  $name: "[General] When to skip min-focus"
+  $description: >-
+    Controls instant promotion when you re-focus an app (confirmed apps still
+    become rank 1 once promoted — this only skips the wait timer).
+
+    Immediate if in recency map (default): any app still in the map (even if
+    not currently highlighted) promotes immediately.
+
+    Immediate only if highlighted: instant only when the app is already in the
+    top-N glow set; rank 4+ and new apps wait the full min-focus time.
+
+    Always wait: every app focus (including re-focus) waits min-focus seconds.
+  $options:
+  - immediateTracked: Immediate if still in recency map (default)
+  - immediateTopN: Immediate only if already highlighted (top N)
+  - alwaysWait: Always wait min-focus time
+- decayMinutes: 30
+  $name: "[General] Decay time (minutes)"
+  $description: >-
+    Time after last focus before an app drops out of the taskbar highlight
+    list. (Preview windows use a separate decay under Previews.)
+- requireTaskbarButton: true
+  $name: "[General] Only apps on the taskbar"
+  $description: >-
+    Ignore tray-only / tool windows that take focus but have no taskbar button
+    (e.g. desktop widgets that open a popup then hide to the tray).
+- excludedPrograms: [""]
+  $name: "[General] Exclude list"
+  $description: >-
+    Apps that should never be highlighted (icons or previews). Entries can be
+    process names, paths or application IDs, for example:
+
+    mspaint.exe
+
+    C:\Windows\System32\notepad.exe
+
+    Microsoft.WindowsCalculator_8wekyb3d8bbwe!App
+
+# --- Taskbar icons ---
+- glowStyle: leftBar
+  $name: "[Icons] Highlight style"
+  $description: >-
+    How ranked apps look on the taskbar. Left bar = vertical pill. Frame/Full =
+    rounded rectangle. Bottom bar = our own underline (does not restyle the
+    native running indicator permanently).
+  $options:
+  - leftBar: Left vertical bar
+  - frame: Frame (hollow rounded rectangle)
+  - full: Full (filled rounded rectangle)
+  - bottomBar: Bottom bar (under icon)
 - glowColor: accent
-  $name: Glow color
-  $description: Base color for the glow
+  $name: "[Icons] Glow color"
+  $description: Base color for icon highlights (and previews)
   $options:
   - accent: System accent color
   - green: Green
@@ -71,114 +130,91 @@ See the repo README.md for full settings and architecture notes.
   - white: White
   - custom: Custom (see custom glow color)
 - customGlowColor: "#00C853"
-  $name: Custom glow color
-  $description: Used when glow color is set to Custom (hex, e.g. #00C853)
+  $name: "[Icons] Custom glow color"
+  $description: Used when glow color is Custom (hex, e.g. #00C853)
 - glowIntensityRank1: 100
-  $name: Glow intensity rank 1
-  $description: Strength of glow/border for the most recent app (0–100)
+  $name: "[Icons] Intensity rank 1"
+  $description: Strength for the most recent app (0–100)
 - glowIntensityRank2: 70
-  $name: Glow intensity rank 2
-  $description: Strength of glow/border for the 2nd most recent app (0–100)
+  $name: "[Icons] Intensity rank 2"
+  $description: Strength for the 2nd most recent app (0–100)
 - glowIntensityRank3: 45
-  $name: Glow intensity rank 3
-  $description: Strength of glow/border for the 3rd most recent app (0–100)
-- glowStyle: leftBar
-  $name: Glow style
-  $description: >-
-    Frame / Full = rounded rectangle around the icon. Left bar = vertical pill
-    on the left (like a sideways running indicator). Bottom bar = colorize and
-    lengthen the native horizontal running indicator under the icon.
-  $options:
-  - leftBar: Left vertical bar
-  - frame: Frame (hollow rounded rectangle)
-  - full: Full (filled rounded rectangle)
-  - bottomBar: Bottom running bar (colored / long)
+  $name: "[Icons] Intensity rank 3"
+  $description: Strength for the 3rd most recent app (0–100); also used for ranks 4+
 - glowThickness: 3
-  $name: Glow thickness
+  $name: "[Icons] Thickness (px)"
   $description: >-
-    Frame/Full border width, or bar thickness in pixels (1–16). For left/bottom
-    bars this is the bar’s short dimension.
+    Frame/Full border width, or bar thickness (1–16). For left/bottom bars this
+    is the bar’s short dimension.
 - glowRoundness: 28
-  $name: Glow roundness (%)
+  $name: "[Icons] Roundness (%)"
   $description: >-
     Corner radius for Frame/Full (0 = square, ~25–35 = Win11, 50 ≈ pill).
     Left bar uses this for pill rounding; bottom bar ignores it.
 - glowSize: 92
-  $name: Glow size (%)
+  $name: "[Icons] Size (%)"
   $description: >-
     Frame/Full: box size vs icon panel (≤100). Left bar: bar height %. Bottom
     bar: indicator length % of icon width (try 70–100).
 - glowLayers: 2
-  $name: Glow layers
+  $name: "[Icons] Layers"
   $description: >-
     Frame/Full: nested frames (1–3). Left bar: soft outer glow layers. Bottom
-    bar: ignored (single indicator).
+    bar: ignored.
 - glowFillOpacity: 40
-  $name: Fill opacity (Full / bars)
+  $name: "[Icons] Fill opacity"
   $description: >-
-    0–100. Plate fill for Full; solid bar opacity for Left/Bottom styles.
-    Frame uses stroke only.
-- glowDebugLog: false
-  $name: Debug log glow metrics
-  $description: >-
-    When on, logs size/roundness/thickness per apply (handy while tuning).
-    Leave off for normal use.
+    0–100. Plate fill for Full; solid bar opacity for Left/Bottom. Frame uses
+    stroke only. (Thumbnail tints use [Previews] Tint opacity.)
 - sizeBoostRank1: 10
-  $name: Size boost rank 1 (%)
+  $name: "[Icons] Size boost rank 1 (%)"
   $description: Subtle icon scale for rank 1 (0 = disabled)
 - sizeBoostRank2: 6
-  $name: Size boost rank 2 (%)
+  $name: "[Icons] Size boost rank 2 (%)"
   $description: Subtle icon scale for rank 2 (0 = disabled)
 - sizeBoostRank3: 3
-  $name: Size boost rank 3 (%)
+  $name: "[Icons] Size boost rank 3 (%)"
   $description: Subtle icon scale for rank 3 (0 = disabled)
-- decayMinutes: 30
-  $name: Decay time (minutes)
-  $description: Time after last focus before the app drops out of highlights
-- requireTaskbarButton: true
-  $name: Only apps on the taskbar
-  $description: >-
-    Ignore tray-only / tool windows that take focus but have no taskbar button
-    (e.g. desktop widgets that open a popup then hide to the tray). When off,
-    any focused process can enter the recency list even if unmatched.
+
+# --- Thumbnail previews ---
 - previewHighlightEnabled: true
-  $name: Highlight recent window in thumbnails
+  $name: "[Previews] Highlight recent window"
   $description: >-
-    When hovering a multi-window taskbar icon, glow the thumbnail of the most
+    When hovering a multi-window taskbar icon, mark the thumbnail of the most
     recently focused window. Single-window flyouts are never highlighted.
-- previewMinFocusSeconds: 1
-  $name: Preview minimum focus time (seconds)
-  $description: >-
-    Separate from app ranking. How long a window must stay focused before it
-    counts as the “recent” preview (0 = immediate).
-- previewDecayMinutes: 15
-  $name: Preview decay time (minutes)
-  $description: >-
-    Separate from app ranking. Drop a window from preview recency after this
-    much idle time (0 = never).
 - previewStyle: titleBar
-  $name: Preview highlight style
+  $name: "[Previews] Highlight style"
   $description: >-
-    How to mark the most recent window in a multi-window thumbnail flyout.
-    Ring = hollow border (simple placeholder). Title background = tint behind
-    the window title. Plate = tint the whole preview card (like hover chrome).
-    Title bar = thin accent bar under the title (between label and image).
+    How to mark the recent window. Title bar = thin line under the title.
+    Title background = soft wash behind the title. Plate = tint the whole card.
+    Ring = hollow border around the card.
   $options:
   - titleBar: Bar under window title
   - titleBg: Title background tint
   - plate: Whole preview plate
-  - ring: Ring / frame (placeholder)
-- excludedPrograms: [""]
-  $name: Exclude list
+  - ring: Ring / frame
+- previewFillOpacity: 40
+  $name: "[Previews] Tint opacity"
   $description: >-
-    Apps that should never be highlighted. Entries can be process names, paths
-    or application IDs, for example:
+    0–100. Strength of title-background wash and whole-preview plate. Title bar
+    line uses full accent and ignores this. Independent of [Icons] Fill opacity.
+- previewMinFocusSeconds: 1
+  $name: "[Previews] Minimum focus (seconds)"
+  $description: >-
+    How long a window must stay focused before it counts as the “recent”
+    preview. Separate from app ranking min focus (0 = immediate).
+- previewDecayMinutes: 15
+  $name: "[Previews] Decay (minutes)"
+  $description: >-
+    Drop a window from preview recency after this idle time (0 = never).
+    Separate from app ranking decay.
 
-    mspaint.exe
-
-    C:\Windows\System32\notepad.exe
-
-    Microsoft.WindowsCalculator_8wekyb3d8bbwe!App
+# --- Advanced ---
+- glowDebugLog: false
+  $name: "[Advanced] Debug log (verbose)"
+  $description: >-
+    Logs glow metrics, path binds, and preview resolve details. Leave off for
+    normal use; turn on when diagnosing matches.
 */
 // ==/WindhawkModSettings==
 
@@ -234,6 +270,13 @@ enum class GlowStyle {
     BottomBar,  // native RunningIndicator, colored + elongated
 };
 
+// When re-focus may skip the app min-focus timer (see HandleForegroundChanged).
+enum class PromoteMode {
+    ImmediateTracked,  // any app still in g_appFocusMap (current default)
+    ImmediateTopN,     // only if currently in g_rankedApps (highlighted)
+    AlwaysWait,        // always use minFocusSeconds
+};
+
 // Thumbnail flyout highlight (independent of icon GlowStyle).
 enum class PreviewStyle {
     Ring,     // hollow frame around the whole preview (placeholder)
@@ -246,6 +289,7 @@ struct {
     bool enabled = true;
     int highlightCount = 3;
     int minFocusSeconds = 8;
+    PromoteMode promoteMode = PromoteMode::ImmediateTracked;
     GlowColorMode glowColor = GlowColorMode::Accent;
     std::wstring customGlowColor = L"#00C853";
     int glowIntensity[3] = {100, 70, 45};
@@ -255,7 +299,8 @@ struct {
     int glowRoundness = 28;     // % of glow box
     int glowSize = 92;          // % of icon panel (clamped to fit)
     int glowLayers = 2;         // 1–3
-    int glowFillOpacity = 40;   // % for Full style
+    int glowFillOpacity = 40;   // % for Full / left / bottom icon styles
+    int previewFillOpacity = 40;  // % for thumbnail plate / titleBg only
     bool glowDebugLog = false;
     int decayMinutes = 30;
     bool requireTaskbarButton = true;  // skip tray-only focus targets
@@ -1431,20 +1476,29 @@ void StyleGlowRectangle(Shapes::Rectangle rect,
     rect.Visibility(Visibility::Visible);
 }
 
-void ClearRunningIndicatorStyle(FrameworkElement iconPanel) {
-    // Only clear local values we may have set for bottomBar — restores native
-    // visual-state brushes for non-highlighted apps.
+FrameworkElement FindRunningIndicator(FrameworkElement iconPanel) {
+    if (!iconPanel) {
+        return nullptr;
+    }
     auto indicator = FindChildByName(iconPanel, L"RunningIndicator");
     if (!indicator) {
         indicator = FindDescendantByName(iconPanel, L"RunningIndicator");
     }
+    return indicator;
+}
+
+// Undo any local values we may have applied to the native RunningIndicator.
+// Prefer only Visibility (current bottomBar); also clear legacy Fill/size from
+// older builds so short inactive bars can reappear after ClearValue.
+void ClearRunningIndicatorStyle(FrameworkElement iconPanel) {
+    auto indicator = FindRunningIndicator(iconPanel);
     if (!indicator) {
         return;
     }
     try {
         if (auto shape = indicator.try_as<Shapes::Shape>()) {
-            auto local = shape.ReadLocalValue(Shapes::Shape::FillProperty());
-            if (local != DependencyProperty::UnsetValue()) {
+            if (shape.ReadLocalValue(Shapes::Shape::FillProperty()) !=
+                DependencyProperty::UnsetValue()) {
                 shape.ClearValue(Shapes::Shape::FillProperty());
             }
         }
@@ -1464,12 +1518,106 @@ void ClearRunningIndicatorStyle(FrameworkElement iconPanel) {
             DependencyProperty::UnsetValue()) {
             indicator.ClearValue(UIElement::OpacityProperty());
         }
+        if (indicator.ReadLocalValue(UIElement::VisibilityProperty()) !=
+            DependencyProperty::UnsetValue()) {
+            indicator.ClearValue(UIElement::VisibilityProperty());
+        }
     } catch (...) {
     }
 }
 
+// Place glow host in the IconPanel child list without thrashing native chrome.
+//
+// Moving RunningIndicator every paint (mouse-over UpdateVisualStates) causes
+// the short/long underline to flicker. Instead, put our host *under* native
+// RunningIndicator / MultiWindowElement / ProgressIndicator so they always
+// paint on top — only reorder when the host is in the wrong place.
+void EnsureGlowHostZOrder(Controls::Panel panel,
+                          UIElement host,
+                          GlowStyle style) {
+    if (!panel || !host) {
+        return;
+    }
+    try {
+        auto children = panel.Children();
+        uint32_t hostIdx = 0;
+        if (!children.IndexOf(host, hostIdx)) {
+            return;
+        }
+
+        if (style == GlowStyle::Full) {
+            // Plate behind icon and indicators.
+            if (hostIdx != 0) {
+                children.RemoveAt(hostIdx);
+                children.InsertAt(0, host);
+            }
+            return;
+        }
+
+        // Frame / left / bottom: above icon, below native underlines.
+        // Find the earliest native chrome we must stay under.
+        uint32_t insertBefore = children.Size();
+        bool foundNative = false;
+        for (PCWSTR name :
+             {L"RunningIndicator", L"MultiWindowElement", L"ProgressIndicator"}) {
+            auto el = FindChildByName(panel.as<FrameworkElement>(), name);
+            if (!el) {
+                continue;
+            }
+            uint32_t idx = 0;
+            if (!children.IndexOf(el, idx)) {
+                continue;
+            }
+            if (!foundNative || idx < insertBefore) {
+                insertBefore = idx;
+                foundNative = true;
+            }
+        }
+
+        // Re-resolve host index after any earlier mutations.
+        if (!children.IndexOf(host, hostIdx)) {
+            return;
+        }
+
+        if (foundNative) {
+            if (hostIdx < insertBefore) {
+                // Host already under native chrome — leave tree alone (no flicker).
+                return;
+            }
+            // hostIdx >= insertBefore: host is on top of native — move under.
+            children.RemoveAt(hostIdx);
+            // host was at hostIdx >= insertBefore, so insertBefore is unchanged.
+            children.InsertAt(insertBefore, host);
+        } else if (hostIdx + 1 != children.Size()) {
+            children.RemoveAt(hostIdx);
+            children.Append(host);
+        }
+    } catch (...) {
+    }
+}
+
+bool ButtonHasOurChrome(FrameworkElement button) {
+    if (!button) {
+        return false;
+    }
+    auto iconPanel = GetIconPanel(button);
+    if (!iconPanel) {
+        return FindDescendantByName(button, kGlowElementName) != nullptr ||
+               FindDescendantByName(button, kBottomBarMarkerName) != nullptr;
+    }
+    return FindChildByName(iconPanel, kGlowElementName) != nullptr ||
+           FindDescendantByName(iconPanel, kGlowElementName) != nullptr ||
+           FindChildByName(iconPanel, kBottomBarMarkerName) != nullptr ||
+           FindDescendantByName(iconPanel, kBottomBarMarkerName) != nullptr;
+}
+
 void ClearButtonHighlight(FrameworkElement button) {
     if (!button) {
+        return;
+    }
+
+    // Skip no-op clears on every mouse-over (UpdateVisualStates storms).
+    if (!ButtonHasOurChrome(button) && !g_pendingOverlaySweep.load()) {
         return;
     }
 
@@ -1524,6 +1672,8 @@ void ClearButtonHighlight(FrameworkElement button) {
         if (hadBottomBar) {
             ClearRunningIndicatorStyle(iconPanel);
         }
+        // Do not heal Visibility on every clear — that ClearValue thrashing
+        // also flickers the native underline during hover storms.
 
         if (auto icon = FindChildByName(iconPanel, L"Icon")) {
             auto localTf =
@@ -1616,6 +1766,45 @@ PCWSTR GlowStyleName(GlowStyle s) {
     }
 }
 
+PCWSTR PromoteModeName(PromoteMode m) {
+    switch (m) {
+        case PromoteMode::ImmediateTopN:
+            return L"immediateTopN";
+        case PromoteMode::AlwaysWait:
+            return L"alwaysWait";
+        case PromoteMode::ImmediateTracked:
+        default:
+            return L"immediateTracked";
+    }
+}
+
+// True if this focus change may skip the app min-focus timer.
+// Caller must hold g_stateMutex when checking ranked list (or we take it).
+bool ShouldSkipAppMinFocus(const std::wstring& key, bool alreadyTracked) {
+    if (g_settings.minFocusSeconds <= 0) {
+        return true;
+    }
+    switch (g_settings.promoteMode) {
+        case PromoteMode::AlwaysWait:
+            return false;
+        case PromoteMode::ImmediateTopN: {
+            if (!alreadyTracked) {
+                return false;
+            }
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            for (const auto& r : g_rankedApps) {
+                if (r.key == key) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        case PromoteMode::ImmediateTracked:
+        default:
+            return alreadyTracked;
+    }
+}
+
 PCWSTR PreviewStyleName(PreviewStyle s) {
     switch (s) {
         case PreviewStyle::TitleBg:
@@ -1690,20 +1879,9 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             return;
         }
 
-        // Z-order: frame/left/bottom markers above icon; full plate behind.
-        if (style == GlowStyle::Full) {
-            try {
-                auto children = panel.Children();
-                uint32_t idx = 0;
-                if (children.IndexOf(host, idx) && idx != 0) {
-                    children.RemoveAt(idx);
-                    children.InsertAt(0, host);
-                }
-            } catch (...) {
-            }
-        } else {
-            BringToFront(panel, host);
-        }
+        // Z-order once when wrong — never yank RunningIndicator every paint
+        // (that caused short/long underline flicker on mouse-over).
+        EnsureGlowHostZOrder(panel, host, style);
 
         HideAllGlowLayers(host);
 
@@ -1798,40 +1976,48 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                 rect.Visibility(Visibility::Visible);
             }
         } else if (style == GlowStyle::BottomBar) {
-            // Colorize + lengthen native RunningIndicator.
-            auto indicator = FindChildByName(iconPanel, L"RunningIndicator");
-            if (!indicator) {
-                indicator =
-                    FindDescendantByName(iconPanel, L"RunningIndicator");
-            }
+            // Draw our own bottom pill — do NOT set Fill/Width/Height on the
+            // native RunningIndicator (ClearValue left short inactive bars
+            // missing until a full explorer restart). Hide native while we
+            // paint; Clear restores Visibility via ClearValue.
+            auto indicator = FindRunningIndicator(iconPanel);
             if (indicator) {
-                const int fillA = static_cast<int>(
-                    fillOpacitySetting * 2.55 * (0.6 + 0.4 * t));
-                const double barH =
-                    (std::max)(2.0, (std::min)(6.0, thickness));
-                const double minW =
-                    panelW * sizeFrac * (0.55 + 0.45 * t);
                 try {
-                    if (auto shape = indicator.try_as<Shapes::Shape>()) {
-                        shape.Fill(
-                            Media::SolidColorBrush{withAlpha(base, fillA)});
-                    }
-                    indicator.Height(barH);
-                    indicator.MinWidth(minW);
-                    if (indicator.ReadLocalValue(
-                            FrameworkElement::WidthProperty()) !=
-                        DependencyProperty::UnsetValue()) {
-                        indicator.ClearValue(FrameworkElement::WidthProperty());
-                    }
-                    indicator.Opacity(0.9 + 0.1 * t);
-                    indicator.Visibility(Visibility::Visible);
+                    indicator.Visibility(Visibility::Collapsed);
                 } catch (...) {
                 }
             } else if (g_settings.glowDebugLog) {
                 Wh_Log(L"BottomBar: RunningIndicator not found on \"%s\"",
                        GetButtonAutomationName(button).c_str());
             }
-            // Marker so Clear only restores indicator when we used bottomBar.
+
+            const int fillA =
+                static_cast<int>(fillOpacitySetting * 2.55 * (0.6 + 0.4 * t));
+            const double barH =
+                (std::max)(2.0, (std::min)(6.0, thickness));
+            const double barW =
+                panelW * sizeFrac * (0.55 + 0.45 * t);
+            const double left = (std::max)(0.0, (panelW - barW) * 0.5);
+            const double bottom = 2.0;
+
+            if (auto rect = FindChildByName(host, kGlowLayerNames[0])
+                                .try_as<Shapes::Rectangle>()) {
+                rect.Stroke(nullptr);
+                rect.StrokeThickness(0);
+                rect.Fill(Media::SolidColorBrush{withAlpha(base, fillA)});
+                rect.RadiusX(barH * 0.5);
+                rect.RadiusY(barH * 0.5);
+                rect.Width(barW);
+                rect.Height(barH);
+                rect.HorizontalAlignment(HorizontalAlignment::Left);
+                rect.VerticalAlignment(VerticalAlignment::Bottom);
+                rect.Margin(Thickness{left, 0, 0, bottom});
+                rect.Opacity(0.9 + 0.1 * t);
+                rect.IsHitTestVisible(false);
+                rect.Visibility(Visibility::Visible);
+            }
+
+            // Marker: ClearButtonHighlight restores native indicator.
             if (!FindChildByName(iconPanel, kBottomBarMarkerName)) {
                 try {
                     PCWSTR markerXaml =
@@ -1847,8 +2033,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                 } catch (...) {
                 }
             }
-            // Glow host unused for drawing in this style.
-            HideAllGlowLayers(host);
+            // Host already ordered under native chrome; native is Collapsed.
         }
 
         if (auto icon = FindChildByName(iconPanel, L"Icon")) {
@@ -3346,8 +3531,9 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView) {
             (std::max)(2, (std::min)(8, g_settings.glowThickness)));
         const double roundnessFrac =
             (std::max)(0, (std::min)(50, g_settings.glowRoundness)) / 100.0;
+        // Preview plate / titleBg use dedicated opacity (not taskbar fill).
         const int fillOpacitySetting =
-            (std::max)(0, (std::min)(100, g_settings.glowFillOpacity));
+            (std::max)(0, (std::min)(100, g_settings.previewFillOpacity));
         const PreviewStyle style = g_settings.previewStyle;
 
         // Measure card BEFORE injecting any overlay (critical for layout).
@@ -3499,13 +3685,12 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView) {
             auto chip =
                 FindChildByName(host, kThumbTitleBgName).try_as<Controls::Border>();
             if (chip) {
-                // Soft wash only — host sits above the title glyphs, so high
-                // alpha made text unreadable (was forced ≥150). Keep a light
-                // accent tint; plate style is the strong signal if wanted.
-                const int chipA = static_cast<int>(
-                    (std::max)(22, (std::min)(55, static_cast<int>(
-                                                      26 + 28 * t +
-                                                      fillOpacitySetting * 0.15))));
+                // Soft wash above title glyphs — map previewFillOpacity (0–100)
+                // into a readable alpha band (~12–90) so low settings stay soft.
+                const int chipA = static_cast<int>((std::max)(
+                    12, (std::min)(90, static_cast<int>(
+                                           12 + fillOpacitySetting * 0.78 *
+                                                   (0.55 + 0.45 * t)))));
                 chip.Background(Media::SolidColorBrush{withAlpha(base, chipA)});
                 chip.CornerRadius(CornerRadius{stripH * 0.35});
                 chip.Opacity(1.0);
@@ -4656,15 +4841,19 @@ void HandleForegroundChanged(HWND hWnd) {
     CancelMinFocusTimer();
     CancelPreviewMinFocusTimer();
 
-    Wh_Log(L"Focus candidate: %s (minFocus=%ds, tracked=%d, previewTracked=%d)",
+    const bool skipMinFocus = ShouldSkipAppMinFocus(key, alreadyTracked);
+
+    Wh_Log(L"Focus candidate: %s (minFocus=%ds, tracked=%d, skipMin=%d, "
+           L"promote=%s, previewTracked=%d)",
            displayName.c_str(), minSeconds, alreadyTracked ? 1 : 0,
+           skipMinFocus ? 1 : 0, PromoteModeName(g_settings.promoteMode),
            windowAlreadyTracked ? 1 : 0);
 
     SchedulePreviewConfirm(windowAlreadyTracked);
 
-    if (minSeconds <= 0 || alreadyTracked) {
-        // New apps with minFocus=0, or any previously confirmed app: promote
-        // immediately so rank order + glow stay in sync with Alt-Tab.
+    if (skipMinFocus) {
+        // minFocus=0, or promoteMode allows instant re-focus (tracked map
+        // and/or currently highlighted top-N).
         OnMinFocusTimerElapsed();
         return;
     }
@@ -4875,6 +5064,19 @@ void LoadSettings() {
         g_settings.minFocusSeconds = 0;
     }
 
+    PCWSTR promoteMode = Wh_GetStringSetting(L"promoteMode");
+    g_settings.promoteMode = PromoteMode::ImmediateTracked;
+    if (promoteMode) {
+        if (wcscmp(promoteMode, L"immediateTopN") == 0) {
+            g_settings.promoteMode = PromoteMode::ImmediateTopN;
+        } else if (wcscmp(promoteMode, L"alwaysWait") == 0) {
+            g_settings.promoteMode = PromoteMode::AlwaysWait;
+        } else if (wcscmp(promoteMode, L"immediateTracked") == 0) {
+            g_settings.promoteMode = PromoteMode::ImmediateTracked;
+        }
+    }
+    Wh_FreeStringSetting(promoteMode);
+
     PCWSTR glowColor = Wh_GetStringSetting(L"glowColor");
     g_settings.glowColor = GlowColorMode::Accent;
     if (wcscmp(glowColor, L"green") == 0) {
@@ -4973,6 +5175,14 @@ void LoadSettings() {
         g_settings.glowFillOpacity = 100;
     }
 
+    g_settings.previewFillOpacity = Wh_GetIntSetting(L"previewFillOpacity");
+    if (g_settings.previewFillOpacity < 0) {
+        g_settings.previewFillOpacity = 0;
+    }
+    if (g_settings.previewFillOpacity > 100) {
+        g_settings.previewFillOpacity = 100;
+    }
+
     g_settings.glowDebugLog = Wh_GetIntSetting(L"glowDebugLog") != 0;
 
     g_settings.decayMinutes = Wh_GetIntSetting(L"decayMinutes");
@@ -5024,13 +5234,16 @@ void LoadSettings() {
     }
 
     Wh_Log(L"Settings: enabled=%d style=%s th=%d round=%d%% size=%d%% "
-           L"layers=%d fillOp=%d debug=%d decay=%dmin preview=%d "
-           L"previewStyle=%s previewMin=%ds previewDecay=%dmin",
+           L"layers=%d fillOp=%d previewFillOp=%d debug=%d decay=%dmin "
+           L"minFocus=%ds promote=%s preview=%d previewStyle=%s "
+           L"previewMin=%ds previewDecay=%dmin",
            g_settings.enabled ? 1 : 0, GlowStyleName(g_settings.glowStyle),
            g_settings.glowThickness, g_settings.glowRoundness,
            g_settings.glowSize, g_settings.glowLayers,
-           g_settings.glowFillOpacity, g_settings.glowDebugLog ? 1 : 0,
-           g_settings.decayMinutes, g_settings.previewHighlightEnabled ? 1 : 0,
+           g_settings.glowFillOpacity, g_settings.previewFillOpacity,
+           g_settings.glowDebugLog ? 1 : 0, g_settings.decayMinutes,
+           g_settings.minFocusSeconds, PromoteModeName(g_settings.promoteMode),
+           g_settings.previewHighlightEnabled ? 1 : 0,
            PreviewStyleName(g_settings.previewStyle),
            g_settings.previewMinFocusSeconds, g_settings.previewDecayMinutes);
 }
@@ -5040,7 +5253,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.7.8");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.3");
 
     g_unloading = false;
     LoadSettings();

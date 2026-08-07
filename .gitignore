@@ -69,3 +69,5 @@ Testing/
 .cache/
 tmp/
 example/
+*.png
+

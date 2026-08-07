@@ -199,6 +199,7 @@ anchor. Log “no dispatcher anchor” **once** until the first button is seen.
 | Window key | `HWND` | Multi-instance previews |
 | Display name | File name only | Logs / exclude UX |
 | App min focus | Default 8s | Alt+Tab noise |
+| Promote mode | immediateTracked / immediateTopN / alwaysWait | When re-focus skips app min-focus |
 | Preview min focus | Default 1s | Snappier window mark |
 | Same-PID during app timer | Still same candidate | New top-level window of app |
 | App decay | Default 30 min | List stays “recent” |
@@ -211,7 +212,7 @@ anchor. Log “no dispatcher anchor” **once** until the first button is seen.
 Promotion (apps):
 
 1. Foreground → `g_pendingFocus`
-2. After `minFocusSeconds` (or immediate if already tracked) → app map tick
+2. After `minFocusSeconds`, or immediately per `promoteMode` → app map tick
 3. Sort → top `highlightCount` → `g_rankedApps`
 4. UI apply
 
@@ -236,8 +237,9 @@ Promotion (windows): parallel with `previewMinFocusSeconds` → `g_windowFocusMa
 | Never | `ClearValue` BackgroundElement; clip null ancestors | Pale hover leftovers |
 | Preview layout | Span rows + RenderTransform | Title-row expansion bug |
 | Preview titleBar | ~2px under baseline | Not hugging image; not strikethrough |
-| Preview titleBg | Soft alpha only | Readable text |
-| Preview plate | BackgroundBorder tint | Strong signal |
+| Preview titleBg | Soft alpha from `previewFillOpacity` | Readable text |
+| Preview plate | BackgroundBorder tint via `previewFillOpacity` | Strong signal |
+| RunningIndicator | Never set Fill/Width/Height; never reorder every paint | BottomBar draws own pill; glow host sits *under* native chrome |
 | Size boost | Icon `ScaleTransform` only | No layout width change |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
 | Coexistence | Own names; clear on unload | Taskbar Styler friendlier |
@@ -265,28 +267,36 @@ Do **not** hold `g_stateMutex` across XAML or `Dispatcher` calls.
 
 ## Settings ↔ code
 
-| Setting key | Field |
-|-------------|--------|
-| `enabled` | `g_settings.enabled` |
-| `highlightCount` | `g_settings.highlightCount` |
-| `minFocusSeconds` | `g_settings.minFocusSeconds` |
-| `glowColor` / `customGlowColor` | color mode + hex |
-| `glowIntensityRank1..3` | `glowIntensity[3]` |
-| `sizeBoostRank1..3` | `sizeBoostPercent[3]` |
-| `glowStyle` | `LeftBar` / `Frame` / `Full` / `BottomBar` (default **leftBar**) |
-| `glowThickness` / `glowRoundness` / `glowSize` / `glowLayers` | metrics |
-| `glowFillOpacity` | Full / bars / plate-ish strength |
-| `glowDebugLog` | verbose bind + preview resolve logs |
-| `decayMinutes` | app decay |
-| `requireTaskbarButton` | tray-only filter |
-| `previewHighlightEnabled` | preview master (also needs `enabled`) |
-| `previewMinFocusSeconds` | window confirm |
-| `previewDecayMinutes` | window decay |
-| `previewStyle` | `titleBar` / `titleBg` / `plate` / `ring` |
-| `excludedPrograms[i]` | uppercase set |
+YAML keys map to `LoadSettings()`. Windhawk rejects unknown metadata such as
+`$group` (schema: no additional properties). UI grouping is done with **list
+order** and `$name` prefixes: `[General]`, `[Icons]`, `[Previews]`,
+`[Advanced]`. **Keys are stable** for saved configs.
+
+| Group | Setting key | Field |
+|-------|-------------|--------|
+| General | `enabled` | `g_settings.enabled` |
+| General | `highlightCount` | `g_settings.highlightCount` |
+| General | `minFocusSeconds` | `g_settings.minFocusSeconds` |
+| General | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
+| General | `decayMinutes` | app decay |
+| General | `requireTaskbarButton` | tray-only filter |
+| General | `excludedPrograms[i]` | uppercase set |
+| Taskbar icons | `glowStyle` | `LeftBar` / `Frame` / `Full` / `BottomBar` |
+| Taskbar icons | `glowColor` / `customGlowColor` | color mode + hex |
+| Taskbar icons | `glowIntensityRank1..3` | `glowIntensity[3]` |
+| Taskbar icons | `glowThickness` / `glowRoundness` / `glowSize` / `glowLayers` | metrics |
+| Taskbar icons | `glowFillOpacity` | Full / left / bottom icon bar strength |
+| Taskbar icons | `sizeBoostRank1..3` | `sizeBoostPercent[3]` |
+| Thumbnail previews | `previewHighlightEnabled` | preview master (also needs `enabled`) |
+| Thumbnail previews | `previewStyle` | `titleBar` / `titleBg` / `plate` / `ring` |
+| Thumbnail previews | `previewFillOpacity` | plate + titleBg wash (not title bar line) |
+| Thumbnail previews | `previewMinFocusSeconds` | window confirm |
+| Thumbnail previews | `previewDecayMinutes` | window decay |
+| Advanced | `glowDebugLog` | verbose bind + preview resolve logs |
 
 Ranks beyond 3 reuse rank-3 intensity/size. Preview reuses rank-1 color and
-shared thickness/roundness/fill opacity (no size boost on thumbnails).
+shared thickness/roundness; plate/titleBg use `previewFillOpacity` (no size
+boost on thumbnails).
 
 ---
 
