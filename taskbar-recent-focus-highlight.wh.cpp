@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.10
+// @version         0.8.12
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -604,13 +604,13 @@ std::wstring StripAppIdPrefix(std::wstring id) {
 
 std::wstring MakeAppKey(const std::wstring& pathUpper,
                         const std::wstring& /*appIdUpper*/,
-                        const std::wstring& classUpper) {
-    // Always key by process path. AppUserModelID is inherited by hosted
-    // editors (Windhawk → VSCodium gets RAMENSOFTWARE.WINDHAWK) and must
-    // not replace the exe. Class still splits TC main vs Lister.
-    if (!pathUpper.empty() && !classUpper.empty()) {
-        return pathUpper + L"|CLS:" + classUpper;
-    }
+                        const std::wstring& /*classUpper*/) {
+    // Two one-way streets (same as volume-per-app):
+    //   focus HWND → PID → image path
+    //   TaskListButton → taskband HWND → PID → image path
+    // Join key is the path. Class/AppId are scoring hints only (TC vs Lister).
+    // Do not put AppId or class in the key: Windhawk's editor is VSCodium.exe
+    // with AppId RAMENSOFTWARE.WINDHAWK — that is still one taskbar button.
     return pathUpper;
 }
 
@@ -859,6 +859,38 @@ bool PathAppearsOnTaskbar(const std::wstring& keyOrPath,
         }
     }
     return false;
+}
+
+// Same process path, two taskbar icons (TOTALCMD64 → Total Commander + Lister).
+bool PathHasSplitTaskbarButtons(const std::wstring& pathUpper) {
+    if (pathUpper.empty()) {
+        return false;
+    }
+    const std::wstring fileUpper = ToUpper(FileNameFromPath(pathUpper));
+    std::wstring firstClass;
+    bool sawLister = false;
+    bool sawOther = false;
+    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+    for (const auto& e : g_buttonPathCache) {
+        if (e.pathUpper.empty()) {
+            continue;
+        }
+        if (e.pathUpper != pathUpper &&
+            ToUpper(FileNameFromPath(e.pathUpper)) != fileUpper) {
+            continue;
+        }
+        if (e.classUpper.find(L"LISTER") != std::wstring::npos) {
+            sawLister = true;
+        } else if (!e.classUpper.empty()) {
+            sawOther = true;
+        }
+        if (firstClass.empty()) {
+            firstClass = e.classUpper;
+        } else if (!e.classUpper.empty() && e.classUpper != firstClass) {
+            return true;
+        }
+    }
+    return sawLister && sawOther;
 }
 
 void RecomputeRanksLocked() {
@@ -1531,47 +1563,40 @@ int ScoreButtonForRank(FrameworkElement button,
     if (hwndOnButton(info.lastHwnd)) {
         return 1000;
     }
-    if (!rankAppId.empty() &&
-        (ident.appIdUpper == rankAppId || ident.autoIdUpper == rankAppId)) {
-        if (rankCls.empty() || ident.classUpper.empty() ||
-            ident.classUpper == rankCls) {
+
+    const std::wstring pathKey =
+        !rankPath.empty() ? rankPath : PathFromAppKey(info.key);
+    const bool pathOk =
+        !ident.pathUpper.empty() &&
+        (ident.pathUpper == info.key || ident.pathUpper == pathKey ||
+         (!info.displayName.empty() &&
+          ToUpper(FileNameFromPath(ident.pathUpper)) ==
+              ToUpper(info.displayName)));
+    const bool split = PathHasSplitTaskbarButtons(
+        !pathKey.empty() ? pathKey : ident.pathUpper);
+
+    // Street join: same image path. Only require window class when this
+    // exe has two icons (Lister vs Total Commander).
+    if (pathOk) {
+        if (!split) {
+            return ident.pathUpper == info.key || ident.pathUpper == pathKey
+                       ? 1000
+                       : 900;
+        }
+        if (!rankCls.empty() && ident.classUpper == rankCls) {
             return 1000;
         }
-    }
-    if (!rankCls.empty() && ident.classUpper == rankCls) {
-        if (rankPath.empty() || ident.pathUpper.empty() ||
-            ident.pathUpper == rankPath) {
-            return 1000;
-        }
-        std::wstring btnFile = ToUpper(FileNameFromPath(ident.pathUpper));
-        std::wstring rankFile = ToUpper(info.displayName);
-        if (!btnFile.empty() && btnFile == rankFile) {
-            return 1000;
+        if (!rankCls.empty() && !ident.classUpper.empty() &&
+            ident.classUpper != rankCls) {
+            // other half of a split pair
+        } else if (rankCls.empty() || ident.classUpper.empty()) {
+            return 900;
         }
     }
 
     const bool identityConflict =
-        (!rankCls.empty() && !ident.classUpper.empty() &&
-         ident.classUpper != rankCls) ||
-        (!rankAppId.empty() && !ident.appIdUpper.empty() &&
-         ident.appIdUpper != rankAppId);
-
-    // Path cache (multi-monitor + ungrouped same-app buttons) — but never
-    // bind TOTALCMD64.exe to the Lister button's sibling (TC main) when
-    // the focused window class disagrees. If the rank is class-qualified
-    // and this button has no class yet, do not path-match (hover would
-    // otherwise move the glow to every same-exe icon).
-    if (!identityConflict && !ident.pathUpper.empty() &&
-        (rankCls.empty() || ident.classUpper == rankCls)) {
-        if (ident.pathUpper == info.key || ident.pathUpper == rankPath) {
-            return 1000;
-        }
-        std::wstring btnFile = ToUpper(FileNameFromPath(ident.pathUpper));
-        std::wstring rankFile = ToUpper(info.displayName);
-        if (!btnFile.empty() && btnFile == rankFile) {
-            return 900;
-        }
-    }
+        split && !rankCls.empty() && !ident.classUpper.empty() &&
+        ident.classUpper != rankCls;
 
     std::wstring autoName = GetButtonAutomationName(button);
     if (autoName.empty()) {
@@ -1592,17 +1617,9 @@ int ScoreButtonForRank(FrameworkElement button,
         score = ScoreExeToAutomationName(info.displayName, autoName);
     }
 
-    // Window title from last focus. Cap below the strong-bind bar unless
-    // the button name itself belongs to this rank — otherwise VSCodium
-    // editing a Windhawk mod binds to the Windhawk icon (title contains
-    // "Windhawk").
-    if (!info.lastWindowTitle.empty()) {
-        int ts = ScoreTitleToAutomationName(info.lastWindowTitle, autoName);
-        if (ts >= 90 && !AutomationNameFitsRank(info, autoName)) {
-            ts = 69;
-        }
-        score = (std::max)(score, ts);
-    }
+    // Do not score last window/tab title against taskbar buttons.
+    // Terminal tabs (and VSCodium editing a Windhawk mod) rename the HWND
+    // to the document — that is preview identity, not which icon to glow.
 
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -1713,17 +1730,14 @@ void AssociateActiveButtonWithKey(const std::wstring& key) {
                        ToUpper(displayName)) {
             score = (std::max)(score, 900);
         }
-        if (!windowTitle.empty()) {
-            int ts = ScoreTitleToAutomationName(windowTitle, autoName);
-            if (ts >= 90 && score < 70) {
-                ts = 69;  // title-only (Discord in a grok tab) is not identity
-            }
-            score = (std::max)(score, ts);
-        }
-
         const bool active = IsVisualStateActive(button);
         if (active) {
-            score += 5;  // slight preference for the active taskbar button
+            score += 5;
+            // Real Active* only (Inactive* is not Active). Windhawk's button
+            // is named "Windhawk" while the process is VSCodium.exe.
+            if (score < 70) {
+                score = 70;
+            }
         }
 
         if (score > bestScore) {
@@ -1750,11 +1764,11 @@ void AssociateActiveButtonWithKey(const std::wstring& key) {
         assocInfo.displayName = displayName;
     }
 
-    if (bestScore >= 70 && !bestName.empty() &&
-        AutomationNameFitsRank(assocInfo, bestName)) {
+    if (bestScore >= 70 && !bestName.empty()) {
         StoreAutomationNameIfFits(assocInfo, bestName);
-        Wh_Log(L"Associated %s -> \"%s\" (score=%d, title=\"%s\")",
+        Wh_Log(L"Associated %s -> \"%s\" (score=%d, fits=%d, title=\"%s\")",
                displayName.c_str(), bestName.c_str(), bestScore,
+               AutomationNameFitsRank(assocInfo, bestName) ? 1 : 0,
                windowTitle.c_str());
     } else {
         Wh_Log(L"Associate failed for %s (bestScore=%d, title=\"%s\")",
@@ -5636,9 +5650,35 @@ void OnMinFocusTimerElapsed() {
             std::lock_guard<std::mutex> lock(g_stateMutex);
             hasNameCache = g_keyToAutomationName.contains(key);
         }
-        // Path cache (taskband) or successful name associate = has a button.
-        const bool appears =
-            PathAppearsOnTaskbar(key, displayName) || hasNameCache;
+        bool exeNameOnAButton = false;
+        for (auto& weak : buttons) {
+            FrameworkElement b = nullptr;
+            try {
+                b = weak.get();
+            } catch (...) {
+                continue;
+            }
+            if (!b) {
+                continue;
+            }
+            if (ScoreExeToAutomationName(displayName,
+                                         GetButtonAutomationName(b)) >= 70) {
+                exeNameOnAButton = true;
+                break;
+            }
+        }
+        const bool appears = PathAppearsOnTaskbar(key, displayName) ||
+                             hasNameCache || exeNameOnAButton;
+
+        size_t resolvedButtons = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+            for (const auto& e : g_buttonPathCache) {
+                if (!e.pathUpper.empty()) {
+                    ++resolvedButtons;
+                }
+            }
+        }
 
         {
             std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -5646,14 +5686,16 @@ void OnMinFocusTimerElapsed() {
             if (it != g_appFocusMap.end()) {
                 if (appears) {
                     it->second.seenOnTaskbar = true;
-                } else if (g_settings.requireTaskbarButton) {
+                } else if (g_settings.requireTaskbarButton &&
+                           resolvedButtons >= 2) {
                     Wh_Log(L"Ignoring non-taskbar app: %s (title=\"%s\")",
                            displayName.c_str(),
                            it->second.lastWindowTitle.c_str());
-                    // Stay out of ranks; leave map entry without a tick so a
-                    // later real taskbar app is unaffected.
                     it->second.lastConfirmedFocusTick = 0;
                     it->second.seenOnTaskbar = false;
+                } else {
+                    // Path cache not ready — keep the rank, name-match later.
+                    it->second.seenOnTaskbar = true;
                 }
             }
             RecomputeRanksLocked();
@@ -6181,7 +6223,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.9");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.12");
 
     g_unloading = false;
     LoadSettings();
