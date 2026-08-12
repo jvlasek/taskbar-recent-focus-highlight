@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.12
+// @version         0.8.13
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -1503,9 +1503,18 @@ void StoreAutomationNameIfFits(const AppFocusInfo& info,
     g_keyToAutomationName[info.key] = autoName;
 }
 
-// Cache is only valid when the stored name still belongs to this rank's exe
-// (or Lister class). Same-string title compare is NOT enough — that made
-// VSCodium→Windhawk and Terminal→Discord sticky at score 96.
+void StoreAutomationName(const AppFocusInfo& info,
+                         const std::wstring& autoName) {
+    if (info.key.empty() || autoName.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    g_keyToAutomationName[info.key] = autoName;
+}
+
+// Trusted writes only: path/exe binds, or Active-button associate (Windhawk
+// button for VSCodium.exe). Name-equals is then enough, except we refuse
+// a non-fitting name when this exe has two icons (TC vs Lister).
 bool CacheEntryValid(const AppFocusInfo& info,
                      const std::wstring& cachedAutoName,
                      const std::wstring& buttonAutoName) {
@@ -1519,7 +1528,11 @@ bool CacheEntryValid(const AppFocusInfo& info,
     if (!nameEquals) {
         return false;
     }
-    return AutomationNameFitsRank(info, buttonAutoName);
+    if (AutomationNameFitsRank(info, buttonAutoName)) {
+        return true;
+    }
+    const std::wstring path = PathFromAppKey(info.key);
+    return !PathHasSplitTaskbarButtons(path);
 }
 
 // Score this button against one ranked app. Higher is better; 0 = no match.
@@ -1765,7 +1778,10 @@ void AssociateActiveButtonWithKey(const std::wstring& key) {
     }
 
     if (bestScore >= 70 && !bestName.empty()) {
-        StoreAutomationNameIfFits(assocInfo, bestName);
+        // Always remember the Active button, even when the label is the host
+        // ("Windhawk") and the process is VSCodium.exe. Scoring trusts this
+        // cache; other write sites still use StoreAutomationNameIfFits.
+        StoreAutomationName(assocInfo, bestName);
         Wh_Log(L"Associated %s -> \"%s\" (score=%d, fits=%d, title=\"%s\")",
                displayName.c_str(), bestName.c_str(), bestScore,
                AutomationNameFitsRank(assocInfo, bestName) ? 1 : 0,
@@ -6223,7 +6239,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.12");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.13");
 
     g_unloading = false;
     LoadSettings();
