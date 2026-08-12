@@ -2,12 +2,12 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.3
+// @version         0.8.5
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lole32 -loleaut32 -lruntimeobject
+// @compilerOptions -lcomctl32 -lole32 -loleaut32 -lruntimeobject -lpropsys -luuid -lshell32
 // ==/WindhawkMod==
 
 // Source code is published under The GNU General Public License v3.0.
@@ -44,6 +44,10 @@ ring — configurable). Single-window flyouts are left alone.
 5. Brief Alt+Tab under the minimum focus time should not change ranks.
 6. Open 2+ windows of one app, focus one, hover the icon — that preview glows.
 7. Disable the mod or toggle Enabled off to clear highlights.
+8. Multi-monitor: the same rank should appear on every taskbar that shows
+   that app. Combined-icon flyouts should mark the recent window even when
+   titles differ (Total Commander Lister, etc.). Lister has its own taskbar
+   icon — focusing it should highlight Lister, not Total Commander.
 
 See the repo README.md for full settings and architecture notes.
 */
@@ -221,7 +225,11 @@ See the repo README.md for full settings and architecture notes.
 #include <windhawk_utils.h>
 
 #include <commctrl.h>
+#include <initguid.h>
+#include <propkey.h>
+#include <propsys.h>
 #include <psapi.h>
+#include <shobjidl.h>
 
 #undef GetCurrentTime
 
@@ -316,9 +324,12 @@ struct {
 // ---------------------------------------------------------------------------
 
 struct AppFocusInfo {
-    std::wstring key;          // UPPERCASE full image path
+    std::wstring key;          // APPID:… or PATH|CLS:class or bare path
     std::wstring displayName;  // e.g. WindowsTerminal.exe
     std::wstring lastWindowTitle;  // from focused HWND (helps button match)
+    std::wstring classUpper;   // focused window class (TLister vs TTOTAL_CMD)
+    std::wstring appIdUpper;   // window AppUserModelID when present
+    HWND lastHwnd = nullptr;
     ULONGLONG lastConfirmedFocusTick = 0;
     // True once we saw a TaskListButton for this path (path cache / bind).
     bool seenOnTaskbar = false;
@@ -360,8 +371,12 @@ std::unordered_map<HWND, WindowFocusInfo, HwndHash> g_windowFocusMap;
 struct ButtonPathCacheEntry {
     winrt::weak_ref<FrameworkElement> button;
     std::wstring pathUpper;  // empty if resolve failed / not yet tried
+    std::wstring appIdUpper;
+    std::wstring classUpper;
+    std::wstring autoIdUpper;  // AutomationId, often "APPID: …"
     DWORD pid = 0;
     HWND sampleHwnd = nullptr;  // sample from resolve; preview uses g_windowFocusMap
+    std::vector<HWND> groupHwnds;
     bool resolveAttempted = false;
     ULONGLONG lastResolveTick = 0;
 };
@@ -496,6 +511,10 @@ bool IsOwnExplorerProcess(DWORD processId) {
     return processId == GetCurrentProcessId();
 }
 
+std::wstring PathFromAppKey(const std::wstring& key);
+std::wstring AppIdFromAppKey(const std::wstring& key);
+std::wstring ClassFromAppKey(const std::wstring& key);
+
 bool IsExcludedKey(const std::wstring& keyUpper,
                    const std::wstring& displayNameUpper) {
     if (g_settings.excludedPrograms.empty()) {
@@ -508,7 +527,138 @@ bool IsExcludedKey(const std::wstring& keyUpper,
         g_settings.excludedPrograms.contains(displayNameUpper)) {
         return true;
     }
+    const std::wstring path = PathFromAppKey(keyUpper);
+    if (!path.empty() && g_settings.excludedPrograms.contains(path)) {
+        return true;
+    }
+    if (!path.empty()) {
+        std::wstring fileUpper = ToUpper(FileNameFromPath(path));
+        if (!fileUpper.empty() &&
+            g_settings.excludedPrograms.contains(fileUpper)) {
+            return true;
+        }
+    }
+    const std::wstring appId = AppIdFromAppKey(keyUpper);
+    if (!appId.empty() && g_settings.excludedPrograms.contains(appId)) {
+        return true;
+    }
     return false;
+}
+
+HWND NormalizeFocusHwnd(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd)) {
+        return nullptr;
+    }
+    if (GetWindowLong(hWnd, GWL_STYLE) & WS_CHILD) {
+        HWND root = GetAncestor(hWnd, GA_ROOT);
+        if (root && IsWindow(root)) {
+            return root;
+        }
+    }
+    return hWnd;
+}
+
+std::wstring GetWindowClassName(HWND hWnd) {
+    WCHAR buf[256]{};
+    if (!hWnd || !GetClassNameW(hWnd, buf, ARRAYSIZE(buf))) {
+        return {};
+    }
+    return buf;
+}
+
+std::wstring GetWindowAppUserModelId(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd)) {
+        return {};
+    }
+    IPropertyStore* store = nullptr;
+    HRESULT hr = SHGetPropertyStoreForWindow(hWnd, IID_IPropertyStore,
+                                             reinterpret_cast<void**>(&store));
+    if (FAILED(hr) || !store) {
+        return {};
+    }
+    PROPVARIANT pv;
+    PropVariantInit(&pv);
+    hr = store->GetValue(PKEY_AppUserModel_ID, &pv);
+    std::wstring id;
+    if (SUCCEEDED(hr) && pv.vt == VT_LPWSTR && pv.pwszVal && pv.pwszVal[0]) {
+        id = pv.pwszVal;
+    }
+    PropVariantClear(&pv);
+    store->Release();
+    return id;
+}
+
+std::wstring StripAppIdPrefix(std::wstring id) {
+    // AutomationId looks like "Appid: com.squirrel.Discord.Discord"
+    constexpr wchar_t kPref[] = L"Appid:";
+    if (id.size() > 6 && _wcsnicmp(id.c_str(), kPref, 6) == 0) {
+        id.erase(0, 6);
+        while (!id.empty() && (id.front() == L' ' || id.front() == L'\t')) {
+            id.erase(id.begin());
+        }
+    }
+    return id;
+}
+
+std::wstring MakeAppKey(const std::wstring& pathUpper,
+                        const std::wstring& appIdUpper,
+                        const std::wstring& classUpper) {
+    // Include window class so one process / one AppId can still own two
+    // taskbar icons (Total Commander vs its Lister viewer).
+    if (!appIdUpper.empty() && !classUpper.empty()) {
+        return L"APPID:" + appIdUpper + L"|CLS:" + classUpper;
+    }
+    if (!appIdUpper.empty()) {
+        return L"APPID:" + appIdUpper;
+    }
+    if (!pathUpper.empty() && !classUpper.empty()) {
+        return pathUpper + L"|CLS:" + classUpper;
+    }
+    return pathUpper;
+}
+
+std::wstring PathFromAppKey(const std::wstring& key) {
+    if (key.rfind(L"APPID:", 0) == 0) {
+        return {};
+    }
+    auto pos = key.find(L"|CLS:");
+    if (pos != std::wstring::npos) {
+        return key.substr(0, pos);
+    }
+    return key;
+}
+
+std::wstring ClassFromAppKey(const std::wstring& key) {
+    auto pos = key.find(L"|CLS:");
+    if (pos == std::wstring::npos) {
+        return {};
+    }
+    return key.substr(pos + 5);
+}
+
+std::wstring AppIdFromAppKey(const std::wstring& key) {
+    if (key.rfind(L"APPID:", 0) != 0) {
+        return {};
+    }
+    std::wstring rest = key.substr(6);
+    auto pos = rest.find(L"|CLS:");
+    if (pos != std::wstring::npos) {
+        rest.resize(pos);
+    }
+    return rest;
+}
+
+bool SamePidAndClass(HWND a, HWND b) {
+    if (!a || !b || !IsWindow(a) || !IsWindow(b)) {
+        return false;
+    }
+    DWORD pa = 0, pb = 0;
+    GetWindowThreadProcessId(a, &pa);
+    GetWindowThreadProcessId(b, &pb);
+    if (!pa || pa != pb) {
+        return false;
+    }
+    return ToUpper(GetWindowClassName(a)) == ToUpper(GetWindowClassName(b));
 }
 
 bool ShouldIgnoreHwnd(HWND hWnd) {
@@ -550,7 +700,17 @@ bool ShouldIgnoreHwnd(HWND hWnd) {
 
     LONG exStyle = GetWindowLong(hWnd, GWL_EXSTYLE);
     if (exStyle & WS_EX_TOOLWINDOW) {
-        return true;
+        // Ignore typical tool popups, but keep sizable titled windows.
+        // Total Commander Lister (and similar viewers) can be tool-styled
+        // yet still appear as grouped taskbar thumbnails.
+        if (GetWindowTextLengthW(hWnd) <= 0) {
+            return true;
+        }
+        RECT rc{};
+        if (!GetWindowRect(hWnd, &rc) || (rc.right - rc.left) < 200 ||
+            (rc.bottom - rc.top) < 150) {
+            return true;
+        }
     }
 
     return false;
@@ -577,6 +737,7 @@ bool ResolveAppIdentity(HWND hWnd,
         outWindowTitle->clear();
     }
 
+    hWnd = NormalizeFocusHwnd(hWnd);
     if (ShouldIgnoreHwnd(hWnd)) {
         return false;
     }
@@ -605,12 +766,19 @@ bool ResolveAppIdentity(HWND hWnd,
         return false;
     }
 
-    if (IsExcludedKey(pathUpper, fileNameUpper)) {
+    std::wstring appIdUpper = ToUpper(GetWindowAppUserModelId(hWnd));
+    std::wstring classUpper = ToUpper(GetWindowClassName(hWnd));
+
+    if (IsExcludedKey(pathUpper, fileNameUpper) ||
+        (!appIdUpper.empty() &&
+         g_settings.excludedPrograms.contains(appIdUpper))) {
         Wh_Log(L"Excluded: %s", fileName.c_str());
         return false;
     }
 
-    outKey = pathUpper;
+    // One process can own several taskbar icons (Total Commander vs Lister).
+    // Prefer the shell's grouping id, then path+class so they stay distinct.
+    outKey = MakeAppKey(pathUpper, appIdUpper, classUpper);
     outDisplayName = fileName;
     outProcessId = processId;
     if (outWindowTitle) {
@@ -667,27 +835,42 @@ FrameworkElement FindDescendantByName(FrameworkElement element, PCWSTR name) {
 // True if any cached TaskListButton resolved to this process path (or same
 // file name). Call from UI thread after EnsureButtonPathCached, or any thread
 // if only reading the path cache.
-bool PathAppearsOnTaskbar(const std::wstring& pathUpper,
+bool PathAppearsOnTaskbar(const std::wstring& keyOrPath,
                           const std::wstring& displayName) {
-    if (pathUpper.empty() && displayName.empty()) {
-        return false;
-    }
+    const std::wstring pathUpper = PathFromAppKey(keyOrPath);
+    const std::wstring appIdUpper = AppIdFromAppKey(keyOrPath);
+    const std::wstring classUpper = ClassFromAppKey(keyOrPath);
     std::wstring fileUpper = ToUpper(displayName);
     if (fileUpper.empty() && !pathUpper.empty()) {
         fileUpper = ToUpper(FileNameFromPath(pathUpper));
     }
+    if (pathUpper.empty() && fileUpper.empty() && appIdUpper.empty()) {
+        return false;
+    }
 
     std::lock_guard<std::mutex> lock(g_buttonPathMutex);
     for (const auto& e : g_buttonPathCache) {
+        if (!appIdUpper.empty() && e.appIdUpper == appIdUpper) {
+            if (classUpper.empty() || e.classUpper.empty() ||
+                e.classUpper == classUpper) {
+                return true;
+            }
+        }
         if (e.pathUpper.empty()) {
             continue;
         }
         if (!pathUpper.empty() && e.pathUpper == pathUpper) {
-            return true;
+            if (classUpper.empty() || e.classUpper.empty() ||
+                e.classUpper == classUpper) {
+                return true;
+            }
         }
         if (!fileUpper.empty() &&
             ToUpper(FileNameFromPath(e.pathUpper)) == fileUpper) {
-            return true;
+            if (classUpper.empty() || e.classUpper.empty() ||
+                e.classUpper == classUpper) {
+                return true;
+            }
         }
     }
     return false;
@@ -925,6 +1108,23 @@ int RankSizeBoost(int rankZeroBased) {
     return g_settings.sizeBoostPercent[idx];
 }
 
+// Defined with option-C resolve stack (button → process path).
+std::wstring EnsureButtonPathCached(FrameworkElement button, bool force);
+std::wstring GetCachedButtonPath(FrameworkElement button);
+struct ButtonIdentity {
+    std::wstring pathUpper;
+    std::wstring appIdUpper;
+    std::wstring classUpper;
+    std::wstring autoIdUpper;
+    DWORD pid = 0;
+    HWND sampleHwnd = nullptr;
+    std::vector<HWND> groupHwnds;
+};
+ButtonIdentity GetCachedButtonIdentity(FrameworkElement button);
+bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler);
+void RequestApplyPreviewVisuals();
+void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb);
+
 // ---------------------------------------------------------------------------
 // Button identity matching
 // ---------------------------------------------------------------------------
@@ -949,6 +1149,19 @@ std::wstring GetButtonAutomationName(FrameworkElement button) {
     try {
         return std::wstring(
             Automation::AutomationProperties::GetName(button).c_str());
+    } catch (...) {
+        return {};
+    }
+}
+
+std::wstring GetButtonAutomationAppId(FrameworkElement button) {
+    if (!button) {
+        return {};
+    }
+    try {
+        std::wstring id =
+            Automation::AutomationProperties::GetAutomationId(button).c_str();
+        return ToUpper(StripAppIdPrefix(std::move(id)));
     } catch (...) {
         return {};
     }
@@ -1221,12 +1434,94 @@ int ScoreButtonForRank(FrameworkElement button,
     if (requireRunning && !TaskListButton_IsRunning(button)) {
         return 0;
     }
+
+    const ButtonIdentity ident = GetCachedButtonIdentity(button);
+    const std::wstring rankPath = PathFromAppKey(info.key);
+    const std::wstring rankCls = !info.classUpper.empty()
+                                     ? info.classUpper
+                                     : ClassFromAppKey(info.key);
+    const std::wstring rankAppId = !info.appIdUpper.empty()
+                                       ? info.appIdUpper
+                                       : AppIdFromAppKey(info.key);
+
+    auto hwndOnButton = [&](HWND h) -> bool {
+        if (!h) {
+            return false;
+        }
+        if (ident.sampleHwnd == h) {
+            return true;
+        }
+        for (HWND g : ident.groupHwnds) {
+            if (g == h) {
+                return true;
+            }
+        }
+        if (ident.sampleHwnd && SamePidAndClass(h, ident.sampleHwnd)) {
+            return true;
+        }
+        return false;
+    };
+
+    if (hwndOnButton(info.lastHwnd)) {
+        return 1000;
+    }
+    if (!rankAppId.empty() &&
+        (ident.appIdUpper == rankAppId || ident.autoIdUpper == rankAppId)) {
+        if (rankCls.empty() || ident.classUpper.empty() ||
+            ident.classUpper == rankCls) {
+            return 1000;
+        }
+    }
+    if (!rankCls.empty() && ident.classUpper == rankCls) {
+        if (rankPath.empty() || ident.pathUpper.empty() ||
+            ident.pathUpper == rankPath) {
+            return 1000;
+        }
+        std::wstring btnFile = ToUpper(FileNameFromPath(ident.pathUpper));
+        std::wstring rankFile = ToUpper(info.displayName);
+        if (!btnFile.empty() && btnFile == rankFile) {
+            return 1000;
+        }
+    }
+
+    const bool identityConflict =
+        (!rankCls.empty() && !ident.classUpper.empty() &&
+         ident.classUpper != rankCls) ||
+        (!rankAppId.empty() && !ident.appIdUpper.empty() &&
+         ident.appIdUpper != rankAppId);
+
+    // Path cache (multi-monitor + ungrouped same-app buttons) — but never
+    // bind TOTALCMD64.exe to the Lister button's sibling (TC main) when
+    // the focused window class disagrees.
+    if (!identityConflict && !ident.pathUpper.empty()) {
+        if (ident.pathUpper == info.key || ident.pathUpper == rankPath) {
+            return 1000;
+        }
+        std::wstring btnFile = ToUpper(FileNameFromPath(ident.pathUpper));
+        std::wstring rankFile = ToUpper(info.displayName);
+        if (!btnFile.empty() && btnFile == rankFile) {
+            return 900;
+        }
+    }
+
     std::wstring autoName = GetButtonAutomationName(button);
     if (autoName.empty()) {
         return 0;
     }
 
-    int score = ScoreExeToAutomationName(info.displayName, autoName);
+    // Name fallback when path cache missed: "Lister" button vs TLister focus.
+    if (!rankCls.empty() &&
+        rankCls.find(L"LISTER") != std::wstring::npos) {
+        std::wstring n = AlnumUpper(NormalizeAutomationName(autoName));
+        if (n.find(L"LISTER") != std::wstring::npos) {
+            return 1000;
+        }
+    }
+
+    int score = 0;
+    if (!identityConflict) {
+        score = ScoreExeToAutomationName(info.displayName, autoName);
+    }
 
     // Window title from last focus (helps Windhawk / host exes / multi-engine).
     if (!info.lastWindowTitle.empty()) {
@@ -1352,6 +1647,11 @@ void AssociateActiveButtonWithKey(const std::wstring& key) {
         const bool active = IsVisualStateActive(button);
         if (active) {
             score += 5;  // slight preference for the active taskbar button
+            // Lister vs Total Commander: the active button IS the identity
+            // even when TOTALCMD64.exe does not fuzzy-match "Lister".
+            if (score < 70) {
+                score = 70;
+            }
         }
 
         if (score > bestScore) {
@@ -1554,12 +1854,12 @@ void EnsureGlowHostZOrder(Controls::Panel panel,
             return;
         }
 
-        // Frame / left / bottom: above icon, below native underlines.
-        // Find the earliest native chrome we must stay under.
+        // Frame / left / bottom: above icon, below native chrome that must
+        // stay on top — including OverlayIcon (Discord ping badge).
         uint32_t insertBefore = children.Size();
         bool foundNative = false;
-        for (PCWSTR name :
-             {L"RunningIndicator", L"MultiWindowElement", L"ProgressIndicator"}) {
+        for (PCWSTR name : {L"RunningIndicator", L"MultiWindowElement",
+                            L"ProgressIndicator", L"OverlayIcon"}) {
             auto el = FindChildByName(panel.as<FrameworkElement>(), name);
             if (!el) {
                 continue;
@@ -1596,6 +1896,55 @@ void EnsureGlowHostZOrder(Controls::Panel panel,
     }
 }
 
+// TaskListLabeledButtonPanel paints later children on top. Native template
+// order is BackgroundElement (back) → Icon → OverlayIcon → RunningIndicator
+// (front). Inserting/removing our host can leave BackgroundElement in front
+// of the running underscore. Combined with Discord RequestingAttention (red
+// plate on BackgroundElement) that looks like: missing underscore + red bg.
+void RestoreIconPanelNativeZOrder(FrameworkElement iconPanel) {
+    if (!iconPanel) {
+        return;
+    }
+    auto panel = iconPanel.try_as<Controls::Panel>();
+    if (!panel) {
+        return;
+    }
+    try {
+        auto children = panel.Children();
+        auto indexOfName = [&](PCWSTR name) -> int {
+            auto el = FindChildByName(iconPanel, name);
+            if (!el) {
+                return -1;
+            }
+            uint32_t idx = 0;
+            if (!children.IndexOf(el, idx)) {
+                return -1;
+            }
+            return static_cast<int>(idx);
+        };
+
+        const int bg = indexOfName(kBackgroundElementName);
+        const int run = indexOfName(L"RunningIndicator");
+        if (bg < 0 || run < 0 || bg < run) {
+            return;
+        }
+
+        auto bgEl = FindChildByName(iconPanel, kBackgroundElementName);
+        if (!bgEl) {
+            return;
+        }
+        uint32_t bgIdx = 0;
+        if (!children.IndexOf(bgEl, bgIdx)) {
+            return;
+        }
+        children.RemoveAt(bgIdx);
+        children.InsertAt(0, bgEl);
+        Wh_Log(L"Restored IconPanel z-order (BackgroundElement was in front of "
+               L"RunningIndicator)");
+    } catch (...) {
+    }
+}
+
 bool ButtonHasOurChrome(FrameworkElement button) {
     if (!button) {
         return false;
@@ -1616,13 +1965,19 @@ void ClearButtonHighlight(FrameworkElement button) {
         return;
     }
 
+    auto iconPanelEarly = GetIconPanel(button);
+
     // Skip no-op clears on every mouse-over (UpdateVisualStates storms).
+    // Still heal z-order: after a timed-out glow, our host is gone but
+    // BackgroundElement can remain in front of RunningIndicator (Discord
+    // ping + decay left a red plate and no underscore).
     if (!ButtonHasOurChrome(button) && !g_pendingOverlaySweep.load()) {
+        RestoreIconPanelNativeZOrder(iconPanelEarly);
         return;
     }
 
     try {
-        auto iconPanel = GetIconPanel(button);
+        auto iconPanel = iconPanelEarly ? iconPanelEarly : GetIconPanel(button);
         if (!iconPanel) {
             // Still try to strip our named overlay from the button root.
             if (auto panel = button.try_as<Controls::Panel>()) {
@@ -1685,6 +2040,8 @@ void ClearButtonHighlight(FrameworkElement button) {
                 }
             }
         }
+
+        RestoreIconPanelNativeZOrder(iconPanel);
     } catch (...) {
         HRESULT hr = winrt::to_hresult();
         Wh_Log(L"ClearButtonHighlight error %08X", hr);
@@ -1878,6 +2235,10 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         if (!host) {
             return;
         }
+
+        // Heal native stacking first (Discord overlay / leftover attention
+        // plate), then place our host under RunningIndicator + OverlayIcon.
+        RestoreIconPanelNativeZOrder(iconPanel);
 
         // Z-order once when wrong — never yank RunningIndicator every paint
         // (that caused short/long underline flicker on mouse-over).
@@ -2080,13 +2441,6 @@ void PruneTrackedButtons_UIThread() {
         g_trackedButtons.end());
 }
 
-// Defined with option-C resolve stack below.
-std::wstring EnsureButtonPathCached(FrameworkElement button, bool force);
-std::wstring GetCachedButtonPath(FrameworkElement button);
-bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler);
-void RequestApplyPreviewVisuals();
-void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb);
-
 void TrackButton_UIThread(FrameworkElement button) {
     if (!button) {
         return;
@@ -2138,6 +2492,8 @@ CImmersiveTaskItem_GetAppWindow_t CImmersiveTaskItem_GetAppWindow;
 
 void* CImmersiveTaskItem_vftable = nullptr;
 void* CImmersiveTaskItem_vftable_ITaskItem = nullptr;
+void* CWindowTaskItem_vftable = nullptr;
+void* CWindowTaskItem_vftable_ITaskItem = nullptr;
 
 using TryGetItemFromContainer_TaskListWindowViewModel_t =
     void*(WINAPI*)(void** output, UIElement* container);
@@ -2283,7 +2639,12 @@ HWND GetWindowFromTaskItem(void* taskItem) {
         return CImmersiveTaskItem_GetAppWindow(immersiveTaskItem);
     }
     if (CWindowTaskItem_GetWindow) {
-        return CWindowTaskItem_GetWindow(taskItem);
+        void* windowTaskItem = taskItem;
+        if (CWindowTaskItem_vftable_ITaskItem && CWindowTaskItem_vftable &&
+            *(void**)taskItem == CWindowTaskItem_vftable_ITaskItem) {
+            windowTaskItem = QueryViaVtable(taskItem, CWindowTaskItem_vftable);
+        }
+        return CWindowTaskItem_GetWindow(windowTaskItem);
     }
     return nullptr;
 }
@@ -2359,6 +2720,7 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
 
     DWORD pid = 0;
     HWND hwnd = nullptr;
+    std::vector<HWND> groupHwnds;
     try {
         UIElement el = button.as<UIElement>();
         // Prefer full resolve (also captures HWND via item path).
@@ -2369,6 +2731,36 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
             hwnd = GetWindowFromTaskItem(native);
             if (hwnd) {
                 GetWindowThreadProcessId(hwnd, &pid);
+                groupHwnds.push_back(hwnd);
+            }
+        }
+        void* windowsUdkTaskGroup =
+            GetWindowsUdkTaskGroupFromTaskListButton(el);
+        if (windowsUdkTaskGroup) {
+            void* nativeTaskGroup =
+                GetNativeTaskGroupFromWindowsUdkTaskGroup(windowsUdkTaskGroup);
+            if (nativeTaskGroup) {
+                HDPA taskItemsArray = GetTaskItemsArray(nativeTaskGroup);
+                if (taskItemsArray) {
+                    const int n = DPA_GetPtrCount(taskItemsArray);
+                    for (int i = 0; i < n; ++i) {
+                        HWND h = GetWindowFromTaskItem(
+                            DPA_GetPtr(taskItemsArray, i));
+                        if (!h || !IsWindow(h)) {
+                            continue;
+                        }
+                        if (std::find(groupHwnds.begin(), groupHwnds.end(),
+                                      h) == groupHwnds.end()) {
+                            groupHwnds.push_back(h);
+                        }
+                        if (!hwnd) {
+                            hwnd = h;
+                        }
+                        if (!pid) {
+                            GetWindowThreadProcessId(h, &pid);
+                        }
+                    }
+                }
             }
         }
         if (!pid) {
@@ -2386,6 +2778,15 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
         }
     }
 
+    std::wstring classUpper =
+        hwnd ? ToUpper(GetWindowClassName(hwnd)) : std::wstring{};
+    std::wstring appIdUpper =
+        hwnd ? ToUpper(GetWindowAppUserModelId(hwnd)) : std::wstring{};
+    std::wstring autoIdUpper = GetButtonAutomationAppId(button);
+    if (appIdUpper.empty()) {
+        appIdUpper = autoIdUpper;
+    }
+
     {
         std::lock_guard<std::mutex> lock(g_buttonPathMutex);
         bool found = false;
@@ -2400,8 +2801,12 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
                 continue;
             }
             e.pathUpper = pathUpper;
+            e.appIdUpper = appIdUpper;
+            e.classUpper = classUpper;
+            e.autoIdUpper = autoIdUpper;
             e.pid = pid;
             e.sampleHwnd = hwnd;
+            e.groupHwnds = groupHwnds;
             e.resolveAttempted = true;
             e.lastResolveTick = now;
             found = true;
@@ -2411,14 +2816,18 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
             ButtonPathCacheEntry e;
             e.button = winrt::make_weak(button);
             e.pathUpper = pathUpper;
+            e.appIdUpper = appIdUpper;
+            e.classUpper = classUpper;
+            e.autoIdUpper = autoIdUpper;
             e.pid = pid;
             e.sampleHwnd = hwnd;
+            e.groupHwnds = std::move(groupHwnds);
             e.resolveAttempted = true;
             e.lastResolveTick = now;
             g_buttonPathCache.push_back(std::move(e));
         }
         // Prune dead weaks occasionally.
-        if (g_buttonPathCache.size() > 64) {
+        if (g_buttonPathCache.size() > 128) {
             g_buttonPathCache.erase(
                 std::remove_if(
                     g_buttonPathCache.begin(), g_buttonPathCache.end(),
@@ -2434,8 +2843,11 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
     }
 
     if (g_settings.glowDebugLog) {
-        Wh_Log(L"Button path cache: pid=%u path=%s force=%d name=\"%s\"", pid,
-               pathUpper.empty() ? L"(none)" : pathUpper.c_str(), force ? 1 : 0,
+        Wh_Log(L"Button path cache: pid=%u path=%s class=%s appId=%s force=%d "
+               L"name=\"%s\"",
+               pid, pathUpper.empty() ? L"(none)" : pathUpper.c_str(),
+               classUpper.empty() ? L"?" : classUpper.c_str(),
+               appIdUpper.empty() ? L"?" : appIdUpper.c_str(), force ? 1 : 0,
                GetButtonAutomationName(button).c_str());
     }
     return pathUpper;
@@ -2443,19 +2855,31 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
 
 // Lookup only (no resolve).
 std::wstring GetCachedButtonPath(FrameworkElement button) {
+    return GetCachedButtonIdentity(button).pathUpper;
+}
+
+ButtonIdentity GetCachedButtonIdentity(FrameworkElement button) {
+    ButtonIdentity out;
     if (!button) {
-        return {};
+        return out;
     }
     std::lock_guard<std::mutex> lock(g_buttonPathMutex);
     for (auto& e : g_buttonPathCache) {
         try {
             if (e.button.get() == button) {
-                return e.pathUpper;
+                out.pathUpper = e.pathUpper;
+                out.appIdUpper = e.appIdUpper;
+                out.classUpper = e.classUpper;
+                out.autoIdUpper = e.autoIdUpper;
+                out.pid = e.pid;
+                out.sampleHwnd = e.sampleHwnd;
+                out.groupHwnds = e.groupHwnds;
+                return out;
             }
         } catch (...) {
         }
     }
-    return {};
+    return out;
 }
 
 void ApplyAllHighlights_UIThread() {
@@ -2489,9 +2913,17 @@ void ApplyAllHighlights_UIThread() {
             } catch (...) {
                 continue;
             }
-            if (button) {
-                ClearButtonHighlight(button);
+            if (!button) {
+                continue;
             }
+            try {
+                auto dispatcher = button.Dispatcher();
+                if (dispatcher && !dispatcher.HasThreadAccess()) {
+                    continue;
+                }
+            } catch (...) {
+            }
+            ClearButtonHighlight(button);
         }
         g_pendingOverlaySweep = false;
         if (ranks.empty()) {
@@ -2502,7 +2934,8 @@ void ApplyAllHighlights_UIThread() {
         return;
     }
 
-    // Collect live buttons.
+    // Collect live buttons on *this* dispatcher (secondary taskbars may
+    // use a different XAML island / CoreDispatcher).
     std::vector<FrameworkElement> live;
     live.reserve(buttons.size());
     for (auto& weak : buttons) {
@@ -2512,9 +2945,17 @@ void ApplyAllHighlights_UIThread() {
         } catch (...) {
             continue;
         }
-        if (button) {
-            live.push_back(button);
+        if (!button) {
+            continue;
         }
+        try {
+            auto dispatcher = button.Dispatcher();
+            if (dispatcher && !dispatcher.HasThreadAccess()) {
+                continue;
+            }
+        } catch (...) {
+        }
+        live.push_back(button);
     }
 
     if (g_settings.glowDebugLog) {
@@ -2542,24 +2983,9 @@ void ApplyAllHighlights_UIThread() {
         // Resolve once if missing (cheap if cached).
         buttonPaths[bi] = EnsureButtonPathCached(live[bi], /*force=*/false);
         for (size_t ri = 0; ri < ranks.size(); ++ri) {
-            int s = 0;
-            if (!buttonPaths[bi].empty() && buttonPaths[bi] == ranks[ri].key) {
-                s = 1000;  // exact path match
-            } else {
-                // Also match by file name only (same exe, path differs).
-                if (!buttonPaths[bi].empty()) {
-                    std::wstring btnFile = ToUpper(FileNameFromPath(buttonPaths[bi]));
-                    std::wstring rankFile = ToUpper(ranks[ri].displayName);
-                    if (!btnFile.empty() && btnFile == rankFile) {
-                        s = 900;
-                    }
-                }
-                if (s < 70) {
-                    s = ScoreButtonForRank(live[bi], ranks[ri], true);
-                }
-                if (s < 70) {
-                    s = ScoreButtonForRank(live[bi], ranks[ri], false);
-                }
+            int s = ScoreButtonForRank(live[bi], ranks[ri], true);
+            if (s < 70) {
+                s = ScoreButtonForRank(live[bi], ranks[ri], false);
             }
             if (s >= 70) {
                 cands.push_back({s, ri, bi});
@@ -2573,13 +2999,25 @@ void ApplyAllHighlights_UIThread() {
     std::vector<bool> rankTaken(ranks.size(), false);
     std::vector<bool> buttonTaken(live.size(), false);
 
+    // Strong matches (path / exact-ish name, score >= 90): the same rank
+    // may bind many buttons — primary + secondary taskbar, or Never Combine
+    // (one button per window of the same exe). Weak fuzzy stays 1:1 so
+    // VS Code cannot steal VSCodium.
     for (const auto& c : cands) {
-        if (rankTaken[c.rankIdx] || buttonTaken[c.buttonIdx]) {
+        if (buttonTaken[c.buttonIdx]) {
             continue;
         }
-        rankTaken[c.rankIdx] = true;
-        buttonTaken[c.buttonIdx] = true;
-        buttonRank[c.buttonIdx] = static_cast<int>(c.rankIdx) + 1;
+        if (c.score >= 90) {
+            buttonTaken[c.buttonIdx] = true;
+            rankTaken[c.rankIdx] = true;
+            buttonRank[c.buttonIdx] = static_cast<int>(c.rankIdx) + 1;
+        } else if (!rankTaken[c.rankIdx]) {
+            rankTaken[c.rankIdx] = true;
+            buttonTaken[c.buttonIdx] = true;
+            buttonRank[c.buttonIdx] = static_cast<int>(c.rankIdx) + 1;
+        } else {
+            continue;
+        }
 
         std::wstring autoName = GetButtonAutomationName(live[c.buttonIdx]);
         {
@@ -2716,9 +3154,17 @@ void ClearAllHighlights_UIThread() {
         } catch (...) {
             continue;
         }
-        if (button) {
-            ClearButtonHighlight(button);
+        if (!button) {
+            continue;
         }
+        try {
+            auto dispatcher = button.Dispatcher();
+            if (dispatcher && !dispatcher.HasThreadAccess()) {
+                continue;
+            }
+        } catch (...) {
+        }
+        ClearButtonHighlight(button);
     }
 }
 
@@ -2775,6 +3221,16 @@ HWND HwndFromMappingEntry(const ThumbnailTaskItemMapping& item) {
         }
     }
     return nullptr;
+}
+
+// Closed flyouts leave dead weaks; their HWNDs/groups must not be reused to
+// resolve a later app's sibling count (TC Lister vs an earlier Chrome hover).
+bool ThumbnailMappingLive(const ThumbnailTaskItemMapping& item) {
+    try {
+        return item.thumbnail.get() != nullptr;
+    } catch (...) {
+        return false;
+    }
 }
 
 // True if two WinRT objects are the same COM identity (different projections
@@ -2867,7 +3323,7 @@ void* FindTaskGroupForSiblingCount(size_t siblingCount) {
     };
     std::vector<GroupAcc> groups;
     for (const auto& item : g_thumbnailTaskItemMapping) {
-        if (!item.taskGroup) {
+        if (!item.taskGroup || !ThumbnailMappingLive(item)) {
             continue;
         }
         HWND h = HwndFromMappingEntry(item);
@@ -2890,10 +3346,16 @@ void* FindTaskGroupForSiblingCount(size_t siblingCount) {
             acc->hwnds.push_back(h);
         }
     }
+    // Last exact match wins — maps are append-only, so the newest live
+    // flyout is preferred over an older group with the same window count.
+    void* exact = nullptr;
     for (const auto& g : groups) {
         if (g.hwnds.size() == siblingCount) {
-            return g.group;
+            exact = g.group;
         }
+    }
+    if (exact) {
+        return exact;
     }
     // Prefer largest group that is at least siblingCount (partial flyout).
     void* best = nullptr;
@@ -2917,6 +3379,9 @@ std::vector<HWND> LastMappedHwnds(size_t n) {
     std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
     for (auto it = g_thumbnailTaskItemMapping.rbegin();
          it != g_thumbnailTaskItemMapping.rend() && out.size() < n; ++it) {
+        if (!ThumbnailMappingLive(*it)) {
+            continue;
+        }
         HWND h = HwndFromMappingEntry(*it);
         if (!h) {
             continue;
@@ -3207,6 +3672,88 @@ FrameworkElement FindThumbnailTitleElement(FrameworkElement thumbView) {
     } catch (...) {
     }
     return nullptr;
+}
+
+std::wstring GetThumbnailMatchTitle(FrameworkElement thumbView) {
+    std::wstring autoName;
+    try {
+        autoName =
+            Automation::AutomationProperties::GetName(thumbView).c_str();
+    } catch (...) {
+    }
+    autoName = NormalizeAutomationName(std::move(autoName));
+
+    std::wstring text;
+    try {
+        if (auto titleEl = FindThumbnailTitleElement(thumbView)) {
+            if (auto tb = titleEl.try_as<Controls::TextBlock>()) {
+                text = tb.Text().c_str();
+            } else {
+                text = titleEl.Name().c_str();
+            }
+        }
+    } catch (...) {
+    }
+    text = NormalizeAutomationName(std::move(text));
+
+    // Prefer the more specific string (file name vs generic "Lister").
+    if (text.size() > autoName.size()) {
+        return text;
+    }
+    if (autoName.size() > text.size()) {
+        return autoName;
+    }
+    return !text.empty() ? text : autoName;
+}
+
+struct EnumSameClassCtx {
+    DWORD pid = 0;
+    std::wstring classUpper;
+    std::vector<HWND>* out = nullptr;
+};
+
+BOOL CALLBACK EnumSameClassWndProc(HWND hWnd, LPARAM lParam) {
+    auto* ctx = reinterpret_cast<EnumSameClassCtx*>(lParam);
+    if (!ctx || !ctx->out) {
+        return FALSE;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hWnd, &pid);
+    if (pid != ctx->pid || !IsWindowVisible(hWnd)) {
+        return TRUE;
+    }
+    if (GetWindowLong(hWnd, GWL_STYLE) & WS_CHILD) {
+        return TRUE;
+    }
+    if (ToUpper(GetWindowClassName(hWnd)) != ctx->classUpper) {
+        return TRUE;
+    }
+    if (std::find(ctx->out->begin(), ctx->out->end(), hWnd) ==
+        ctx->out->end()) {
+        ctx->out->push_back(hWnd);
+    }
+    return TRUE;
+}
+
+std::vector<HWND> ExpandSameClassWindows(const std::vector<HWND>& seeds) {
+    std::vector<HWND> out;
+    for (HWND seed : seeds) {
+        if (!seed || !IsWindow(seed)) {
+            continue;
+        }
+        if (std::find(out.begin(), out.end(), seed) == out.end()) {
+            out.push_back(seed);
+        }
+        DWORD pid = 0;
+        GetWindowThreadProcessId(seed, &pid);
+        std::wstring cls = ToUpper(GetWindowClassName(seed));
+        if (!pid || cls.empty()) {
+            continue;
+        }
+        EnumSameClassCtx ctx{pid, std::move(cls), &out};
+        EnumWindows(EnumSameClassWndProc, reinterpret_cast<LPARAM>(&ctx));
+    }
+    return out;
 }
 
 FrameworkElement FindThumbnailBackgroundBorder(FrameworkElement thumbView) {
@@ -3836,6 +4383,27 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
                 groupHwnds = std::move(last);
             }
         }
+        // ITaskItem::GetWindow often returns one owner HWND for every Lister
+        // card. Expand to all visible same-class windows of that process.
+        if (groupHwnds.size() < siblings.size()) {
+            auto expanded = ExpandSameClassWindows(groupHwnds);
+            if (expanded.size() >= siblings.size()) {
+                groupHwnds = std::move(expanded);
+            }
+        }
+        if (groupHwnds.size() < siblings.size() && !recent.empty()) {
+            std::vector<HWND> seeds;
+            for (const auto& r : recent) {
+                if (r.hwnd && IsWindow(r.hwnd)) {
+                    seeds.push_back(r.hwnd);
+                }
+            }
+            auto expanded = ExpandSameClassWindows(seeds);
+            if (expanded.size() >= siblings.size() &&
+                expanded.size() <= siblings.size() + 2) {
+                groupHwnds = std::move(expanded);
+            }
+        }
 
         if (groupHwnds.size() == siblings.size()) {
             // Prefer map order for ALL siblings when counts match — more
@@ -3898,24 +4466,66 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     }
 
     // Pass 2: title fallback with unique HWND assignment only.
+    // Prefer the card's DisplayName TextBlock — Automation Name on grouped
+    // Lister cards is often just "Lister - N running windows" for every item.
     for (size_t i = 0; i < siblings.size(); ++i) {
         if (scored[i].hwnd) {
             continue;
         }
-        std::wstring autoName;
-        try {
-            autoName = Automation::AutomationProperties::GetName(siblings[i])
-                           .c_str();
-        } catch (...) {
-        }
-        // Strip " - N running windows" noise if present on the view name.
-        autoName = NormalizeAutomationName(std::move(autoName));
+        std::wstring autoName = GetThumbnailMatchTitle(siblings[i]);
         HWND h = MatchTitleToUnusedRecent(autoName, recent, usedHwnds);
         if (h) {
             scored[i].hwnd = h;
             scored[i].tick = tickFor(h);
             scored[i].how = ResolveHow::Title;
             usedHwnds.insert(h);
+        }
+    }
+
+    // Pass 3: ITaskItem HWND and EVENT_SYSTEM_FOREGROUND HWND can differ
+    // (owned Lister windows, tab proxies). Copy recency from a same-PID
+    // recent window when the card's HWND itself has tick 0.
+    for (size_t i = 0; i < scored.size(); ++i) {
+        if (!scored[i].hwnd || scored[i].tick > 0) {
+            continue;
+        }
+        DWORD cardPid = 0;
+        GetWindowThreadProcessId(scored[i].hwnd, &cardPid);
+        if (!cardPid) {
+            continue;
+        }
+
+        std::wstring autoName = GetThumbnailMatchTitle(scored[i].view);
+
+        int bestScore = 0;
+        ULONGLONG bestTick = 0;
+        for (const auto& info : recent) {
+            if (!info.hwnd) {
+                continue;
+            }
+            DWORD rpid = 0;
+            GetWindowThreadProcessId(info.hwnd, &rpid);
+            if (rpid != cardPid) {
+                continue;
+            }
+            int s = 0;
+            if (!autoName.empty()) {
+                s = ScoreTitleToAutomationName(info.windowTitle, autoName);
+                if (s < 70) {
+                    s = (std::max)(
+                        s, ScoreTitleToAutomationName(GetWindowTitle(info.hwnd),
+                                                      autoName));
+                }
+            }
+            if (s > bestScore) {
+                bestScore = s;
+                bestTick = info.lastConfirmedTick;
+            }
+        }
+        // Title only — do not copy a single same-PID tick onto every sibling
+        // (that would glow the first card in a TC Lister group).
+        if (bestScore >= 70) {
+            scored[i].tick = bestTick;
         }
     }
 
@@ -3989,9 +4599,17 @@ void ClearAllThumbnailHighlights_UIThread() {
         } catch (...) {
             continue;
         }
-        if (el) {
-            ClearThumbnailHighlight(el);
+        if (!el) {
+            continue;
         }
+        try {
+            auto dispatcher = el.Dispatcher();
+            if (dispatcher && !dispatcher.HasThreadAccess()) {
+                continue;
+            }
+        } catch (...) {
+        }
+        ClearThumbnailHighlight(el);
     }
 }
 
@@ -4014,9 +4632,17 @@ void RequestApplyPreviewVisuals() {
                 } catch (...) {
                     continue;
                 }
-                if (el) {
-                    RefreshThumbnailFlyout_UIThread(el);
+                if (!el) {
+                    continue;
                 }
+                try {
+                    auto dispatcher = el.Dispatcher();
+                    if (dispatcher && !dispatcher.HasThreadAccess()) {
+                        continue;
+                    }
+                } catch (...) {
+                }
+                RefreshThumbnailFlyout_UIThread(el);
             }
         })) {
         if (g_hookThreadHwnd) {
@@ -4029,29 +4655,50 @@ void RequestApplyPreviewVisuals() {
 std::atomic<bool> g_loggedNoDispatcherAnchor{false};
 
 bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler) {
-    FrameworkElement anchor = nullptr;
+    std::vector<winrt::Windows::UI::Core::CoreDispatcher> dispatchers;
+    auto addDispatcher = [&](FrameworkElement el) {
+        if (!el) {
+            return;
+        }
+        try {
+            auto dispatcher = el.Dispatcher();
+            if (!dispatcher) {
+                return;
+            }
+            for (const auto& existing : dispatchers) {
+                if (existing == dispatcher) {
+                    return;
+                }
+            }
+            dispatchers.push_back(dispatcher);
+        } catch (...) {
+        }
+    };
+
     {
         std::lock_guard<std::mutex> lock(g_buttonsMutex);
         try {
-            anchor = g_dispatcherAnchor.get();
+            addDispatcher(g_dispatcherAnchor.get());
         } catch (...) {
-            anchor = nullptr;
         }
-        if (!anchor) {
-            for (auto& weak : g_trackedButtons) {
-                try {
-                    anchor = weak.get();
-                } catch (...) {
-                    continue;
-                }
-                if (anchor) {
-                    break;
-                }
+        for (auto& weak : g_trackedButtons) {
+            try {
+                addDispatcher(weak.get());
+            } catch (...) {
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_thumbViewsMutex);
+        for (auto& weak : g_trackedThumbViews) {
+            try {
+                addDispatcher(weak.get());
+            } catch (...) {
             }
         }
     }
 
-    if (!anchor) {
+    if (dispatchers.empty()) {
         // App + preview apply both hit this before the first button hook.
         if (!g_loggedNoDispatcherAnchor.exchange(true)) {
             Wh_Log(L"RunOnUiThread: no dispatcher anchor yet (no buttons seen) "
@@ -4060,26 +4707,25 @@ bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler) {
         return false;
     }
 
-    try {
-        auto dispatcher = anchor.Dispatcher();
-        if (!dispatcher) {
-            return false;
+    bool any = false;
+    for (auto& dispatcher : dispatchers) {
+        try {
+            if (dispatcher.HasThreadAccess()) {
+                handler();
+                any = true;
+                continue;
+            }
+            if (dispatcher.TryRunAsync(
+                    winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
+                    handler)) {
+                any = true;
+            }
+        } catch (...) {
+            HRESULT hr = winrt::to_hresult();
+            Wh_Log(L"RunOnUiThread error %08X", hr);
         }
-
-        // If already on UI thread, run inline.
-        if (dispatcher.HasThreadAccess()) {
-            handler();
-            return true;
-        }
-
-        dispatcher.TryRunAsync(
-            winrt::Windows::UI::Core::CoreDispatcherPriority::Normal, handler);
-        return true;
-    } catch (...) {
-        HRESULT hr = winrt::to_hresult();
-        Wh_Log(L"RunOnUiThread error %08X", hr);
-        return false;
     }
+    return any;
 }
 
 void RequestApplyVisuals() {
@@ -4169,7 +4815,8 @@ void RefreshButtonHighlight(FrameworkElement button) {
 
 // When any button updates, repaint *all* ranked buttons — inactive ones may
 // not get another UpdateVisualStates after Windows cleared sibling visuals.
-std::atomic<ULONGLONG> g_lastFullRefreshTick{0};
+// Per UI thread so primary and secondary taskbars don't throttle each other.
+thread_local ULONGLONG g_lastFullRefreshTick = 0;
 
 void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor) {
     if (!dispatcherAnchor) {
@@ -4183,12 +4830,12 @@ void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor) {
             [weak]() {
                 try {
                     const ULONGLONG now = GetTickCount64();
-                    ULONGLONG prev = g_lastFullRefreshTick.load();
-                    // Throttle: at most ~20 Hz full refresh.
-                    if (now - prev < 50 && prev != 0) {
+                    // Throttle: at most ~20 Hz full refresh *on this dispatcher*.
+                    if (now - g_lastFullRefreshTick < 50 &&
+                        g_lastFullRefreshTick != 0) {
                         return;
                     }
-                    g_lastFullRefreshTick.store(now);
+                    g_lastFullRefreshTick = now;
                     if (!weak.get()) {
                         return;
                     }
@@ -4443,6 +5090,18 @@ bool HookTaskbarDllSymbols() {
             &CImmersiveTaskItem_vftable_ITaskItem,
         },
         {
+            {LR"(const CWindowTaskItem::`vftable')"},
+            &CWindowTaskItem_vftable,
+            nullptr,
+            true,
+        },
+        {
+            {LR"(const CWindowTaskItem::`vftable'{for `ITaskItem'}")},
+            &CWindowTaskItem_vftable_ITaskItem,
+            nullptr,
+            true,
+        },
+        {
             {LR"(public: virtual long __cdecl CTaskListWnd::HandleClick(struct ITaskGroup *,struct ITaskItem *,struct winrt::Windows::System::LauncherOptions const &))"},
             &CTaskListWnd_HandleClick_Original,
             CTaskListWnd_HandleClick_Hook,
@@ -4583,7 +5242,10 @@ void OnPreviewMinFocusTimerElapsed() {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         WindowFocusInfo& info = g_windowFocusMap[confirmHwnd];
         info.hwnd = confirmHwnd;
-        info.processKey = pending.key;
+        info.processKey = PathFromAppKey(pending.key);
+        if (info.processKey.empty()) {
+            info.processKey = ToUpper(GetProcessImagePath(pending.processId));
+        }
         if (!title.empty()) {
             info.windowTitle = title;
         }
@@ -4640,6 +5302,9 @@ void OnMinFocusTimerElapsed() {
         if (!pending.windowTitle.empty()) {
             info.lastWindowTitle = pending.windowTitle;
         }
+        info.lastHwnd = pending.hwnd;
+        info.classUpper = ToUpper(GetWindowClassName(pending.hwnd));
+        info.appIdUpper = ToUpper(GetWindowAppUserModelId(pending.hwnd));
         info.lastConfirmedFocusTick = now;
 
         // If preview min-focus is not longer than app min-focus, promote the
@@ -4655,7 +5320,11 @@ void OnMinFocusTimerElapsed() {
             IsWindow(pending.hwnd)) {
             WindowFocusInfo& winfo = g_windowFocusMap[pending.hwnd];
             winfo.hwnd = pending.hwnd;
-            winfo.processKey = pending.key;
+            winfo.processKey = PathFromAppKey(pending.key);
+            if (winfo.processKey.empty()) {
+                winfo.processKey =
+                    ToUpper(GetProcessImagePath(pending.processId));
+            }
             if (!pending.windowTitle.empty()) {
                 winfo.windowTitle = pending.windowTitle;
             }
@@ -4674,9 +5343,10 @@ void OnMinFocusTimerElapsed() {
         }
 
         RecomputeRanksLocked();
-        Wh_Log(L"Confirmed focus: %s (map size=%zu, ranks=%zu, title=\"%s\")",
-               pending.displayName.c_str(), g_appFocusMap.size(),
-               g_rankedApps.size(), pending.windowTitle.c_str());
+        Wh_Log(L"Confirmed focus: %s key=%s (map size=%zu, ranks=%zu, title=\"%s\")",
+               pending.displayName.c_str(), pending.key.c_str(),
+               g_appFocusMap.size(), g_rankedApps.size(),
+               pending.windowTitle.c_str());
     }
 
     if (alsoConfirmPreviewWindow) {
@@ -4758,6 +5428,8 @@ void HandleForegroundChanged(HWND hWnd) {
     if (g_unloading.load() || !g_settings.enabled) {
         return;
     }
+
+    hWnd = NormalizeFocusHwnd(hWnd);
 
     std::wstring key;
     std::wstring displayName;
@@ -4843,10 +5515,11 @@ void HandleForegroundChanged(HWND hWnd) {
 
     const bool skipMinFocus = ShouldSkipAppMinFocus(key, alreadyTracked);
 
-    Wh_Log(L"Focus candidate: %s (minFocus=%ds, tracked=%d, skipMin=%d, "
+    Wh_Log(L"Focus candidate: %s key=%s (minFocus=%ds, tracked=%d, skipMin=%d, "
            L"promote=%s, previewTracked=%d)",
-           displayName.c_str(), minSeconds, alreadyTracked ? 1 : 0,
-           skipMinFocus ? 1 : 0, PromoteModeName(g_settings.promoteMode),
+           displayName.c_str(), key.c_str(), minSeconds,
+           alreadyTracked ? 1 : 0, skipMinFocus ? 1 : 0,
+           PromoteModeName(g_settings.promoteMode),
            windowAlreadyTracked ? 1 : 0);
 
     SchedulePreviewConfirm(windowAlreadyTracked);
@@ -5253,7 +5926,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.3");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.5");
 
     g_unloading = false;
     LoadSettings();
