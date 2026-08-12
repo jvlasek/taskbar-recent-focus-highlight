@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.5
+// @version         0.8.6
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -1205,16 +1205,54 @@ bool IsVisualStateActive(FrameworkElement root) {
 }
 
 // Taskbar names look like "App - 2 running windows pinned" — strip that noise.
+// Do NOT cut at the first " - ": Lister titles are
+// "Lister - [C:\\path\\file.txt] - 3 running windows and 1 group".
 std::wstring NormalizeAutomationName(std::wstring name) {
-    // Cut at " - N running"
-    auto pos = name.find(L" - ");
-    if (pos != std::wstring::npos) {
-        // Keep only the title before the running-count suffix when present.
-        std::wstring tail = name.substr(pos);
-        if (tail.find(L"running") != std::wstring::npos ||
-            tail.find(L"Running") != std::wstring::npos) {
-            name.resize(pos);
+    auto isRunningCountSuffix = [](std::wstring_view tail) -> bool {
+        size_t i = 0;
+        while (i < tail.size() && tail[i] == L' ') {
+            ++i;
         }
+        if (i >= tail.size() || tail[i] < L'0' || tail[i] > L'9') {
+            return false;
+        }
+        while (i < tail.size() && tail[i] >= L'0' && tail[i] <= L'9') {
+            ++i;
+        }
+        if (i >= tail.size() || tail[i] != L' ') {
+            return false;
+        }
+        ++i;
+        constexpr wchar_t kRun[] = L"running";
+        if (i + 7 > tail.size()) {
+            return false;
+        }
+        for (int k = 0; k < 7; ++k) {
+            wchar_t c = tail[i + static_cast<size_t>(k)];
+            if (c >= L'A' && c <= L'Z') {
+                c = static_cast<wchar_t>(c - L'A' + L'a');
+            }
+            if (c != kRun[k]) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    size_t cut = std::wstring::npos;
+    for (size_t search = 0; search + 3 < name.size();) {
+        const auto pos = name.find(L" - ", search);
+        if (pos == std::wstring::npos) {
+            break;
+        }
+        if (isRunningCountSuffix(std::wstring_view(name).substr(pos + 3))) {
+            cut = pos;
+            break;
+        }
+        search = pos + 3;
+    }
+    if (cut != std::wstring::npos) {
+        name.resize(cut);
     }
     // Trailing " pinned"
     constexpr wchar_t kPinned[] = L" pinned";
@@ -3418,6 +3456,16 @@ HWND ResolveHwndForThumbnailView(FrameworkElement thumbView,
     return nullptr;
 }
 
+std::wstring ExtractBracketedPath(const std::wstring& s) {
+    const auto open = s.find(L'[');
+    const auto close = s.rfind(L']');
+    if (open == std::wstring::npos || close == std::wstring::npos ||
+        close <= open + 1) {
+        return {};
+    }
+    return s.substr(open + 1, close - open - 1);
+}
+
 // Title → HWND only for unique assignment (each HWND at most once).
 HWND MatchTitleToUnusedRecent(const std::wstring& autoName,
                               const std::vector<WindowFocusInfo>& recent,
@@ -3425,6 +3473,11 @@ HWND MatchTitleToUnusedRecent(const std::wstring& autoName,
     if (autoName.empty()) {
         return nullptr;
     }
+    const std::wstring cardPath = ToUpper(ExtractBracketedPath(autoName));
+    const std::wstring cardFile =
+        cardPath.empty() ? std::wstring{}
+                         : ToUpper(FileNameFromPath(cardPath));
+
     int bestScore = 0;
     HWND bestHwnd = nullptr;
     ULONGLONG bestTick = 0;
@@ -3433,10 +3486,26 @@ HWND MatchTitleToUnusedRecent(const std::wstring& autoName,
             continue;
         }
         int s = ScoreTitleToAutomationName(info.windowTitle, autoName);
-        if (s < 70 && IsWindow(info.hwnd)) {
-            s = (std::max)(
-                s, ScoreTitleToAutomationName(GetWindowTitle(info.hwnd),
-                                              autoName));
+        if (IsWindow(info.hwnd)) {
+            const std::wstring liveTitle = GetWindowTitle(info.hwnd);
+            s = (std::max)(s, ScoreTitleToAutomationName(liveTitle, autoName));
+            if (!cardPath.empty()) {
+                const std::wstring winPath =
+                    ToUpper(ExtractBracketedPath(liveTitle));
+                const std::wstring infoPath =
+                    ToUpper(ExtractBracketedPath(info.windowTitle));
+                if (winPath == cardPath || infoPath == cardPath) {
+                    s = (std::max)(s, 100);
+                } else if (!cardFile.empty()) {
+                    if (ToUpper(FileNameFromPath(winPath)) == cardFile ||
+                        ToUpper(FileNameFromPath(infoPath)) == cardFile ||
+                        ToUpper(FileNameFromPath(liveTitle)) == cardFile ||
+                        ToUpper(FileNameFromPath(info.windowTitle)) ==
+                            cardFile) {
+                        s = (std::max)(s, 96);
+                    }
+                }
+            }
         }
         if (s > bestScore ||
             (s == bestScore && s >= 70 && info.lastConfirmedTick > bestTick)) {
@@ -3704,6 +3773,60 @@ std::wstring GetThumbnailMatchTitle(FrameworkElement thumbView) {
         return autoName;
     }
     return !text.empty() ? text : autoName;
+}
+
+// Snap-group card in the same flyout as the individual windows
+// ("Group | Lister - [file] and 1 other window"). Must not be treated as a
+// window thumbnail — it steals group-order HWND 0 and the recent glow.
+bool IsSnapGroupThumbnailView(FrameworkElement view) {
+    if (!view) {
+        return false;
+    }
+    auto looksLikeGroup = [](const std::wstring& s) -> bool {
+        if (s.empty()) {
+            return false;
+        }
+        if (s.size() >= 5 && _wcsnicmp(s.c_str(), L"Group", 5) == 0 &&
+            (s.size() == 5 || s[5] == L' ' || s[5] == L'|' || s[5] == L'-')) {
+            return true;
+        }
+        if (s.find(L" other window") != std::wstring::npos) {
+            return true;
+        }
+        return false;
+    };
+
+    try {
+        std::wstring name =
+            Automation::AutomationProperties::GetName(view).c_str();
+        if (looksLikeGroup(name) ||
+            looksLikeGroup(NormalizeAutomationName(name))) {
+            return true;
+        }
+    } catch (...) {
+    }
+
+    try {
+        if (auto title = FindThumbnailTitleElement(view)) {
+            if (auto tb = title.try_as<Controls::TextBlock>()) {
+                std::wstring text = tb.Text().c_str();
+                if (looksLikeGroup(text)) {
+                    return true;
+                }
+            }
+        }
+    } catch (...) {
+    }
+
+    if (auto repeater = FindDescendantByName(view, L"IconsRepeater")) {
+        try {
+            if (Media::VisualTreeHelper::GetChildrenCount(repeater) >= 2) {
+                return true;
+            }
+        } catch (...) {
+        }
+    }
+    return false;
 }
 
 struct EnumSameClassCtx {
@@ -4296,16 +4419,29 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     }
     TrackThumbView_UIThread(anyThumb);
 
-    auto siblings = CollectSiblingThumbnailViews(anyThumb);
+    auto allViews = CollectSiblingThumbnailViews(anyThumb);
     if (!g_settings.enabled || !g_settings.previewHighlightEnabled ||
         g_unloading.load()) {
-        for (auto& s : siblings) {
+        for (auto& s : allViews) {
             ClearThumbnailHighlight(s);
         }
         return;
     }
 
-    // Product rule: only multi-window flyouts.
+    // Snap-group cards sit in the same ItemsRepeater as the windows
+    // (UWPSpy: PositionInSet 1/4 = "Group | Lister - [file] and 1 other
+    // window"). Never glow those; they are not a window HWND.
+    std::vector<FrameworkElement> siblings;
+    siblings.reserve(allViews.size());
+    for (auto& v : allViews) {
+        if (IsSnapGroupThumbnailView(v)) {
+            ClearThumbnailHighlight(v);
+        } else {
+            siblings.push_back(v);
+        }
+    }
+
+    // Product rule: only multi-window flyouts (group card does not count).
     if (siblings.size() <= 1) {
         for (auto& s : siblings) {
             ClearThumbnailHighlight(s);
@@ -5926,7 +6062,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.5");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.6");
 
     g_unloading = false;
     LoadSettings();
