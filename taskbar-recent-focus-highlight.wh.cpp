@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.14
+// @version         0.8.15
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -33,8 +33,8 @@ taskbar-volume-control-per-app), with name matching as fallback.
 Separately, it tracks **per-window** recency (own min-focus / decay). When you
 hover a combined taskbar icon and the flyout shows 2+ thumbnails, that flyout
 gets its **own** recency list: the top N windows in it are marked with rank
-intensities (title bar, soft title tint, whole plate, or ring — configurable).
-Single-window flyouts are left alone.
+intensities (title bar, soft title tint, whole plate, hybrid plate+title, or
+ring — configurable). Single-window flyouts are left alone.
 
 ## Tips for testing
 
@@ -202,11 +202,13 @@ See the repo README.md for full settings and architecture notes.
   $description: >-
     How to mark ranked windows. Title bar = thin line under the title.
     Title background = soft wash behind the title. Plate = tint the whole card.
+    Hybrid = whole plate for rank 1, title wash for ranks 2+.
     Ring = hollow border around the card.
   $options:
   - titleBar: Bar under window title
   - titleBg: Title background tint
   - plate: Whole preview plate
+  - plateTitle: Hybrid (plate rank 1, title tint 2+)
   - ring: Ring / frame
 - previewIntensityRank1: 100
   $name: "[Previews] Intensity rank 1"
@@ -310,10 +312,11 @@ enum class PromoteMode {
 
 // Thumbnail flyout highlight (independent of icon GlowStyle).
 enum class PreviewStyle {
-    Ring,     // hollow frame around the whole preview (placeholder)
-    TitleBg,  // tint behind the window title text
-    Plate,    // tint whole preview card (hover-like plate)
-    TitleBar, // thin bar under the title, above the thumbnail image
+    Ring,       // hollow frame around the whole preview (placeholder)
+    TitleBg,    // tint behind the window title text
+    Plate,      // tint whole preview card (hover-like plate)
+    TitleBar,   // thin bar under the title, above the thumbnail image
+    PlateTitle, // rank 1 = plate; ranks 2+ = title background tint
 };
 
 struct {
@@ -2315,6 +2318,8 @@ PCWSTR PreviewStyleName(PreviewStyle s) {
             return L"plate";
         case PreviewStyle::TitleBar:
             return L"titleBar";
+        case PreviewStyle::PlateTitle:
+            return L"plateTitle";
         case PreviewStyle::Ring:
         default:
             return L"ring";
@@ -4300,6 +4305,13 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         const int fillOpacitySetting =
             (std::max)(0, (std::min)(100, g_settings.previewFillOpacity));
         const PreviewStyle style = g_settings.previewStyle;
+        // Hybrid: plate is the rank-1 “this one” signal; title wash is enough
+        // for 2+ (whole-plate 50/5 looks like leftover hover, not a ladder).
+        PreviewStyle paintStyle = style;
+        if (style == PreviewStyle::PlateTitle) {
+            paintStyle = (rankOneBased <= 1) ? PreviewStyle::Plate
+                                             : PreviewStyle::TitleBg;
+        }
 
         // Measure card BEFORE injecting any overlay (critical for layout).
         double cardW = 0, cardH = 0;
@@ -4345,7 +4357,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         }
 
         // Plate prefers native BackgroundBorder (no layout child).
-        if (style == PreviewStyle::Plate) {
+        if (paintStyle == PreviewStyle::Plate) {
             bool usedNative = false;
             if (auto borderEl = FindThumbnailBackgroundBorder(thumbView)) {
                 try {
@@ -4390,8 +4402,10 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             }
 
             if (g_settings.glowDebugLog) {
-                Wh_Log(L"Preview glow rank %d style=%s intensity=%d on \"%s\"",
-                       rankOneBased, PreviewStyleName(style), intensity,
+                Wh_Log(L"Preview glow rank %d style=%s paint=%s intensity=%d "
+                       L"on \"%s\"",
+                       rankOneBased, PreviewStyleName(style),
+                       PreviewStyleName(paintStyle), intensity,
                        Automation::AutomationProperties::GetName(thumbView)
                            .c_str());
             }
@@ -4401,7 +4415,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         Controls::Grid host = EnsureThumbOverlayHost(panel);
         HideThumbOverlayChildren(host);
 
-        if (style == PreviewStyle::Ring) {
+        if (paintStyle == PreviewStyle::Ring) {
             const double inset = 3.0;
             const double corner =
                 (std::max)(12.0, (std::min)(cardW, cardH) - 2.0 * inset) *
@@ -4431,7 +4445,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 rect.Opacity(opacity);
                 PlaceOverlayChild(rect, layerInset, layerInset, size, size);
             }
-        } else if (style == PreviewStyle::TitleBg) {
+        } else if (paintStyle == PreviewStyle::TitleBg) {
             double top = 4.0;
             double stripH = 28.0;
             double titleTop = 0, titleBottom = 0;
@@ -4450,12 +4464,13 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             auto chip =
                 FindChildByName(host, kThumbTitleBgName).try_as<Controls::Border>();
             if (chip) {
-                // Soft wash above title glyphs — map previewFillOpacity (0–100)
-                // into a readable alpha band (~12–90) so low settings stay soft.
-                const int chipA = static_cast<int>((std::max)(
-                    12, (std::min)(90, static_cast<int>(
-                                           12 + fillOpacitySetting * 0.78 *
-                                                   (0.55 + 0.45 * t)))));
+                // Soft wash above title glyphs. Rank-1 alpha follows tint
+                // opacity; lower ranks scale linearly with intensity. The old
+                // (0.55+0.45*t) floor made 100 vs 5 look almost the same.
+                const int maxA = (std::max)(
+                    16, (std::min)(140, static_cast<int>(
+                                            14 + fillOpacitySetting * 1.15)));
+                const int chipA = (std::max)(8, static_cast<int>(maxA * t));
                 chip.Background(Media::SolidColorBrush{withAlpha(base, chipA)});
                 chip.CornerRadius(CornerRadius{stripH * 0.35});
                 chip.Opacity(1.0);
@@ -4499,10 +4514,10 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         }
 
         if (g_settings.glowDebugLog) {
-            Wh_Log(L"Preview glow rank %d style=%s intensity=%d card=%.0fx%.0f "
-                   L"on \"%s\"",
-                   rankOneBased, PreviewStyleName(style), intensity, cardW,
-                   cardH,
+            Wh_Log(L"Preview glow rank %d style=%s paint=%s intensity=%d "
+                   L"card=%.0fx%.0f on \"%s\"",
+                   rankOneBased, PreviewStyleName(style),
+                   PreviewStyleName(paintStyle), intensity, cardW, cardH,
                    Automation::AutomationProperties::GetName(thumbView)
                        .c_str());
         }
@@ -6285,6 +6300,8 @@ void LoadSettings() {
             g_settings.previewStyle = PreviewStyle::TitleBg;
         } else if (wcscmp(previewStyle, L"plate") == 0) {
             g_settings.previewStyle = PreviewStyle::Plate;
+        } else if (wcscmp(previewStyle, L"plateTitle") == 0) {
+            g_settings.previewStyle = PreviewStyle::PlateTitle;
         } else if (wcscmp(previewStyle, L"titleBar") == 0) {
             g_settings.previewStyle = PreviewStyle::TitleBar;
         }
@@ -6326,7 +6343,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.14");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.15");
 
     g_unloading = false;
     LoadSettings();

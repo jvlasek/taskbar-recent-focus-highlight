@@ -150,8 +150,9 @@ Rules:
 | `previewStyle` | Implementation |
 |----------------|----------------|
 | `titleBar` | Thin rect just under title baseline (~2px gap) |
-| `titleBg` | Soft wash only (~22–55 alpha); host is above glyphs |
+| `titleBg` | Soft wash; alpha = tint-opacity × rank intensity (linear) |
 | `plate` | Prefer tint `BackgroundBorder`; marker-cleared on clear |
+| `plateTitle` | Rank 1 = plate; ranks 2+ = titleBg |
 | `ring` | Hollow frame via transform (placeholder) |
 
 Clear always removes named overlays; plate clears local Background when marker present.
@@ -247,7 +248,7 @@ the top `previewHighlightCount` get ranks 1…N.
 | Never | `ClearValue` BackgroundElement; clip null ancestors | Pale hover leftovers |
 | Preview layout | Span rows + RenderTransform | Title-row expansion bug |
 | Preview titleBar | ~2px under baseline | Not hugging image; not strikethrough |
-| Preview titleBg | Soft alpha from `previewFillOpacity` × rank intensity | Readable text |
+| Preview titleBg | Tint-opacity ceiling × linear rank intensity | Readable; 100 vs 5 must differ |
 | Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank | Strong signal |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
 | RunningIndicator | Never set Fill/Width/Height; never reorder every paint | BottomBar draws own pill; glow host sits *under* native chrome |
@@ -300,7 +301,7 @@ order** and `$name` prefixes: `[General]`, `[Icons]`, `[Previews]`,
 | Taskbar icons | `sizeBoostRank1..3` | `sizeBoostPercent[3]` |
 | Thumbnail previews | `previewHighlightEnabled` | preview master (also needs `enabled`) |
 | Thumbnail previews | `previewHighlightCount` | per-flyout top N |
-| Thumbnail previews | `previewStyle` | `titleBar` / `titleBg` / `plate` / `ring` |
+| Thumbnail previews | `previewStyle` | `titleBar` / `titleBg` / `plate` / `plateTitle` / `ring` |
 | Thumbnail previews | `previewIntensityRank1..3` | `previewIntensity[3]` |
 | Thumbnail previews | `previewFillOpacity` | plate + titleBg wash (not title bar line) |
 | Thumbnail previews | `previewMinFocusSeconds` | window confirm |
