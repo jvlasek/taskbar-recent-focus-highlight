@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.13
+// @version         0.8.14
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -17,8 +17,9 @@
 # Taskbar Recent Focus Highlight
 
 Visually highlights the most recently used running applications on the taskbar
-for faster context switching. Optionally glows the **most recent window** inside
-multi-window thumbnail previews (e.g. several VS Code or Terminal instances).
+for faster context switching. Optionally ranks **windows** inside multi-window
+thumbnail previews (e.g. several VS Code or Terminal instances) with the same
+kind of intensity ladder used on the icons.
 
 ## How it works
 
@@ -30,9 +31,10 @@ uses a process-path cache resolved from the taskband (same approach as
 taskbar-volume-control-per-app), with name matching as fallback.
 
 Separately, it tracks **per-window** recency (own min-focus / decay). When you
-hover a combined taskbar icon and the flyout shows 2+ thumbnails, the most
-recent window’s preview is marked (title bar, soft title tint, whole plate, or
-ring — configurable). Single-window flyouts are left alone.
+hover a combined taskbar icon and the flyout shows 2+ thumbnails, that flyout
+gets its **own** recency list: the top N windows in it are marked with rank
+intensities (title bar, soft title tint, whole plate, or ring — configurable).
+Single-window flyouts are left alone.
 
 ## Tips for testing
 
@@ -42,7 +44,8 @@ ring — configurable). Single-window flyouts are left alone.
 4. Ranked apps should show a highlight on their taskbar buttons (default: left
    bar); rank 1 is strongest.
 5. Brief Alt+Tab under the minimum focus time should not change ranks.
-6. Open 2+ windows of one app, focus one, hover the icon — that preview glows.
+6. Open 3+ windows of one app, focus them in turn, hover the icon — previews
+   show ranks 1 > 2 > 3 (strongest on the last focused window of that app).
 7. Disable the mod or toggle Enabled off to clear highlights.
 8. Multi-monitor: the same rank should appear on every taskbar that shows
    that app. Combined-icon flyouts should mark the recent window even when
@@ -182,14 +185,22 @@ See the repo README.md for full settings and architecture notes.
 
 # --- Thumbnail previews ---
 - previewHighlightEnabled: true
-  $name: "[Previews] Highlight recent window"
+  $name: "[Previews] Highlight recent windows"
   $description: >-
-    When hovering a multi-window taskbar icon, mark the thumbnail of the most
-    recently focused window. Single-window flyouts are never highlighted.
+    When hovering a multi-window taskbar icon, rank that flyout’s thumbnails
+    by window recency and mark the top N. Single-window flyouts are never
+    highlighted.
+- previewHighlightCount: 3
+  $name: "[Previews] Number of highlighted windows"
+  $description: >-
+    How many recent windows to mark in a multi-window flyout (1–6 recommended).
+    Ranking is local to that flyout: the last focused window of this app is
+    rank 1 even if other apps were used more recently. Set to 1 to mark only
+    the latest window.
 - previewStyle: titleBar
   $name: "[Previews] Highlight style"
   $description: >-
-    How to mark the recent window. Title bar = thin line under the title.
+    How to mark ranked windows. Title bar = thin line under the title.
     Title background = soft wash behind the title. Plate = tint the whole card.
     Ring = hollow border around the card.
   $options:
@@ -197,16 +208,28 @@ See the repo README.md for full settings and architecture notes.
   - titleBg: Title background tint
   - plate: Whole preview plate
   - ring: Ring / frame
+- previewIntensityRank1: 100
+  $name: "[Previews] Intensity rank 1"
+  $description: Strength for the most recent window in the flyout (0–100)
+- previewIntensityRank2: 70
+  $name: "[Previews] Intensity rank 2"
+  $description: Strength for the 2nd most recent window in the flyout (0–100)
+- previewIntensityRank3: 45
+  $name: "[Previews] Intensity rank 3"
+  $description: >-
+    Strength for the 3rd most recent window in the flyout (0–100); also used
+    for ranks 4+
 - previewFillOpacity: 40
   $name: "[Previews] Tint opacity"
   $description: >-
     0–100. Strength of title-background wash and whole-preview plate. Title bar
     line uses full accent and ignores this. Independent of [Icons] Fill opacity.
+    Per-rank intensity still scales the result.
 - previewMinFocusSeconds: 1
   $name: "[Previews] Minimum focus (seconds)"
   $description: >-
-    How long a window must stay focused before it counts as the “recent”
-    preview. Separate from app ranking min focus (0 = immediate).
+    How long a window must stay focused before it enters that flyout’s
+    recency list. Separate from app ranking min focus (0 = immediate).
 - previewDecayMinutes: 15
   $name: "[Previews] Decay (minutes)"
   $description: >-
@@ -313,6 +336,8 @@ struct {
     int decayMinutes = 30;
     bool requireTaskbarButton = true;  // skip tray-only focus targets
     bool previewHighlightEnabled = true;
+    int previewHighlightCount = 3;
+    int previewIntensity[3] = {100, 70, 45};
     int previewMinFocusSeconds = 1;
     int previewDecayMinutes = 15;
     PreviewStyle previewStyle = PreviewStyle::TitleBar;
@@ -1118,6 +1143,11 @@ winrt::Windows::UI::Color ResolveGlowBaseColor() {
 int RankIntensity(int rankZeroBased) {
     int idx = rankZeroBased < 3 ? rankZeroBased : 2;
     return g_settings.glowIntensity[idx];
+}
+
+int PreviewRankIntensity(int rankZeroBased) {
+    int idx = rankZeroBased < 3 ? rankZeroBased : 2;
+    return g_settings.previewIntensity[idx];
 }
 
 int RankSizeBoost(int rankZeroBased) {
@@ -4237,9 +4267,9 @@ void ScheduleThumbnailRelayout(FrameworkElement thumbView) {
     }
 }
 
-void ApplyThumbnailHighlight(FrameworkElement thumbView) {
-    if (!thumbView || g_unloading.load() || !g_settings.enabled ||
-        !g_settings.previewHighlightEnabled) {
+void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
+    if (!thumbView || rankOneBased <= 0 || g_unloading.load() ||
+        !g_settings.enabled || !g_settings.previewHighlightEnabled) {
         ClearThumbnailHighlight(thumbView);
         return;
     }
@@ -4254,7 +4284,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView) {
         }
         auto panelFe = panel.as<FrameworkElement>();
 
-        const int intensity = RankIntensity(0);
+        const int intensity = PreviewRankIntensity(rankOneBased - 1);
         const double t = intensity / 100.0;
         winrt::Windows::UI::Color base = ResolveGlowBaseColor();
         auto withAlpha = [](winrt::Windows::UI::Color c, int a) {
@@ -4360,8 +4390,8 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView) {
             }
 
             if (g_settings.glowDebugLog) {
-                Wh_Log(L"Preview glow style=%s on \"%s\"",
-                       PreviewStyleName(style),
+                Wh_Log(L"Preview glow rank %d style=%s intensity=%d on \"%s\"",
+                       rankOneBased, PreviewStyleName(style), intensity,
                        Automation::AutomationProperties::GetName(thumbView)
                            .c_str());
             }
@@ -4455,20 +4485,24 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView) {
             auto bar = FindChildByName(host, kThumbTitleBarName)
                            .try_as<Shapes::Rectangle>();
             if (bar) {
-                const int fillA = static_cast<int>(180 + 75 * t);
+                // Wider alpha range than the old rank-1-only bar so flyout
+                // ranks read as a ladder; t=1 stays fully opaque accent.
+                const int fillA = static_cast<int>(90 + 165 * t);
                 bar.Fill(Media::SolidColorBrush{withAlpha(base, fillA)});
                 bar.Stroke(nullptr);
                 bar.StrokeThickness(0);
                 bar.RadiusX(barH * 0.5);
                 bar.RadiusY(barH * 0.5);
-                bar.Opacity(0.92 + 0.08 * t);
+                bar.Opacity(0.50 + 0.50 * t);
                 PlaceOverlayChild(bar, hPad, top, barW, barH);
             }
         }
 
         if (g_settings.glowDebugLog) {
-            Wh_Log(L"Preview glow style=%s card=%.0fx%.0f on \"%s\"",
-                   PreviewStyleName(style), cardW, cardH,
+            Wh_Log(L"Preview glow rank %d style=%s intensity=%d card=%.0fx%.0f "
+                   L"on \"%s\"",
+                   rankOneBased, PreviewStyleName(style), intensity, cardW,
+                   cardH,
                    Automation::AutomationProperties::GetName(thumbView)
                        .c_str());
         }
@@ -4520,6 +4554,7 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         HWND hwnd = nullptr;
         ULONGLONG tick = 0;
         ResolveHow how = ResolveHow::None;
+        int rank = 0;  // 1-based flyout rank; 0 = not highlighted
     };
     std::vector<Scored> scored(siblings.size());
     std::unordered_set<HWND> usedHwnds;
@@ -4801,30 +4836,36 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         }
     }
 
-    // Glow the sibling whose HWND is the most recently focused (max tick > 0).
-    // On a tick tie (GetTickCount64 granularity, or two confirms in one ms)
-    // prefer the actual foreground window, not sibling[0].
+    // Rank this flyout only (not a global window ladder). Sort siblings that
+    // have a recency tick; ties: confirmSeq, then the live foreground HWND.
     HWND foreground = GetForegroundWindow();
-    size_t bestIdx = SIZE_MAX;
-    ULONGLONG bestTick = 0;
-    ULONGLONG bestSeq = 0;
+    std::vector<size_t> order;
+    order.reserve(scored.size());
     for (size_t i = 0; i < scored.size(); ++i) {
-        if (!scored[i].hwnd || scored[i].tick == 0) {
-            continue;
+        if (scored[i].hwnd && scored[i].tick > 0) {
+            order.push_back(i);
         }
-        const ULONGLONG seq = seqFor(scored[i].hwnd);
-        const bool betterTick = scored[i].tick > bestTick;
-        const bool betterSeq =
-            scored[i].tick == bestTick && seq > bestSeq;
-        const bool tieFg = scored[i].tick == bestTick && seq == bestSeq &&
-                           scored[i].hwnd == foreground &&
-                           (bestIdx == SIZE_MAX ||
-                            scored[bestIdx].hwnd != foreground);
-        if (betterTick || betterSeq || tieFg) {
-            bestTick = scored[i].tick;
-            bestSeq = seq;
-            bestIdx = i;
+    }
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        if (scored[a].tick != scored[b].tick) {
+            return scored[a].tick > scored[b].tick;
         }
+        const ULONGLONG sa = seqFor(scored[a].hwnd);
+        const ULONGLONG sb = seqFor(scored[b].hwnd);
+        if (sa != sb) {
+            return sa > sb;
+        }
+        const bool aFg = scored[a].hwnd == foreground;
+        const bool bFg = scored[b].hwnd == foreground;
+        if (aFg != bFg) {
+            return aFg;
+        }
+        return a < b;
+    });
+
+    const int limit = (std::max)(0, g_settings.previewHighlightCount);
+    for (size_t r = 0; r < order.size() && static_cast<int>(r) < limit; ++r) {
+        scored[order[r]].rank = static_cast<int>(r) + 1;
     }
 
     if (g_settings.glowDebugLog) {
@@ -4833,10 +4874,11 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
             std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
             mapCount = g_thumbnailTaskItemMapping.size();
         }
+        const size_t painted =
+            (std::min)(order.size(), static_cast<size_t>(limit));
         Wh_Log(L"Preview resolve: %zu siblings, %zu taskitem maps, "
-               L"bestIdx=%zu bestTick=%llu",
-               siblings.size(), mapCount, bestIdx,
-               static_cast<unsigned long long>(bestTick));
+               L"highlightCount=%d candidates=%zu painted=%zu",
+               siblings.size(), mapCount, limit, order.size(), painted);
         for (size_t i = 0; i < scored.size(); ++i) {
             PCWSTR how = L"none";
             switch (scored[i].how) {
@@ -4858,16 +4900,18 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
                            .c_str();
             } catch (...) {
             }
-            Wh_Log(L"  sibling[%zu]: hwnd=%p tick=%llu how=%s%s name=\"%s\"",
+            Wh_Log(L"  sibling[%zu]: hwnd=%p tick=%llu how=%s rank=%d%s "
+                   L"name=\"%s\"",
                    i, scored[i].hwnd,
                    static_cast<unsigned long long>(scored[i].tick), how,
-                   (i == bestIdx) ? L" [GLOW]" : L"", name.c_str());
+                   scored[i].rank,
+                   scored[i].rank > 0 ? L" [GLOW]" : L"", name.c_str());
         }
     }
 
     for (size_t i = 0; i < scored.size(); ++i) {
-        if (i == bestIdx) {
-            ApplyThumbnailHighlight(scored[i].view);
+        if (scored[i].rank > 0) {
+            ApplyThumbnailHighlight(scored[i].view, scored[i].rank);
         } else {
             ClearThumbnailHighlight(scored[i].view);
         }
@@ -6181,6 +6225,47 @@ void LoadSettings() {
 
     g_settings.previewHighlightEnabled =
         Wh_GetIntSetting(L"previewHighlightEnabled") != 0;
+
+    g_settings.previewHighlightCount =
+        Wh_GetIntSetting(L"previewHighlightCount");
+    if (g_settings.previewHighlightCount < 0) {
+        g_settings.previewHighlightCount = 0;
+    }
+    if (g_settings.previewHighlightCount > 16) {
+        g_settings.previewHighlightCount = 16;
+    }
+
+    g_settings.previewIntensity[0] =
+        Wh_GetIntSetting(L"previewIntensityRank1");
+    g_settings.previewIntensity[1] =
+        Wh_GetIntSetting(L"previewIntensityRank2");
+    g_settings.previewIntensity[2] =
+        Wh_GetIntSetting(L"previewIntensityRank3");
+    for (int& v : g_settings.previewIntensity) {
+        if (v < 0) {
+            v = 0;
+        }
+        if (v > 100) {
+            v = 100;
+        }
+    }
+
+    // New keys are blank after an in-place recompile. Wh_GetIntSetting
+    // returns 0 for a missing value, which would paint nothing. Treat the
+    // all-zero cluster as unset and apply the YAML defaults (3 / 100/70/45).
+    // An explicit count of 0 with any intensity set is still honored.
+    const bool previewRanksUnset = g_settings.previewIntensity[0] == 0 &&
+                                   g_settings.previewIntensity[1] == 0 &&
+                                   g_settings.previewIntensity[2] == 0;
+    if (previewRanksUnset) {
+        g_settings.previewIntensity[0] = 100;
+        g_settings.previewIntensity[1] = 70;
+        g_settings.previewIntensity[2] = 45;
+        if (g_settings.previewHighlightCount == 0) {
+            g_settings.previewHighlightCount = 3;
+        }
+    }
+
     g_settings.previewMinFocusSeconds =
         Wh_GetIntSetting(L"previewMinFocusSeconds");
     if (g_settings.previewMinFocusSeconds < 0) {
@@ -6221,8 +6306,8 @@ void LoadSettings() {
 
     Wh_Log(L"Settings: enabled=%d style=%s th=%d round=%d%% size=%d%% "
            L"layers=%d fillOp=%d previewFillOp=%d debug=%d decay=%dmin "
-           L"minFocus=%ds promote=%s preview=%d previewStyle=%s "
-           L"previewMin=%ds previewDecay=%dmin",
+           L"minFocus=%ds promote=%s preview=%d previewCount=%d "
+           L"previewI=%d/%d/%d previewStyle=%s previewMin=%ds previewDecay=%dmin",
            g_settings.enabled ? 1 : 0, GlowStyleName(g_settings.glowStyle),
            g_settings.glowThickness, g_settings.glowRoundness,
            g_settings.glowSize, g_settings.glowLayers,
@@ -6230,6 +6315,8 @@ void LoadSettings() {
            g_settings.glowDebugLog ? 1 : 0, g_settings.decayMinutes,
            g_settings.minFocusSeconds, PromoteModeName(g_settings.promoteMode),
            g_settings.previewHighlightEnabled ? 1 : 0,
+           g_settings.previewHighlightCount, g_settings.previewIntensity[0],
+           g_settings.previewIntensity[1], g_settings.previewIntensity[2],
            PreviewStyleName(g_settings.previewStyle),
            g_settings.previewMinFocusSeconds, g_settings.previewDecayMinutes);
 }
@@ -6239,7 +6326,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.13");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.14");
 
     g_unloading = false;
     LoadSettings();

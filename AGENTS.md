@@ -9,7 +9,7 @@ A **Windhawk mod** injected into `explorer.exe` that:
 
 1. Watches which app/window the user is actually using (window focus).
 2. Maintains **app-level** recency ranking (top N processes) → taskbar icon glow.
-3. Maintains **window-level** recency (`HWND`) → multi-window thumbnail mark.
+3. Maintains **window-level** recency (`HWND`) → per-flyout thumbnail ranks.
 4. Paints own-named XAML overlays (never permanent restyles that hover states wipe).
 
 Reference mods live in `example/` (icon size, thumbnail size, volume-per-app,
@@ -92,7 +92,8 @@ Only the **currently focused** app is Active. Ranks 2 and 3 are recent but
 
 ## Window-level recency + thumbnail matching
 
-App ranks answer “which **app**?”. Thumbnail glow answers “which **window**?”.
+App ranks answer “which **app**?”. Thumbnail ranks answer “which **windows**
+in this flyout?”.
 
 | Layer | Key | Timers |
 |-------|-----|--------|
@@ -101,10 +102,13 @@ App ranks answer “which **app**?”. Thumbnail glow answers “which **window*
 
 ### Product rules
 
-- Glow **only the most recent** window in a flyout (not a rank ladder).
+- Each multi-window flyout has its **own** recency ladder (top N among
+  siblings), not a global window rank and not “most recent only”.
 - **Skip** flyouts with ≤1 thumbnail.
 - Preview timers are **independent** of app timers.
 - Do **not** require the app to be in icon top-N.
+- Preview ranks reuse the same intensity idea as icons (`previewIntensity[3]`;
+  ranks 4+ reuse rank 3). Count is `previewHighlightCount` (0–16).
 
 ### Matching a `TaskItemThumbnailView` to an HWND
 
@@ -123,6 +127,9 @@ Resolve order in `RefreshThumbnailFlyout_UIThread`:
 3. **Title unique** — last resort; each HWND used once. **Ambiguous** when two
    windows share the same title (both automation names often look like
    `"file — App - 2 running windows"`).
+
+Then sort siblings with a recency tick (tick, confirmSeq, foreground) and
+paint the top `previewHighlightCount` at `previewIntensity` ranks.
 
 Hooks for thumbnails are **optional**. Missing symbols: app ranks still work;
 preview may fall back to title-only (weak for identical titles).
@@ -207,6 +214,7 @@ anchor. Log “no dispatcher anchor” **once** until the first button is seen.
 | Exclude list | Path / file / AppId, case-insensitive | Standard Windhawk UX |
 | Shell hosts ignored | explorer, AFH, SearchHost, … | Don’t rank the shell |
 | Highlight count | 0–16 (UI suggests 1–6) | Settings-capped |
+| Preview highlight count | 0–16 (UI suggests 1–6) | Per-flyout cap |
 | Tray-only | `requireTaskbarButton` default on | No TaskListButton ⇒ not ranked |
 
 Promotion (apps):
@@ -217,6 +225,8 @@ Promotion (apps):
 4. UI apply
 
 Promotion (windows): parallel with `previewMinFocusSeconds` → `g_windowFocusMap`.
+On flyout open, siblings are sorted by that map (tick, then confirmSeq) and
+the top `previewHighlightCount` get ranks 1…N.
 
 ---
 
@@ -237,8 +247,9 @@ Promotion (windows): parallel with `previewMinFocusSeconds` → `g_windowFocusMa
 | Never | `ClearValue` BackgroundElement; clip null ancestors | Pale hover leftovers |
 | Preview layout | Span rows + RenderTransform | Title-row expansion bug |
 | Preview titleBar | ~2px under baseline | Not hugging image; not strikethrough |
-| Preview titleBg | Soft alpha from `previewFillOpacity` | Readable text |
-| Preview plate | BackgroundBorder tint via `previewFillOpacity` | Strong signal |
+| Preview titleBg | Soft alpha from `previewFillOpacity` × rank intensity | Readable text |
+| Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank | Strong signal |
+| Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
 | RunningIndicator | Never set Fill/Width/Height; never reorder every paint | BottomBar draws own pill; glow host sits *under* native chrome |
 | Size boost | Icon `ScaleTransform` only | No layout width change |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
@@ -288,15 +299,18 @@ order** and `$name` prefixes: `[General]`, `[Icons]`, `[Previews]`,
 | Taskbar icons | `glowFillOpacity` | Full / left / bottom icon bar strength |
 | Taskbar icons | `sizeBoostRank1..3` | `sizeBoostPercent[3]` |
 | Thumbnail previews | `previewHighlightEnabled` | preview master (also needs `enabled`) |
+| Thumbnail previews | `previewHighlightCount` | per-flyout top N |
 | Thumbnail previews | `previewStyle` | `titleBar` / `titleBg` / `plate` / `ring` |
+| Thumbnail previews | `previewIntensityRank1..3` | `previewIntensity[3]` |
 | Thumbnail previews | `previewFillOpacity` | plate + titleBg wash (not title bar line) |
 | Thumbnail previews | `previewMinFocusSeconds` | window confirm |
 | Thumbnail previews | `previewDecayMinutes` | window decay |
 | Advanced | `glowDebugLog` | verbose bind + preview resolve logs |
 
-Ranks beyond 3 reuse rank-3 intensity/size. Preview reuses rank-1 color and
-shared thickness/roundness; plate/titleBg use `previewFillOpacity` (no size
-boost on thumbnails).
+Ranks beyond 3 reuse rank-3 intensity/size (icons and previews separately).
+Preview reuses icon color and shared thickness/roundness; plate/titleBg use
+`previewFillOpacity` scaled by that window’s preview intensity (no size boost
+on thumbnails).
 
 ---
 
@@ -326,8 +340,9 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 6. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
 7. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
    for thumbnail symbols so older builds still load.
-8. **Test:** app min-focus 0–1s; preview 0–1s; two same-title windows; debug log
-   `Preview resolve:` + `sibling[` lines; disable clears all chrome.
+8. **Test:** app min-focus 0–1s; preview 0–1s; three windows of one app (ranks
+   1>2>3 in that flyout only); two same-title windows; debug log
+   `Preview resolve:` + `sibling[` + `rank=`; disable clears all chrome.
 
 ### Useful log substrings
 

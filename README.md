@@ -1,12 +1,12 @@
 # Taskbar Recent Focus Highlight
 
 A Windhawk mod that visually highlights the most recently used **apps** on the
-Windows 11 taskbar, and (optionally) the most recently used **window** inside
-multi-instance thumbnail previews.
+Windows 11 taskbar, and (optionally) ranks **windows** inside multi-instance
+thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.8.3 — app ranks (left-bar default) + configurable thumbnail preview styles
+**Status:** v0.8.14 — app ranks + per-flyout thumbnail ranks (count + intensities)
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -22,20 +22,23 @@ too — so “which one did I just use?” is unclear.
 1. **App ranks** — track focus and highlight the top N recent **running** taskbar
    icons (left bar, frame, full plate, or bottom running indicator).
 2. **Preview ranks** — separately track focus per **window** (`HWND`). When a
-   multi-window thumbnail flyout opens, mark the most recent window’s preview
-   (title bar, soft title tint, whole plate, or ring).
+   multi-window thumbnail flyout opens, that flyout gets its own recency list
+   and marks the top N windows with rank intensities (title bar, soft title
+   tint, whole plate, or ring).
 
 ## Features
 
 - Only affects **running apps** (pinned-only icons ignored)
 - Highlights the **top N** recent apps (default 3; configurable)
+- Highlights the **top N** windows **per thumbnail flyout** (default 3; own intensities)
 - Icon styles: **left bar** (default), frame, full plate, bottom running bar
 - Optional subtle **icon size scaling** per rank
 - **Minimum focus time** — filters Alt+Tab noise (default 8s for apps)
 - **Decay** — apps drop out after idle (default 30 min)
 - **Exclude list** — paths / exe names / app IDs
 - **Tray-only filter** — ignore focus targets with no taskbar button (default on)
-- **Thumbnail previews** — multi-window flyouts only; own min-focus / decay / style
+- **Thumbnail previews** — multi-window flyouts only; own top-N ranks, intensities,
+  min-focus, decay, and style
 - Fully configurable through Windhawk settings
 
 ## Settings
@@ -68,8 +71,10 @@ the flat list:
 ### Thumbnail previews
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Highlight recent window in previews | Multi-window flyout mark | On |
+| Highlight recent windows in previews | Multi-window flyout ranks | On |
+| Number of highlighted windows | Top N in **that** flyout (1–6 recommended) | 3 |
 | Preview highlight style | Title bar / Title bg / Plate / Ring | **Title bar** |
+| Intensity rank 1/2/3 | Strength per window rank (0–100) | 100 / 70 / 45 |
 | Preview tint opacity | Plate + title-background wash (0–100) | 40 |
 | Preview minimum focus (seconds) | Window→preview recency (separate from apps) | 1 |
 | Preview decay (minutes) | Drop window from preview recency | 15 |
@@ -88,7 +93,10 @@ the flat list:
 | **Whole preview plate** | Tints the card chrome (`BackgroundBorder`) | Strong, clear signal |
 | **Ring** | Hollow frame around the card | Simple placeholder |
 
-Single-window flyouts are **never** marked (nothing to disambiguate).
+Single-window flyouts are **never** marked (nothing to disambiguate). Ranking
+is **per flyout**: Chrome’s last-used window is rank 1 in the Chrome flyout even
+if you then used Notepad. Set the window count to **1** to restore the old
+“most recent only” look.
 
 ## Share / install (for testers)
 
@@ -104,8 +112,9 @@ Single-window flyouts are **never** marked (nothing to disambiguate).
 
 1. Set app min-focus to `1`–`2`s (and preview min-focus to `0`–`1`) for faster trials.
 2. Focus several apps long enough → icon ranks 1 > 2 > 3 (left bar by default).
-3. Open **two+** windows of one app, focus one, hover the combined icon → that
-   preview should show the chosen preview style; the other should not.
+3. Open **three+** windows of one app, focus them in turn, hover the combined
+   icon → previews show ranks 1 > 2 > 3 (strongest on the last focused window
+   of that app). Unranked cards stay unmarked.
 4. Same-title windows (e.g. two Calibre views of the same file) should still
    track separately when TaskItem maps resolve (`how=group-order` / `taskitem`
    in debug log).
@@ -147,7 +156,7 @@ Identical titles cannot be disambiguated by name alone.
          │
          ├─► App recency (path)  ──match──►  TaskListButton glow
          │
-         └─► Window recency (HWND) ──match──►  Thumbnail glow (2+ cards)
+         └─► Window recency (HWND) ──match──►  Thumbnail ranks (2+ cards)
 ```
 
 ### Other important decisions
@@ -169,7 +178,8 @@ Identical titles cannot be disambiguated by name alone.
 1. User focuses an app long enough → process enters / refreshes app map → top N ranks.
 2. Matching binds ranks to `TaskListButton`s → icon style applied.
 3. Same focus path confirms **HWND** after preview min-focus → window map.
-4. Multi-window flyout opens → resolve each thumbnail to HWND → mark the most recent.
+4. Multi-window flyout opens → resolve each thumbnail to HWND → rank by recency
+   inside that flyout → paint top N at preview intensities.
 5. Unload / disable → clear icon and preview chrome.
 
 ---
@@ -190,7 +200,7 @@ Identical titles cannot be disambiguated by name alone.
 | 1 | **Done** | Focus hook, min-focus, ranking, decay, exclude, settings |
 | 2 | **Done** | App match → `TaskListButton`; styles + size boost |
 | 3 | **Done** | Multi-layer / bars / bottom indicator; path cache (option C) |
-| 4 | **Done** | Thumbnail recency, styles (titleBar / titleBg / plate / ring), HWND maps |
+| 4 | **Done** | Thumbnail recency, per-flyout ranks + intensities, styles, HWND maps |
 | 5 | Later | Composition shadow, reliable UWP AppId, less fuzzy app matching |
 
 ## Potential future enhancements
