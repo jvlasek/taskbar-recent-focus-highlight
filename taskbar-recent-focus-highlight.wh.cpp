@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.15
+// @version         0.8.17
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -980,6 +980,52 @@ void RecomputeRanksLocked() {
 // Window-level recency (thumbnail previews)
 // ---------------------------------------------------------------------------
 
+void RequestApplyPreviewVisuals();
+void PruneWindowFocusMapLocked();
+
+void ConfirmPreviewFocusNow(HWND hwnd) {
+    if (!hwnd || g_unloading.load() || !g_settings.enabled ||
+        !g_settings.previewHighlightEnabled) {
+        return;
+    }
+    hwnd = NormalizeFocusHwnd(hwnd);
+    if (ShouldIgnoreHwnd(hwnd)) {
+        return;
+    }
+
+    std::wstring key;
+    std::wstring displayName;
+    std::wstring windowTitle;
+    DWORD processId = 0;
+    if (!ResolveAppIdentity(hwnd, key, displayName, processId, &windowTitle)) {
+        return;
+    }
+    if (IsExcludedKey(key, ToUpper(displayName))) {
+        return;
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        WindowFocusInfo& info = g_windowFocusMap[hwnd];
+        info.hwnd = hwnd;
+        info.processKey = PathFromAppKey(key);
+        if (info.processKey.empty()) {
+            info.processKey = ToUpper(GetProcessImagePath(processId));
+        }
+        if (!windowTitle.empty()) {
+            info.windowTitle = windowTitle;
+        }
+        info.lastConfirmedTick = now;
+        info.confirmSeq = g_windowConfirmSeq.fetch_add(1) + 1;
+        PruneWindowFocusMapLocked();
+        Wh_Log(L"Preview click confirmed: hwnd=%p %s title=\"%s\" (map=%zu)",
+               hwnd, displayName.c_str(), windowTitle.c_str(),
+               g_windowFocusMap.size());
+    }
+    RequestApplyPreviewVisuals();
+}
+
 void PruneWindowFocusMapLocked() {
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG decayMs =
@@ -1323,6 +1369,25 @@ std::wstring NormalizeAutomationName(std::wstring name) {
     return name;
 }
 
+// True for Lister-style "[c:\temp\file.txt]" / "[book.epub]", not Calibre's
+// format tag "[EPUB]" (same on every book — must not be an identity key).
+bool LooksLikeFilePath(const std::wstring& s) {
+    if (s.empty()) {
+        return false;
+    }
+    if (s.find(L'\\') != std::wstring::npos ||
+        s.find(L'/') != std::wstring::npos) {
+        return true;
+    }
+    if (s.size() >= 2 && ((s[0] >= L'A' && s[0] <= L'Z') ||
+                          (s[0] >= L'a' && s[0] <= L'z')) &&
+        s[1] == L':') {
+        return true;
+    }
+    const auto dot = s.rfind(L'.');
+    return dot != std::wstring::npos && dot > 0 && dot + 1 < s.size();
+}
+
 std::wstring ExtractBracketedPath(const std::wstring& s) {
     const auto open = s.find(L'[');
     const auto close = s.rfind(L']');
@@ -1330,7 +1395,11 @@ std::wstring ExtractBracketedPath(const std::wstring& s) {
         close <= open + 1) {
         return {};
     }
-    return s.substr(open + 1, close - open - 1);
+    std::wstring inner = s.substr(open + 1, close - open - 1);
+    if (!LooksLikeFilePath(inner)) {
+        return {};
+    }
+    return inner;
 }
 
 // Strip marketing suffixes so WINDOWSTERMINAL ≈ TERMINALPREVIEW → TERMINAL.
@@ -1505,6 +1574,11 @@ int ScoreTitleToAutomationName(const std::wstring& windowTitle,
         ++pref;
     }
     if (pref >= 6) {
+        // Shared prefix only: "HarryPotter1" vs "HarryPotter2" (or two
+        // "EbookReader…" books) must not count as a match.
+        if (t.size() > pref && a.size() > pref) {
+            return 0;
+        }
         return 85;
     }
     return 0;
@@ -2701,6 +2775,8 @@ using CTaskListWnd_HandleClick_t = HRESULT(WINAPI*)(void* pThis,
                                                     void* taskItem,
                                                     void** launcherOptions);
 CTaskListWnd_HandleClick_t CTaskListWnd_HandleClick_Original;
+HWND GetWindowFromTaskItem(void* taskItem);
+
 HRESULT WINAPI CTaskListWnd_HandleClick_Hook(void* pThis,
                                              void* taskGroup,
                                              void* taskItem,
@@ -2710,10 +2786,18 @@ HRESULT WINAPI CTaskListWnd_HandleClick_Hook(void* pThis,
         g_clickSentinel_TaskItem = taskItem;
         return S_OK;
     }
-    return CTaskListWnd_HandleClick_Original
-               ? CTaskListWnd_HandleClick_Original(pThis, taskGroup, taskItem,
-                                                   launcherOptions)
-               : E_FAIL;
+    const HRESULT hr = CTaskListWnd_HandleClick_Original
+                           ? CTaskListWnd_HandleClick_Original(
+                                 pThis, taskGroup, taskItem, launcherOptions)
+                           : E_FAIL;
+    // Thumbnail (or grouped-icon) click is an explicit "this window".
+    // Confirm it immediately so decay + click does not paint the sibling.
+    if (SUCCEEDED(hr) && taskItem) {
+        if (HWND clicked = GetWindowFromTaskItem(taskItem)) {
+            ConfirmPreviewFocusNow(clicked);
+        }
+    }
+    return hr;
 }
 
 using TaskItem_ReportClicked_t = int(WINAPI*)(void* pThis, void* param);
@@ -3435,27 +3519,31 @@ HWND ResolveHwndFromThumbnailModel(
     return nullptr;
 }
 
-// HWNDs for one task group in construction order (matches flyout item order
-// when TaskItemThumbnail ctors ran in display order).
+// HWNDs for one task group in the *current* flyout's construction order.
+// Closed-flyout maps stay in the vector; first-seen order is the previous
+// hover and is often reversed after a click (Windows rebuilds MRU).
 std::vector<HWND> HwndsForTaskGroupInOrder(void* taskGroup) {
-    std::vector<HWND> out;
+    std::vector<HWND> newestFirst;
     if (!taskGroup) {
-        return out;
+        return newestFirst;
     }
     std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
-    for (const auto& item : g_thumbnailTaskItemMapping) {
-        if (item.taskGroup != taskGroup) {
+    for (auto it = g_thumbnailTaskItemMapping.rbegin();
+         it != g_thumbnailTaskItemMapping.rend(); ++it) {
+        if (it->taskGroup != taskGroup || !ThumbnailMappingLive(*it)) {
             continue;
         }
-        HWND h = HwndFromMappingEntry(item);
-        if (h) {
-            // De-dupe while preserving first-seen order.
-            if (std::find(out.begin(), out.end(), h) == out.end()) {
-                out.push_back(h);
-            }
+        HWND h = HwndFromMappingEntry(*it);
+        if (!h) {
+            continue;
+        }
+        if (std::find(newestFirst.begin(), newestFirst.end(), h) ==
+            newestFirst.end()) {
+            newestFirst.push_back(h);
         }
     }
-    return out;
+    std::reverse(newestFirst.begin(), newestFirst.end());
+    return newestFirst;
 }
 
 // Pick a taskGroup that has exactly `siblingCount` unique HWNDs (current flyout).
@@ -3843,27 +3931,53 @@ FrameworkElement FindThumbnailTitleElement(FrameworkElement thumbView) {
     return nullptr;
 }
 
-std::wstring GetThumbnailMatchTitle(FrameworkElement thumbView) {
-    std::wstring autoName;
+std::wstring GetThumbnailAutomationName(FrameworkElement thumbView) {
     try {
-        autoName =
-            Automation::AutomationProperties::GetName(thumbView).c_str();
+        return NormalizeAutomationName(
+            Automation::AutomationProperties::GetName(thumbView).c_str());
     } catch (...) {
+        return {};
     }
-    autoName = NormalizeAutomationName(std::move(autoName));
+}
 
-    std::wstring text;
+std::wstring GetThumbnailDisplayText(FrameworkElement thumbView) {
     try {
         if (auto titleEl = FindThumbnailTitleElement(thumbView)) {
             if (auto tb = titleEl.try_as<Controls::TextBlock>()) {
-                text = tb.Text().c_str();
-            } else {
-                text = titleEl.Name().c_str();
+                return NormalizeAutomationName(tb.Text().c_str());
             }
         }
     } catch (...) {
     }
-    text = NormalizeAutomationName(std::move(text));
+    return {};
+}
+
+std::wstring TitleMatchKey(const std::wstring& raw) {
+    std::wstring n = NormalizeAutomationName(raw);
+    std::wstring path = ToUpper(ExtractBracketedPath(n));
+    if (!path.empty()) {
+        return path;
+    }
+    return AlnumUpper(n);
+}
+
+bool TitleKeysAreDistinct(const std::vector<std::wstring>& titles) {
+    if (titles.size() < 2) {
+        return false;
+    }
+    std::unordered_set<std::wstring> seen;
+    for (const auto& t : titles) {
+        std::wstring key = TitleMatchKey(t);
+        if (key.empty() || !seen.insert(key).second) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::wstring GetThumbnailMatchTitle(FrameworkElement thumbView) {
+    std::wstring autoName = GetThumbnailAutomationName(thumbView);
+    std::wstring text = GetThumbnailDisplayText(thumbView);
 
     // Prefer the more specific string (file name vs generic "Lister").
     if (text.size() > autoName.size()) {
@@ -3873,6 +3987,67 @@ std::wstring GetThumbnailMatchTitle(FrameworkElement thumbView) {
         return autoName;
     }
     return !text.empty() ? text : autoName;
+}
+
+// Per-flyout: pick the title source that actually distinguishes cards.
+// Ebook readers often put the book name on DisplayNameTextBlock while
+// Automation Name is the shared "App - 2 running windows" (same on every
+// sibling) — preferring the longer string then made titlesDistinct fail
+// and we assigned HWNDs by stale group-order (swap after click).
+std::vector<std::wstring> PickFlyoutCardTitles(
+    const std::vector<FrameworkElement>& siblings) {
+    std::vector<std::wstring> autos;
+    std::vector<std::wstring> texts;
+    std::vector<std::wstring> mixed;
+    autos.reserve(siblings.size());
+    texts.reserve(siblings.size());
+    mixed.reserve(siblings.size());
+    for (const auto& v : siblings) {
+        autos.push_back(GetThumbnailAutomationName(v));
+        texts.push_back(GetThumbnailDisplayText(v));
+        mixed.push_back(GetThumbnailMatchTitle(v));
+    }
+    if (TitleKeysAreDistinct(texts)) {
+        return texts;
+    }
+    if (TitleKeysAreDistinct(autos)) {
+        return autos;
+    }
+    return mixed;
+}
+
+int ThumbnailPositionInSet(FrameworkElement view) {
+    try {
+        return Automation::AutomationProperties::GetPositionInSet(view);
+    } catch (...) {
+        return -1;
+    }
+}
+
+void SortThumbnailViewsVisualOrder(std::vector<FrameworkElement>& views) {
+    bool anyPos = false;
+    for (const auto& v : views) {
+        if (ThumbnailPositionInSet(v) >= 1) {
+            anyPos = true;
+            break;
+        }
+    }
+    if (!anyPos) {
+        return;
+    }
+    std::stable_sort(
+        views.begin(), views.end(),
+        [](const FrameworkElement& a, const FrameworkElement& b) {
+            int pa = ThumbnailPositionInSet(a);
+            int pb = ThumbnailPositionInSet(b);
+            if (pa < 1) {
+                pa = 100000;
+            }
+            if (pb < 1) {
+                pb = 100000;
+            }
+            return pa < pb;
+        });
 }
 
 // Snap-group card in the same flyout as the individual windows
@@ -4563,6 +4738,9 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         return;
     }
 
+    SortThumbnailViewsVisualOrder(siblings);
+    const std::vector<std::wstring> cardTitles = PickFlyoutCardTitles(siblings);
+
     enum class ResolveHow : int { None = 0, TaskItem, GroupOrder, Title };
     struct Scored {
         FrameworkElement view{nullptr};
@@ -4743,38 +4921,39 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         }
     }
 
-    auto titleKeyOf = [](FrameworkElement view) -> std::wstring {
-        std::wstring t = GetThumbnailMatchTitle(view);
-        std::wstring path = ToUpper(ExtractBracketedPath(t));
-        if (!path.empty()) {
-            return path;
-        }
-        return AlnumUpper(t);
+    const bool titlesDistinct = TitleKeysAreDistinct(cardTitles);
+
+    auto hwndTitle = [](HWND hwnd) -> std::wstring {
+        return hwnd && IsWindow(hwnd) ? GetWindowTitle(hwnd) : std::wstring{};
     };
 
-    bool titlesDistinct = siblings.size() >= 2;
-    {
-        std::unordered_set<std::wstring> seen;
-        for (auto& view : siblings) {
-            std::wstring key = titleKeyOf(view);
-            if (key.empty() || !seen.insert(key).second) {
-                titlesDistinct = false;
-                break;
-            }
-        }
-    }
-
-    // Unique titles (Lister - [c:\tmp\a.txt] vs b.txt vs c.txt) beat
-    // group-order. Index order from maps/EnumWindows is not flyout order.
+    // Unique titles beat index assignment. Also drop a TaskItem HWND that
+    // clearly belongs to a *different* card (ebook reader: DataContext /
+    // stale map points at the other book in the same process).
     if (titlesDistinct) {
-        for (auto& s : scored) {
-            if (s.how == ResolveHow::GroupOrder) {
-                if (s.hwnd) {
-                    usedHwnds.erase(s.hwnd);
+        for (size_t i = 0; i < scored.size(); ++i) {
+            if (!scored[i].hwnd) {
+                continue;
+            }
+            const bool dropGroup = scored[i].how == ResolveHow::GroupOrder;
+            int selfScore = ScoreTitleToAutomationName(hwndTitle(scored[i].hwnd),
+                                                       cardTitles[i]);
+            int bestOther = 0;
+            for (size_t j = 0; j < cardTitles.size(); ++j) {
+                if (j == i) {
+                    continue;
                 }
-                s.hwnd = nullptr;
-                s.tick = 0;
-                s.how = ResolveHow::None;
+                bestOther = (std::max)(
+                    bestOther, ScoreTitleToAutomationName(
+                                   hwndTitle(scored[i].hwnd), cardTitles[j]));
+            }
+            const bool belongsElsewhere =
+                bestOther >= 70 && bestOther > selfScore;
+            if (dropGroup || belongsElsewhere) {
+                usedHwnds.erase(scored[i].hwnd);
+                scored[i].hwnd = nullptr;
+                scored[i].tick = 0;
+                scored[i].how = ResolveHow::None;
             }
         }
     }
@@ -4784,7 +4963,7 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         if (scored[i].hwnd) {
             continue;
         }
-        std::wstring autoName = GetThumbnailMatchTitle(siblings[i]);
+        std::wstring autoName = cardTitles[i];
         HWND h = MatchTitleToUnusedRecent(autoName, titlePool, usedHwnds);
         if (h) {
             scored[i].hwnd = h;
@@ -4817,7 +4996,7 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
             continue;
         }
 
-        std::wstring autoName = GetThumbnailMatchTitle(scored[i].view);
+        std::wstring autoName = cardTitles[i];
 
         int bestScore = 0;
         ULONGLONG bestTick = 0;
@@ -4916,11 +5095,12 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
             } catch (...) {
             }
             Wh_Log(L"  sibling[%zu]: hwnd=%p tick=%llu how=%s rank=%d%s "
-                   L"name=\"%s\"",
+                   L"name=\"%s\" card=\"%s\"",
                    i, scored[i].hwnd,
                    static_cast<unsigned long long>(scored[i].tick), how,
                    scored[i].rank,
-                   scored[i].rank > 0 ? L" [GLOW]" : L"", name.c_str());
+                   scored[i].rank > 0 ? L" [GLOW]" : L"", name.c_str(),
+                   (i < cardTitles.size()) ? cardTitles[i].c_str() : L"");
         }
     }
 
@@ -6343,7 +6523,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.15");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.17");
 
     g_unloading = false;
     LoadSettings();

@@ -120,13 +120,18 @@ TaskItemThumbnailView::OnApplyTemplate → collect siblings → assign HWNDs →
 Resolve order in `RefreshThumbnailFlyout_UIThread`:
 
 1. **TaskItem** — `DataContext` ↔ ctor map (COM identity compare). Often fails
-   in practice (projection mismatch) even when maps exist.
-2. **Group-order** — find `taskGroup` with N unique HWNDs matching sibling count,
-   or last N mapped HWNDs; assign index ↔ sibling (left→right ≈ ctor order).
-   This is what fixed same-title Calibre after explorer reload.
-3. **Title unique** — last resort; each HWND used once. **Ambiguous** when two
-   windows share the same title (both automation names often look like
-   `"file — App - 2 running windows"`).
+   in practice (projection mismatch) even when maps exist. Rejected when the
+   HWND title uniquely matches a *different* card (same-process ebooks).
+2. **Group-order** — live mappings only (current flyout ctor order, not the
+   previous hover). Find `taskGroup` with N unique HWNDs matching sibling
+   count, or last N mapped HWNDs. Siblings sorted by `PositionInSet`.
+   Dropped whenever card titles are distinct — index ≠ visual after a click.
+3. **Title unique** — prefer `DisplayNameTextBlock` when those texts differ
+   across siblings (ebook book names). Automation Name is often the shared
+   `"App - 2 running windows"`. Each HWND used once. **Ambiguous** when two
+   windows share the same title. Bracketed `[EPUB]` / `[PDF]` is a format
+   tag, **not** a file path — only `[c:\…\file]` or `[name.ext]` is an
+   identity key (Calibre used to bind every book to the first HWND).
 
 Then sort siblings with a recency tick (tick, confirmSeq, foreground) and
 paint the top `previewHighlightCount` at `previewIntensity` ranks.
@@ -351,6 +356,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 |-----------|---------|
 | `Focus candidate:` / `Confirmed focus:` | App recency |
 | `Preview focus confirmed:` | Window recency |
+| `Preview click confirmed:` | Thumbnail / grouped-icon click → window recency |
 | `Preview resolve:` / `sibling[` | Per-card HWND + `how=taskitem\|group-order\|title` |
 | `ApplyAllHighlights` | Icon apply / empty ranks |
 | `Hooked Taskbar.View.dll` | View symbols |
