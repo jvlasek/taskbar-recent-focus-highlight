@@ -257,6 +257,7 @@ the top `previewHighlightCount` get ranks 1…N.
 | Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank | Strong signal |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
 | RunningIndicator | Never set Fill/Width/Height; never reorder every paint | BottomBar draws own pill; glow host sits *under* native chrome |
+| OverlayIcon | Keep after Icon / DefaultIcon | Discord/Thunderbird/WhatsApp badge; our host insert can leave it behind the glyph |
 | Size boost | Icon `ScaleTransform` only | No layout width change |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
 | Coexistence | Own names; clear on unload | Taskbar Styler friendlier |

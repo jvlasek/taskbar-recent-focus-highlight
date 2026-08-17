@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.17
+// @version         0.8.18
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -2048,6 +2048,8 @@ void ClearRunningIndicatorStyle(FrameworkElement iconPanel) {
     }
 }
 
+void EnsureOverlayIconAboveGlyph(FrameworkElement iconPanel);
+
 // Place glow host in the IconPanel child list without thrashing native chrome.
 //
 // Moving RunningIndicator every paint (mouse-over UpdateVisualStates) causes
@@ -2114,6 +2116,10 @@ void EnsureGlowHostZOrder(Controls::Panel panel,
             children.RemoveAt(hostIdx);
             children.Append(host);
         }
+
+        // Moving the host can leave OverlayIcon behind Icon when Windows later
+        // re-appends the glyph (Discord/Thunderbird ping). Heal after we settle.
+        EnsureOverlayIconAboveGlyph(panel.as<FrameworkElement>());
     } catch (...) {
     }
 }
@@ -2121,8 +2127,59 @@ void EnsureGlowHostZOrder(Controls::Panel panel,
 // TaskListLabeledButtonPanel paints later children on top. Native template
 // order is BackgroundElement (back) → Icon → OverlayIcon → RunningIndicator
 // (front). Inserting/removing our host can leave BackgroundElement in front
-// of the running underscore. Combined with Discord RequestingAttention (red
-// plate on BackgroundElement) that looks like: missing underscore + red bg.
+// of the running underscore, or leave OverlayIcon *behind* Icon (Discord /
+// Thunderbird / WhatsApp badge clipped by the glyph after a ping + UVS).
+void EnsureOverlayIconAboveGlyph(FrameworkElement iconPanel) {
+    if (!iconPanel) {
+        return;
+    }
+    auto panel = iconPanel.try_as<Controls::Panel>();
+    if (!panel) {
+        return;
+    }
+    try {
+        auto overlay = FindChildByName(iconPanel, L"OverlayIcon");
+        if (!overlay) {
+            return;
+        }
+        auto children = panel.Children();
+        uint32_t oIdx = 0;
+        if (!children.IndexOf(overlay, oIdx)) {
+            return;
+        }
+
+        uint32_t glyphLast = 0;
+        bool haveGlyph = false;
+        for (PCWSTR name : {L"Icon", L"DefaultIcon"}) {
+            auto el = FindChildByName(iconPanel, name);
+            if (!el) {
+                continue;
+            }
+            uint32_t idx = 0;
+            if (!children.IndexOf(el, idx)) {
+                continue;
+            }
+            if (!haveGlyph || idx > glyphLast) {
+                glyphLast = idx;
+                haveGlyph = true;
+            }
+        }
+        if (!haveGlyph || oIdx > glyphLast) {
+            return;
+        }
+
+        children.RemoveAt(oIdx);
+        uint32_t dest = glyphLast;
+        if (dest > children.Size()) {
+            dest = children.Size();
+        }
+        children.InsertAt(dest, overlay);
+        Wh_Log(L"Raised OverlayIcon above Icon (notification badge was behind "
+               L"the glyph)");
+    } catch (...) {
+    }
+}
+
 void RestoreIconPanelNativeZOrder(FrameworkElement iconPanel) {
     if (!iconPanel) {
         return;
@@ -2147,22 +2204,21 @@ void RestoreIconPanelNativeZOrder(FrameworkElement iconPanel) {
 
         const int bg = indexOfName(kBackgroundElementName);
         const int run = indexOfName(L"RunningIndicator");
-        if (bg < 0 || run < 0 || bg < run) {
-            return;
+        if (bg >= 0 && run >= 0 && bg > run) {
+            auto bgEl = FindChildByName(iconPanel, kBackgroundElementName);
+            if (bgEl) {
+                uint32_t bgIdx = 0;
+                if (children.IndexOf(bgEl, bgIdx)) {
+                    children.RemoveAt(bgIdx);
+                    children.InsertAt(0, bgEl);
+                    Wh_Log(
+                        L"Restored IconPanel z-order (BackgroundElement was "
+                        L"in front of RunningIndicator)");
+                }
+            }
         }
 
-        auto bgEl = FindChildByName(iconPanel, kBackgroundElementName);
-        if (!bgEl) {
-            return;
-        }
-        uint32_t bgIdx = 0;
-        if (!children.IndexOf(bgEl, bgIdx)) {
-            return;
-        }
-        children.RemoveAt(bgIdx);
-        children.InsertAt(0, bgEl);
-        Wh_Log(L"Restored IconPanel z-order (BackgroundElement was in front of "
-               L"RunningIndicator)");
+        EnsureOverlayIconAboveGlyph(iconPanel);
     } catch (...) {
     }
 }
@@ -6523,7 +6579,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.17");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.18");
 
     g_unloading = false;
     LoadSettings();
