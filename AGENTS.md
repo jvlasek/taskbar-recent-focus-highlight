@@ -1,6 +1,6 @@
 # Agent / contributor guide
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.7.x). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.8.x). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -72,7 +72,8 @@ Order of preference:
 3. **Fuzzy / title scores** — alphanumeric compare, greedy 1:1 assignment.
 4. **Active-button association** — on confirm, store active running button name.
 
-Pinned-only icons: no highlight (`IsRunning == false`).
+Pinned-only icons: no highlight (`IsRunning == false`). Virtual-desktop lists
+are separate: a pinned icon that is not running on this desktop must not glow.
 
 ### Why not only match on “active button”?
 
@@ -97,8 +98,8 @@ in this flyout?”.
 
 | Layer | Key | Timers |
 |-------|-----|--------|
-| App ranks | Process path (UPPER) | `minFocusSeconds`, `decayMinutes` |
-| Preview glow | `HWND` in `g_windowFocusMap` | `previewMinFocusSeconds`, `previewDecayMinutes` |
+| App ranks | Process path (UPPER) per desktop GUID | `minFocusSeconds`, `decayMinutes` |
+| Preview glow | `HWND` per desktop GUID | `previewMinFocusSeconds`, `previewDecayMinutes` |
 
 ### Product rules
 
@@ -169,9 +170,9 @@ Clear always removes named overlays; plate clears local Background when marker p
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ Focus thread (message-only HWND + GetMessage loop)          │
-│  • SetWinEventHook(EVENT_SYSTEM_FOREGROUND) OUTOFCONTEXT    │
+│  • SetWinEventHook FOREGROUND + DESKTOPSWITCH OUTOFCONTEXT  │
 │  • App min-focus timer + preview min-focus timer + decay    │
-│  • g_appFocusMap / g_rankedApps / g_windowFocusMap          │
+│  • g_desktopMaps[desktopGuid] app + window recency          │
 │  • RequestApplyVisuals / RequestApplyPreviewVisuals         │
 └────────────────────────────┬────────────────────────────────┘
                              │
@@ -209,7 +210,9 @@ anchor. Log “no dispatcher anchor” **once** until the first button is seen.
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | App rank key | Full image path (UPPER) | Distinct same-named exes |
-| Window key | `HWND` | Multi-instance previews |
+| Recency scope | Per virtual desktop GUID | Workspaces don’t share top-N |
+| Current desktop | Registry `CurrentVirtualDesktop`, VDM fallback | Public APIs only |
+| Window key | `HWND` (per desktop map) | Multi-instance previews |
 | Display name | File name only | Logs / exclude UX |
 | App min focus | Default 8s | Alt+Tab noise |
 | Promote mode | immediateTracked / immediateTopN / alwaysWait | When re-focus skips app min-focus |
@@ -225,14 +228,16 @@ anchor. Log “no dispatcher anchor” **once** until the first button is seen.
 
 Promotion (apps):
 
-1. Foreground → `g_pendingFocus`
-2. After `minFocusSeconds`, or immediately per `promoteMode` → app map tick
-3. Sort → top `highlightCount` → `g_rankedApps`
-4. UI apply
+1. Foreground → `g_pendingFocus` (tagged with current desktop GUID)
+2. After `minFocusSeconds`, or immediately per `promoteMode` → that desktop’s app map tick
+3. Sort → top `highlightCount` → that desktop’s `rankedApps`
+4. UI apply uses **current** desktop’s ranks; `IsRunning` (plus 400ms grace)
+5. Desktop switch → `EVENT_SYSTEM_DESKTOPSWITCH` / registry GUID change →
+   load that desktop’s ranks and sweep overlays
 
-Promotion (windows): parallel with `previewMinFocusSeconds` → `g_windowFocusMap`.
-On flyout open, siblings are sorted by that map (tick, then confirmSeq) and
-the top `previewHighlightCount` get ranks 1…N.
+Promotion (windows): parallel with `previewMinFocusSeconds` → that desktop’s
+window map. On flyout open, siblings are sorted by **this desktop’s** map
+(tick, then confirmSeq) and the top `previewHighlightCount` get ranks 1…N.
 
 ---
 
@@ -249,6 +254,7 @@ the top `previewHighlightCount` get ranks 1…N.
 | Rank match | Path 1000 / file 900 / fuzzy | 1:1 greedy |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
+| Virtual desktops | Nested recency maps; no taskband reordering hooks | Explorer already filters `IsRunning` |
 | Decay clear | Recompute + `g_pendingOverlaySweep` | No orphan plates |
 | Never | `ClearValue` BackgroundElement; clip null ancestors | Pale hover leftovers |
 | Preview layout | Span rows + RenderTransform | Title-row expansion bug |
@@ -271,7 +277,8 @@ the top `previewHighlightCount` get ranks 1…N.
 
 | Object | Guard | Thread |
 |--------|--------|--------|
-| `g_appFocusMap`, `g_rankedApps`, `g_pendingFocus`, `g_keyToAutomationName`, `g_windowFocusMap` | `g_stateMutex` | Focus write; UI read under lock |
+| `g_desktopMaps`, `g_currentDesktopId`, `g_pendingFocus`, `g_keyToAutomationName` | `g_stateMutex` | Focus write; UI read under lock |
+| `g_vdm` | `g_vdmMutex` | Lazy public `IVirtualDesktopManager` |
 | `g_trackedButtons`, `g_dispatcherAnchor` | `g_buttonsMutex` | UI primarily |
 | `g_buttonPathCache` | `g_buttonPathMutex` | UI / resolve |
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
@@ -349,13 +356,16 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    for thumbnail symbols so older builds still load.
 8. **Test:** app min-focus 0–1s; preview 0–1s; three windows of one app (ranks
    1>2>3 in that flyout only); two same-title windows; debug log
-   `Preview resolve:` + `sibling[` + `rank=`; disable clears all chrome.
+   `Preview resolve:` + `sibling[` + `rank=`; disable clears all chrome;
+   two virtual desktops: glow on D1 must not remain on pinned-not-running
+   icons on D2; D1 ranks return after switching back.
 
 ### Useful log substrings
 
 | Substring | Meaning |
 |-----------|---------|
 | `Focus candidate:` / `Confirmed focus:` | App recency |
+| `Current virtual desktop:` / `Virtual desktop switch:` | Per-desktop recency |
 | `Preview focus confirmed:` | Window recency |
 | `Preview click confirmed:` | Thumbnail / grouped-icon click → window recency |
 | `Preview resolve:` / `sibling[` | Per-card HWND + `how=taskitem\|group-order\|title` |
@@ -374,3 +384,4 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 3. Stronger DataContext ↔ TaskItemThumbnail identity (less group-order reliance).
 4. Classic / non-XAML thumbnail path if still needed on some builds.
 5. Multi-monitor secondary taskbars if weak refs only cover primary.
+6. Per-desktop prune of deleted virtual desktop GUIDs beyond decay.

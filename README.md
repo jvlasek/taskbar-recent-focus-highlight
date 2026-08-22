@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.8.18 — app ranks + per-flyout thumbnail ranks + hybrid plate/title
+**Status:** v0.8.19 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -29,6 +29,7 @@ too — so “which one did I just use?” is unclear.
 ## Features
 
 - Only affects **running apps** (pinned-only icons ignored)
+- **Per virtual desktop** recency — each desktop has its own top-N list
 - Highlights the **top N** recent apps (default 3; configurable)
 - Highlights the **top N** windows **per thumbnail flyout** (default 3; own intensities)
 - Icon styles: **left bar** (default), frame, full plate, bottom running bar
@@ -120,8 +121,12 @@ if you then used Notepad. Set the window count to **1** to restore the old
    track separately when TaskItem maps resolve (`how=group-order` / `taskitem`
    in debug log).
 5. Useful log lines: `Confirmed focus:`, `Preview focus confirmed:`,
-   `Preview resolve:`, `sibling[`, `ApplyAllHighlights`.
+   `Preview resolve:`, `sibling[`, `ApplyAllHighlights`,
+   `Current virtual desktop:`, `Virtual desktop switch:`.
 6. Disable the mod or toggle **Enabled** off → all chrome clears.
+7. Virtual desktops: highlight apps on desktop 1, switch to desktop 2 —
+   pinned-not-running icons must not glow. Use apps on desktop 2; switch
+   back — desktop 1’s ranks should still be there.
 
 ---
 
@@ -136,9 +141,10 @@ if you then used Notepad. Set the window count to **1** to restore the old
 
 Buttons are not HWNDs. The mod:
 
-1. Keeps a **recency list** keyed by process path.
+1. Keeps a **recency list per virtual desktop**, keyed by process path.
 2. **Matches** buttons via taskband path cache (primary), then name scores.
-3. **Paints** only matched running buttons.
+3. **Paints** only matched **running** buttons (`IsRunning`, plus a short
+   Alt-Tab grace — not pinned-only icons on another desktop).
 
 ### Window identity (previews)
 
@@ -167,6 +173,7 @@ Identical titles cannot be disambiguated by name alone.
 | App min focus | Default 8s | Alt+Tab should not reshuffle ranks |
 | Preview min focus | Default 1s (separate) | Snappier for multi-window |
 | Rank key | Full process path (UPPER) | Distinct installs of same exe name |
+| Virtual desktops | Separate app + window maps per desktop GUID | Workspaces don’t share recency |
 | Icon default style | Left vertical bar | Clear without heavy chrome |
 | Preview default | Title bar under label | Light; plate available for stronger mark |
 | Focus hook | Dedicated WinEvent thread | Reliable timers + pump |
@@ -176,12 +183,16 @@ Identical titles cannot be disambiguated by name alone.
 
 ### High-level runtime flow
 
-1. User focuses an app long enough → process enters / refreshes app map → top N ranks.
-2. Matching binds ranks to `TaskListButton`s → icon style applied.
-3. Same focus path confirms **HWND** after preview min-focus → window map.
+1. User focuses an app long enough → process enters / refreshes **this
+   desktop’s** app map → top N ranks.
+2. Matching binds ranks to `TaskListButton`s → icon style applied (running only).
+3. Same focus path confirms **HWND** after preview min-focus → this desktop’s
+   window map.
 4. Multi-window flyout opens → resolve each thumbnail to HWND → rank by recency
    inside that flyout → paint top N at preview intensities.
-5. Unload / disable → clear icon and preview chrome.
+5. Virtual desktop switch → load that desktop’s ranks and re-apply (pinned
+   not-running icons stay dark).
+6. Unload / disable → clear icon and preview chrome.
 
 ---
 
@@ -202,7 +213,8 @@ Identical titles cannot be disambiguated by name alone.
 | 2 | **Done** | App match → `TaskListButton`; styles + size boost |
 | 3 | **Done** | Multi-layer / bars / bottom indicator; path cache (option C) |
 | 4 | **Done** | Thumbnail recency, per-flyout ranks + intensities, styles, HWND maps |
-| 5 | Later | Composition shadow, reliable UWP AppId, less fuzzy app matching |
+| 5 | **Done** | Per-virtual-desktop recency lists + `IsRunning` grace |
+| 6 | Later | Composition shadow, reliable UWP AppId, less fuzzy app matching |
 
 ## Potential future enhancements
 
