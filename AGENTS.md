@@ -197,9 +197,10 @@ anchor. Log “no dispatcher anchor” **once** until the first button is seen.
 
 ### Why hook `UpdateVisualStates`?
 
-- Re-apply after Windows resets visuals
+- Re-apply after Windows resets visuals (paint the **cached** rank only)
 - Register buttons (`g_trackedButtons`)
 - Same pattern as other taskbar mods
+- Full identity rebind is debounced (300ms + trailing timer), not every hover
 
 `LoadLibraryExW` covers late `Taskbar.View.dll` load.
 
@@ -235,9 +236,16 @@ Promotion (apps):
 5. Desktop switch → `EVENT_SYSTEM_DESKTOPSWITCH` / registry GUID change →
    load that desktop’s ranks and sweep overlays
 
-Promotion (windows): parallel with `previewMinFocusSeconds` → that desktop’s
-window map. On flyout open, siblings are sorted by **this desktop’s** map
-(tick, then confirmSeq) and the top `previewHighlightCount` get ranks 1…N.
+Shared confirm helpers (do not fork another copy):
+
+- `StillPendingForeground` — same PID still focused (new top-level HWND OK)
+- `StampWindowRecencyLocked` — preview HWND tick + confirmSeq + prune
+- `DecayMsFromMinutes` / `IsTickDecayed` — app map and window map
+
+Promotion (windows): `previewMinFocusSeconds` → `StampWindowRecencyLocked` on
+that desktop’s window map. On flyout open, siblings are sorted by **this
+desktop’s** map (tick, then confirmSeq) and the top `previewHighlightCount`
+get ranks 1…N. HWND resolve is TaskItem → group-order → unique title.
 
 ---
 
@@ -251,7 +259,8 @@ window map. On flyout open, siblings are sorted by **this desktop’s** map
 | Full Z-order | Overlay first (behind icon) | Plate under glyph |
 | Button identity | Option C path cache + fuzzy | Volume-per-app stack |
 | Path cache | First UVS + force on press; 2s debounce | Not every paint |
-| Rank match | Path 1000 / file 900 / fuzzy | 1:1 greedy |
+| UVS vs rebind | UVS re-paints cached rank; full identity rebind on recency / 300ms debounce | Hover `UpdateVisualStates` must not O(buttons×ranks) every mouse-over. Siblings Windows resets without another UVS wait for the debounce. |
+| Rank match | Path 1000 / file 900 / fuzzy | 1:1 greedy. Path hit skips fuzzy. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
 | Virtual desktops | Nested recency maps; no taskband reordering hooks | Explorer already filters `IsRunning` |
@@ -283,7 +292,7 @@ window map. On flyout open, siblings are sorted by **this desktop’s** map
 | `g_desktopMaps`, `g_currentDesktopId`, `g_pendingFocus`, `g_keyToAutomationName` | `g_stateMutex` | Focus write; UI read under lock |
 | `g_vdm` | `g_vdmMutex` | Lazy public `IVirtualDesktopManager` |
 | `g_trackedButtons`, `g_dispatcherAnchor` | `g_buttonsMutex` | UI primarily |
-| `g_buttonPathCache` | `g_buttonPathMutex` | UI / resolve |
+| `g_buttonPathCache` (includes `lastPaintRank`) | `g_buttonPathMutex` | UI / resolve / paint-only UVS |
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
 | `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
 | `g_layoutWatches` | `g_layoutWatchMutex` | UI (`IconPanel` SizeChanged) |
@@ -360,12 +369,16 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    for thumbnail symbols so older builds still load.
 8. **Test:** app min-focus 0–1s; preview 0–1s; three windows of one app (ranks
    1>2>3 in that flyout only); two same-title windows; debug log
-   `Preview resolve:` + `sibling[` + `rank=`; disable clears all chrome;
+   `Preview resolve:` + `sibling[` + `rank=` + `how=taskitem|group-order|title`;
+   disable clears all chrome;
    two virtual desktops: glow on D1 must not remain on pinned-not-running
    icons on D2; D1 ranks return after switching back. Move the taskbar to
    left/right/top: side bar must not cover the native running pill; unranked
    icons keep their dots after relayout; edge bar follows the screen edge
-   and is centered on the icon.
+   and is centered on the icon. Hover-storm: ranked glows stay without
+   `ApplyAllHighlights` log spam (debug off). Total Commander + Lister:
+   focusing Lister must glow Lister, not Commander (preview flyout ranks
+   Lister windows independently).
 
 ### Useful log substrings
 
@@ -376,7 +389,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `Preview focus confirmed:` | Window recency |
 | `Preview click confirmed:` | Thumbnail / grouped-icon click → window recency |
 | `Preview resolve:` / `sibling[` | Per-card HWND + `how=taskitem\|group-order\|title` |
-| `ApplyAllHighlights` | Icon apply / empty ranks |
+| `ApplyAllHighlights` | Full identity rebind (debug log only) |
 | `Hooked Taskbar.View.dll` | View symbols |
 | `thumbnail OnApplyTemplate unavailable` | Optional miss |
 | `no dispatcher anchor` | Before first button (logged once) |
