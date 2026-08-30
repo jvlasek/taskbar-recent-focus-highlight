@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.8.19 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists
+**Status:** v0.8.23 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -20,7 +20,7 @@ too — so “which one did I just use?” is unclear.
 ## Solution
 
 1. **App ranks** — track focus and highlight the top N recent **running** taskbar
-   icons (left bar, frame, full plate, or bottom running indicator).
+   icons (side bar, frame, full plate, or edge bar).
 2. **Preview ranks** — separately track focus per **window** (`HWND`). When a
    multi-window thumbnail flyout opens, that flyout gets its own recency list
    and marks the top N windows with rank intensities (title bar, soft title
@@ -32,7 +32,9 @@ too — so “which one did I just use?” is unclear.
 - **Per virtual desktop** recency — each desktop has its own top-N list
 - Highlights the **top N** recent apps (default 3; configurable)
 - Highlights the **top N** windows **per thumbnail flyout** (default 3; own intensities)
-- Icon styles: **left bar** (default), frame, full plate, bottom running bar
+- Icon styles: **side bar** (default; left on a bottom/top taskbar, under the
+  icon on a left/right taskbar), frame, full plate, **edge bar** (follows the
+  screen edge / native running indicator)
 - Optional subtle **icon size scaling** per rank
 - **Minimum focus time** — filters Alt+Tab noise (default 8s for apps)
 - **Decay** — apps drop out after idle (default 30 min)
@@ -62,11 +64,11 @@ the flat list:
 ### Taskbar icons
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Icon highlight style | Left bar / Frame / Full / Bottom bar | **Left bar** |
+| Icon highlight style | Side bar / Frame / Full / Edge bar (auto-rotates with the taskbar edge) | **Side bar** |
 | Glow color | Accent / fixed / custom hex (also used for previews) | Accent |
 | Intensity rank 1/2/3 | Strength per rank (0–100) | 100 / 70 / 45 |
 | Thickness / roundness / size / layers | Geometry of icon chrome | 3 / 28 / 92 / 2 |
-| Fill opacity | Full plate / left & bottom bar strength | 40 |
+| Fill opacity | Full plate / side & edge bar strength | 40 |
 | Size boost rank 1/2/3 (%) | Icon scale (0 = off) | 10 / 6 / 3 |
 
 ### Thumbnail previews
@@ -113,7 +115,10 @@ if you then used Notepad. Set the window count to **1** to restore the old
 ## How to test
 
 1. Set app min-focus to `1`–`2`s (and preview min-focus to `0`–`1`) for faster trials.
-2. Focus several apps long enough → icon ranks 1 > 2 > 3 (left bar by default).
+2. Focus several apps long enough → icon ranks 1 > 2 > 3 (side bar by default).
+   Move the taskbar to the left/right: the side bar should sit *under* the icon
+   (not on the running-dot edge). Edge bar should follow the screen edge.
+   Running dots on unranked icons must survive the relayout.
 3. Open **three+** windows of one app, focus them in turn, hover the combined
    icon → previews show ranks 1 > 2 > 3 (strongest on the last focused window
    of that app). Unranked cards stay unmarked.
@@ -122,7 +127,8 @@ if you then used Notepad. Set the window count to **1** to restore the old
    in debug log).
 5. Useful log lines: `Confirmed focus:`, `Preview focus confirmed:`,
    `Preview resolve:`, `sibling[`, `ApplyAllHighlights`,
-   `Current virtual desktop:`, `Virtual desktop switch:`.
+   `Current virtual desktop:`, `Virtual desktop switch:`,
+   `IconPanel relayout:`, `Taskbar edge`.
 6. Disable the mod or toggle **Enabled** off → all chrome clears.
 7. Virtual desktops: highlight apps on desktop 1, switch to desktop 2 —
    pinned-not-running icons must not glow. Use apps on desktop 2; switch
@@ -174,7 +180,7 @@ Identical titles cannot be disambiguated by name alone.
 | Preview min focus | Default 1s (separate) | Snappier for multi-window |
 | Rank key | Full process path (UPPER) | Distinct installs of same exe name |
 | Virtual desktops | Separate app + window maps per desktop GUID | Workspaces don’t share recency |
-| Icon default style | Left vertical bar | Clear without heavy chrome |
+| Icon default style | Side bar (left on bottom/top, under icon on left/right) | Stays off the native running pill on all four edges |
 | Preview default | Title bar under label | Light; plate available for stronger mark |
 | Focus hook | Dedicated WinEvent thread | Reliable timers + pump |
 | UI updates | XAML dispatcher only | Unsafe to touch tree off UI thread |

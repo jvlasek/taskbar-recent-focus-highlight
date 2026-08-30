@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.19
+// @version         0.8.23
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -26,9 +26,10 @@ kind of intensity ladder used on the icons.
 The mod tracks window focus (`EVENT_SYSTEM_FOREGROUND`) and keeps a ranked list
 of the apps you actually stayed on (after a configurable minimum focus time),
 **per virtual desktop**. The top N **running** taskbar buttons on the current
-desktop receive a highlight (frame, full plate, left bar, or bottom running
-bar) and optional icon scale. App↔button binding uses a process-path cache
-resolved from the taskband (same approach as taskbar-volume-control-per-app),
+desktop receive a highlight (frame, full plate, side bar, or edge bar — bars
+rotate with the taskbar’s screen edge) and optional icon scale. App↔button
+binding uses a process-path cache resolved from the taskband (same approach
+as taskbar-volume-control-per-app),
 with name matching as fallback. Pinned icons that are not running on this
 desktop are never highlighted.
 
@@ -43,8 +44,10 @@ ring — configurable). Single-window flyouts are left alone.
 1. Compile and enable the mod in Windhawk (injects into `explorer.exe`).
 2. Optionally enable **Debug logging**.
 3. Focus apps for at least the minimum focus time (default 8s).
-4. Ranked apps should show a highlight on their taskbar buttons (default: left
-   bar); rank 1 is strongest.
+4. Ranked apps should show a highlight on their taskbar buttons (default: side
+   bar — left on a bottom taskbar, under the icon on a left/right taskbar);
+   rank 1 is strongest. Moving the taskbar to another edge should keep running
+   dots on unranked icons and rotate the bar.
 5. Brief Alt+Tab under the minimum focus time should not change ranks.
 6. Open 3+ windows of one app, focus them in turn, hover the icon — previews
    show ranks 1 > 2 > 3 (strongest on the last focused window of that app).
@@ -123,14 +126,17 @@ See the repo README.md for full settings and architecture notes.
 - glowStyle: leftBar
   $name: "[Icons] Highlight style"
   $description: >-
-    How ranked apps look on the taskbar. Left bar = vertical pill. Frame/Full =
-    rounded rectangle. Bottom bar = our own underline (does not restyle the
-    native running indicator permanently).
+    How ranked apps look on the taskbar. Bars rotate with the taskbar edge
+    (bottom / left / top / right). Side bar = beside the icon (left on a
+    bottom or top taskbar, under the icon on a left or right taskbar). Edge
+    bar = same side as the native running indicator (screen edge). Frame/Full
+    = rounded rectangle. Edge bar paints our own pill and does not restyle
+    the native running indicator permanently.
   $options:
-  - leftBar: Left vertical bar
+  - leftBar: Side bar (left on bottom/top, under icon on left/right)
   - frame: Frame (hollow rounded rectangle)
   - full: Full (filled rounded rectangle)
-  - bottomBar: Bottom bar (under icon)
+  - bottomBar: Edge bar (follows the screen edge)
 - glowColor: accent
   $name: "[Icons] Glow color"
   $description: Base color for icon highlights (and previews)
@@ -156,27 +162,27 @@ See the repo README.md for full settings and architecture notes.
 - glowThickness: 3
   $name: "[Icons] Thickness (px)"
   $description: >-
-    Frame/Full border width, or bar thickness (1–16). For left/bottom bars this
+    Frame/Full border width, or bar thickness (1–16). For side/edge bars this
     is the bar’s short dimension.
 - glowRoundness: 28
   $name: "[Icons] Roundness (%)"
   $description: >-
     Corner radius for Frame/Full (0 = square, ~25–35 = Win11, 50 ≈ pill).
-    Left bar uses this for pill rounding; bottom bar ignores it.
+    Side bar uses this for pill rounding; edge bar ignores it.
 - glowSize: 92
   $name: "[Icons] Size (%)"
   $description: >-
-    Frame/Full: box size vs icon panel (≤100). Left bar: bar height %. Bottom
-    bar: indicator length % of icon width (try 70–100).
+    Frame/Full: box size vs icon panel (≤100). Side bar: bar length along the
+    icon. Edge bar: pill length % of the icon’s long side (try 70–100).
 - glowLayers: 2
   $name: "[Icons] Layers"
   $description: >-
-    Frame/Full: nested frames (1–3). Left bar: soft outer glow layers. Bottom
+    Frame/Full: nested frames (1–3). Side bar: soft outer glow layers. Edge
     bar: ignored.
 - glowFillOpacity: 40
   $name: "[Icons] Fill opacity"
   $description: >-
-    0–100. Plate fill for Full; solid bar opacity for Left/Bottom. Frame uses
+    0–100. Plate fill for Full; solid bar opacity for Side/Edge. Frame uses
     stroke only. (Thumbnail tints use [Previews] Tint opacity.)
 - sizeBoostRank1: 10
   $name: "[Icons] Size boost rank 1 (%)"
@@ -260,6 +266,7 @@ See the repo README.md for full settings and architecture notes.
 #include <propsys.h>
 #include <psapi.h>
 #include <objbase.h>
+#include <shellapi.h>
 #include <shobjidl.h>
 
 #undef GetCurrentTime
@@ -328,8 +335,24 @@ enum class GlowColorMode {
 enum class GlowStyle {
     Frame,      // hollow rounded rectangle
     Full,       // filled rounded rectangle
-    LeftBar,    // vertical bar on the left of the icon
-    BottomBar,  // native RunningIndicator, colored + elongated
+    LeftBar,    // side bar: left on horizontal taskbar, bottom on vertical
+    BottomBar,  // edge bar: same side as the native RunningIndicator
+};
+
+// Physical screen edge the taskbar is on (Win11 24H2/25H2 can use all four).
+enum class TaskbarEdge {
+    Bottom,
+    Left,
+    Top,
+    Right,
+};
+
+// Where a bar highlight is painted on the icon button.
+enum class BarSide {
+    Left,
+    Top,
+    Right,
+    Bottom,
 };
 
 // When re-focus may skip the app min-focus timer (see HandleForegroundChanged).
@@ -526,7 +549,7 @@ constexpr PCWSTR kGlowLayerNames[] = {
 };
 constexpr int kGlowMaxLayers = 3;
 constexpr PCWSTR kBackgroundElementName = L"BackgroundElement";
-// Present only while bottomBar style is applied to this button.
+// Present while edge-bar (bottomBar) style is applied — we hid RunningIndicator.
 constexpr PCWSTR kBottomBarMarkerName = L"WhRecentFocusBottomBar";
 // Thumbnail preview glow (own named overlays on TaskItemThumbnailView).
 constexpr PCWSTR kThumbGlowElementName = L"WhRecentFocusThumbGlow";
@@ -547,6 +570,17 @@ constexpr PCWSTR kThumbNativeStyleMarker = L"WhRecentFocusThumbNative";
 void CancelMinFocusTimer();
 void CancelPreviewMinFocusTimer();
 void RequestApplyVisuals();
+void RefreshButtonHighlight(FrameworkElement button);
+
+struct IconPanelLayoutWatch {
+    winrt::weak_ref<FrameworkElement> panel;
+    winrt::event_token sizeChanged{};
+    TaskbarEdge lastEdge = TaskbarEdge::Bottom;
+    bool haveEdge = false;
+};
+std::mutex g_layoutWatchMutex;
+std::vector<IconPanelLayoutWatch> g_layoutWatches;
+thread_local int g_iconPanelRelayoutDepth = 0;
 void RequestApplyPreviewVisuals();
 void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk);
 
@@ -2292,42 +2326,74 @@ FrameworkElement FindRunningIndicator(FrameworkElement iconPanel) {
     return indicator;
 }
 
-// Undo any local values we may have applied to the native RunningIndicator.
-// Prefer only Visibility (current bottomBar); also clear legacy Fill/size from
-// older builds so short inactive bars can reappear after ClearValue.
-void ClearRunningIndicatorStyle(FrameworkElement iconPanel) {
+std::wstring CurrentRunningIndicatorStateName(FrameworkElement iconPanel,
+                                              FrameworkElement button) {
+    auto from = [](FrameworkElement root) -> std::wstring {
+        if (!root) {
+            return {};
+        }
+        try {
+            for (auto group : VisualStateManager::GetVisualStateGroups(root)) {
+                if (group.Name() != L"RunningIndicatorStates") {
+                    continue;
+                }
+                auto current = group.CurrentState();
+                if (current) {
+                    return std::wstring(current.Name().c_str());
+                }
+            }
+        } catch (...) {
+        }
+        return {};
+    };
+    std::wstring name = from(iconPanel);
+    if (name.empty()) {
+        name = from(button);
+    }
+    return name;
+}
+
+// Only undo Visibility=Collapsed that *we* set. Visual-state setters store
+// Visible as a local value — ClearValue drops it to the template default
+// (Collapsed), and GoToState(InactiveRunningIndicator) is a no-op if already
+// in that state, so the short inactive pill never comes back.
+void RestoreNativeRunningIndicator(FrameworkElement iconPanel,
+                                   FrameworkElement button) {
     auto indicator = FindRunningIndicator(iconPanel);
     if (!indicator) {
         return;
     }
     try {
-        if (auto shape = indicator.try_as<Shapes::Shape>()) {
-            if (shape.ReadLocalValue(Shapes::Shape::FillProperty()) !=
-                DependencyProperty::UnsetValue()) {
-                shape.ClearValue(Shapes::Shape::FillProperty());
-            }
-        }
-        if (indicator.ReadLocalValue(FrameworkElement::HeightProperty()) !=
+        if (indicator.ReadLocalValue(UIElement::VisibilityProperty()) ==
             DependencyProperty::UnsetValue()) {
-            indicator.ClearValue(FrameworkElement::HeightProperty());
+            return;
         }
-        if (indicator.ReadLocalValue(FrameworkElement::MinWidthProperty()) !=
-            DependencyProperty::UnsetValue()) {
-            indicator.ClearValue(FrameworkElement::MinWidthProperty());
+        if (indicator.Visibility() != Visibility::Collapsed) {
+            return;
         }
-        if (indicator.ReadLocalValue(FrameworkElement::WidthProperty()) !=
-            DependencyProperty::UnsetValue()) {
-            indicator.ClearValue(FrameworkElement::WidthProperty());
+        const std::wstring state =
+            CurrentRunningIndicatorStateName(iconPanel, button);
+        if (state == L"NoRunningIndicator") {
+            return;
         }
-        if (indicator.ReadLocalValue(UIElement::OpacityProperty()) !=
-            DependencyProperty::UnsetValue()) {
-            indicator.ClearValue(UIElement::OpacityProperty());
-        }
-        if (indicator.ReadLocalValue(UIElement::VisibilityProperty()) !=
-            DependencyProperty::UnsetValue()) {
-            indicator.ClearValue(UIElement::VisibilityProperty());
-        }
+        indicator.Visibility(Visibility::Visible);
     } catch (...) {
+    }
+}
+
+bool RunningIndicatorHasLocalCollapsed(FrameworkElement iconPanel) {
+    auto indicator = FindRunningIndicator(iconPanel);
+    if (!indicator) {
+        return false;
+    }
+    try {
+        if (indicator.ReadLocalValue(UIElement::VisibilityProperty()) ==
+            DependencyProperty::UnsetValue()) {
+            return false;
+        }
+        return indicator.Visibility() == Visibility::Collapsed;
+    } catch (...) {
+        return false;
     }
 }
 
@@ -2361,8 +2427,39 @@ void EnsureGlowHostZOrder(Controls::Panel panel,
             return;
         }
 
-        // Frame / left / bottom: above icon, below native chrome that must
-        // stay on top — including OverlayIcon (Discord ping badge).
+        if (style == GlowStyle::BottomBar) {
+            // Cover the native pill without Visibility=Collapsed: host after
+            // RunningIndicator. OverlayIcon stays last (badges).
+            uint32_t riIdx = UINT32_MAX;
+            if (auto ri = FindChildByName(panel.as<FrameworkElement>(),
+                                          L"RunningIndicator")) {
+                uint32_t i = 0;
+                if (children.IndexOf(ri, i)) {
+                    riIdx = i;
+                }
+            }
+            if (!children.IndexOf(host, hostIdx)) {
+                return;
+            }
+            if (riIdx != UINT32_MAX) {
+                if (hostIdx != riIdx + 1) {
+                    children.RemoveAt(hostIdx);
+                    if (hostIdx < riIdx) {
+                        children.InsertAt(riIdx, host);
+                    } else {
+                        children.InsertAt(riIdx + 1, host);
+                    }
+                }
+            } else if (hostIdx + 1 != children.Size()) {
+                children.RemoveAt(hostIdx);
+                children.Append(host);
+            }
+            EnsureOverlayIconAboveGlyph(panel.as<FrameworkElement>());
+            return;
+        }
+
+        // Frame / side: above icon, below native chrome that must stay on
+        // top — including OverlayIcon (Discord ping badge) and the running pill.
         uint32_t insertBefore = children.Size();
         bool foundNative = false;
         for (PCWSTR name : {L"RunningIndicator", L"MultiWindowElement",
@@ -2548,13 +2645,6 @@ void ClearButtonHighlight(FrameworkElement button) {
             return;
         }
 
-        // Only undo RunningIndicator when we previously applied bottomBar
-        // (marker present). Never clear it for leftBar/frame/full — that was
-        // wiping the native grey active/running bar.
-        const bool hadBottomBar =
-            FindChildByName(iconPanel, kBottomBarMarkerName) != nullptr ||
-            FindDescendantByName(iconPanel, kBottomBarMarkerName) != nullptr;
-
         // Do NOT ClearValue BackgroundElement — we no longer style it; clearing
         // local values can leave a stuck pale hover plate after decay.
 
@@ -2585,8 +2675,8 @@ void ClearButtonHighlight(FrameworkElement button) {
             RemoveNamedChild(panel, kBottomBarMarkerName);
         }
 
-        if (hadBottomBar) {
-            ClearRunningIndicatorStyle(iconPanel);
+        if (RunningIndicatorHasLocalCollapsed(iconPanel)) {
+            RestoreNativeRunningIndicator(iconPanel, button);
         }
         // Do not heal Visibility on every clear — that ClearValue thrashing
         // also flickers the native underline during hover storms.
@@ -2739,6 +2829,468 @@ PCWSTR PreviewStyleName(PreviewStyle s) {
     }
 }
 
+PCWSTR TaskbarEdgeName(TaskbarEdge e) {
+    switch (e) {
+        case TaskbarEdge::Left:
+            return L"left";
+        case TaskbarEdge::Top:
+            return L"top";
+        case TaskbarEdge::Right:
+            return L"right";
+        case TaskbarEdge::Bottom:
+        default:
+            return L"bottom";
+    }
+}
+
+PCWSTR BarSideName(BarSide s) {
+    switch (s) {
+        case BarSide::Left:
+            return L"left";
+        case BarSide::Top:
+            return L"top";
+        case BarSide::Right:
+            return L"right";
+        case BarSide::Bottom:
+        default:
+            return L"bottom";
+    }
+}
+
+bool HasVisualState(FrameworkElement root, PCWSTR stateName) {
+    if (!root || !stateName) {
+        return false;
+    }
+    try {
+        auto groups = VisualStateManager::GetVisualStateGroups(root);
+        for (auto group : groups) {
+            auto current = group.CurrentState();
+            if (current && current.Name() == stateName) {
+                return true;
+            }
+        }
+    } catch (...) {
+    }
+    return false;
+}
+
+TaskbarEdge TaskbarEdgeFromAppBar() {
+    APPBARDATA abd{};
+    abd.cbSize = sizeof(APPBARDATA);
+    if (!SHAppBarMessage(ABM_GETTASKBARPOS, &abd)) {
+        return TaskbarEdge::Bottom;
+    }
+    switch (abd.uEdge) {
+        case ABE_LEFT:
+            return TaskbarEdge::Left;
+        case ABE_TOP:
+            return TaskbarEdge::Top;
+        case ABE_RIGHT:
+            return TaskbarEdge::Right;
+        default:
+            return TaskbarEdge::Bottom;
+    }
+}
+
+// Prefer OrientationStates. A leftover RunningIndicator VA=Bottom from the
+// previous edge must not win: we used to treat a left taskbar as Bottom and
+// paint full-cell underlines of rank-dependent length.
+// Do not use "wider than tall ⇒ horizontal": a left-edge button is 48×32.
+TaskbarEdge DetectTaskbarEdge(FrameworkElement iconPanel) {
+    bool verticalState = HasVisualState(iconPanel, L"VerticalOrientation");
+    bool horizontalState = HasVisualState(iconPanel, L"HorizontalOrientation");
+    try {
+        auto parent = Media::VisualTreeHelper::GetParent(iconPanel)
+                          .try_as<FrameworkElement>();
+        if (parent) {
+            verticalState =
+                verticalState ||
+                HasVisualState(parent, L"VerticalOrientation");
+            horizontalState =
+                horizontalState ||
+                HasVisualState(parent, L"HorizontalOrientation");
+        }
+    } catch (...) {
+    }
+
+    HorizontalAlignment ha = HorizontalAlignment::Stretch;
+    VerticalAlignment va = VerticalAlignment::Stretch;
+    double riW = 0;
+    double riH = 0;
+    if (auto ri = FindRunningIndicator(iconPanel)) {
+        try {
+            ha = ri.HorizontalAlignment();
+            va = ri.VerticalAlignment();
+            riW = ri.ActualWidth();
+            riH = ri.ActualHeight();
+        } catch (...) {
+        }
+    }
+
+    double pw = 0;
+    double ph = 0;
+    try {
+        pw = iconPanel.ActualWidth();
+        ph = iconPanel.ActualHeight();
+    } catch (...) {
+    }
+    // Vertical bar: each button is short along the bar (≈32) and as wide as
+    // the bar (≈48). Horizontal bar: roughly square / taller (≈44×48).
+    const bool panelLooksVertical = pw > ph + 4.0;
+    const bool panelLooksHorizontal = ph > pw + 4.0;
+    const bool tallPill = riH > riW + 0.5 && riW > 0.5;
+
+    auto pickVertical = [&]() -> TaskbarEdge {
+        if (ha == HorizontalAlignment::Right) {
+            return TaskbarEdge::Right;
+        }
+        if (ha == HorizontalAlignment::Left) {
+            return TaskbarEdge::Left;
+        }
+        return TaskbarEdgeFromAppBar() == TaskbarEdge::Right
+                   ? TaskbarEdge::Right
+                   : TaskbarEdge::Left;
+    };
+    auto pickHorizontal = [&]() -> TaskbarEdge {
+        if (va == VerticalAlignment::Top) {
+            return TaskbarEdge::Top;
+        }
+        if (va == VerticalAlignment::Bottom) {
+            return TaskbarEdge::Bottom;
+        }
+        return TaskbarEdgeFromAppBar() == TaskbarEdge::Top ? TaskbarEdge::Top
+                                                           : TaskbarEdge::Bottom;
+    };
+
+    if (verticalState || panelLooksVertical || tallPill) {
+        return pickVertical();
+    }
+    if (horizontalState || panelLooksHorizontal) {
+        return pickHorizontal();
+    }
+    if (ha == HorizontalAlignment::Right) {
+        return TaskbarEdge::Right;
+    }
+    if (ha == HorizontalAlignment::Left) {
+        return TaskbarEdge::Left;
+    }
+    if (va == VerticalAlignment::Top) {
+        return TaskbarEdge::Top;
+    }
+    if (va == VerticalAlignment::Bottom) {
+        return TaskbarEdge::Bottom;
+    }
+    return TaskbarEdgeFromAppBar();
+}
+
+BarSide BarSideForGlowStyle(GlowStyle style, TaskbarEdge edge) {
+    if (style == GlowStyle::BottomBar) {
+        switch (edge) {
+            case TaskbarEdge::Left:
+                return BarSide::Left;
+            case TaskbarEdge::Top:
+                return BarSide::Top;
+            case TaskbarEdge::Right:
+                return BarSide::Right;
+            case TaskbarEdge::Bottom:
+            default:
+                return BarSide::Bottom;
+        }
+    }
+    // Side bar: perpendicular to the taskbar so it does not cover the native
+    // running pill (left on bottom/top, under the icon on left/right).
+    switch (edge) {
+        case TaskbarEdge::Left:
+        case TaskbarEdge::Right:
+            return BarSide::Bottom;
+        case TaskbarEdge::Top:
+        case TaskbarEdge::Bottom:
+        default:
+            return BarSide::Left;
+    }
+}
+
+void GlowContentBoxSize(FrameworkElement host,
+                        FrameworkElement iconPanel,
+                        double panelW,
+                        double panelH,
+                        double& boxW,
+                        double& boxH) {
+    boxW = 0;
+    boxH = 0;
+    if (host) {
+        try {
+            boxW = host.ActualWidth();
+            boxH = host.ActualHeight();
+        } catch (...) {
+        }
+    }
+    if (!(boxW > 1.0) || !(boxH > 1.0)) {
+        if (auto bg = FindChildByName(iconPanel, kBackgroundElementName)) {
+            try {
+                boxW = bg.ActualWidth();
+                boxH = bg.ActualHeight();
+            } catch (...) {
+            }
+        }
+    }
+    if (!(boxW > 1.0)) {
+        boxW = panelW;
+    }
+    if (!(boxH > 1.0)) {
+        boxH = panelH;
+    }
+}
+
+// Length follows the glow host (padded cell), same for every rank — rank is
+// opacity. Icon-sized underlines on a left taskbar were too short to scan
+// (Windows uses a very small glyph there). Size % still scales the bar.
+double BarLengthForSide(FrameworkElement iconPanel,
+                        double boxW,
+                        double boxH,
+                        BarSide side,
+                        TaskbarEdge edge,
+                        double sizeFrac,
+                        double rankLenScale) {
+    (void)iconPanel;
+    (void)edge;
+    const bool horizontalBar =
+        side == BarSide::Top || side == BarSide::Bottom;
+    const double cellAlong = horizontalBar ? boxW : boxH;
+    double barLen = cellAlong * sizeFrac * rankLenScale;
+    const double maxLen = (std::max)(4.0, cellAlong - 2.0);
+    if (barLen > maxLen) {
+        barLen = maxLen;
+    }
+    if (barLen < 4.0) {
+        barLen = 4.0;
+    }
+    return barLen;
+}
+
+void StyleGlowBarOnSide(Shapes::Rectangle rect,
+                        const winrt::Windows::UI::Color& fill,
+                        double thickness,
+                        double length,
+                        BarSide side,
+                        int layer,
+                        double opacity) {
+    const double t = thickness + static_cast<double>(layer) * 2.0;
+    const double len = length + static_cast<double>(layer) * 2.0;
+    const double edgePad = (side == BarSide::Bottom || side == BarSide::Top)
+                               ? (2.0 + static_cast<double>(layer))
+                               : (1.0 + static_cast<double>(layer));
+
+    rect.Stroke(nullptr);
+    rect.StrokeThickness(0);
+    rect.Fill(Media::SolidColorBrush{fill});
+    rect.RadiusX(t * 0.5);
+    rect.RadiusY(t * 0.5);
+    rect.Opacity(opacity);
+    rect.IsHitTestVisible(false);
+    rect.Visibility(Visibility::Visible);
+
+    switch (side) {
+        case BarSide::Left:
+            rect.Width(t);
+            rect.Height(len);
+            rect.HorizontalAlignment(HorizontalAlignment::Left);
+            rect.VerticalAlignment(VerticalAlignment::Center);
+            rect.Margin(Thickness{edgePad, 0, 0, 0});
+            break;
+        case BarSide::Right:
+            rect.Width(t);
+            rect.Height(len);
+            rect.HorizontalAlignment(HorizontalAlignment::Right);
+            rect.VerticalAlignment(VerticalAlignment::Center);
+            rect.Margin(Thickness{0, 0, edgePad, 0});
+            break;
+        case BarSide::Top:
+            rect.Width(len);
+            rect.Height(t);
+            rect.HorizontalAlignment(HorizontalAlignment::Center);
+            rect.VerticalAlignment(VerticalAlignment::Top);
+            rect.Margin(Thickness{0, edgePad, 0, 0});
+            break;
+        case BarSide::Bottom:
+        default:
+            rect.Width(len);
+            rect.Height(t);
+            rect.HorizontalAlignment(HorizontalAlignment::Center);
+            rect.VerticalAlignment(VerticalAlignment::Bottom);
+            rect.Margin(Thickness{0, 0, 0, edgePad});
+            break;
+    }
+}
+
+FrameworkElement TaskListButtonFromDescendant(FrameworkElement start) {
+    FrameworkElement cur = start;
+    for (int i = 0; i < 12 && cur; ++i) {
+        try {
+            if (cur.Name() == L"TaskListButton") {
+                return cur;
+            }
+            cur = Media::VisualTreeHelper::GetParent(cur)
+                      .try_as<FrameworkElement>();
+        } catch (...) {
+            return nullptr;
+        }
+    }
+    return nullptr;
+}
+
+// Relayout (taskbar moved to another screen edge): put RunningIndicator back
+// in front of BackgroundElement / our host. Do not ClearValue Width/Height —
+// OrientationStates owns those. Only call on size/edge change, not every UVS.
+void HealRunningIndicatorAfterRelayout(FrameworkElement iconPanel) {
+    if (!iconPanel) {
+        return;
+    }
+    RestoreIconPanelNativeZOrder(iconPanel);
+
+    auto panel = iconPanel.try_as<Controls::Panel>();
+    if (!panel) {
+        return;
+    }
+    try {
+        if (auto host = FindChildByName(iconPanel, kGlowElementName)) {
+            EnsureGlowHostZOrder(panel, host, g_settings.glowStyle);
+        }
+    } catch (...) {
+    }
+}
+
+void RevokeIconPanelLayoutWatches() {
+    std::vector<IconPanelLayoutWatch> watches;
+    {
+        std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
+        watches.swap(g_layoutWatches);
+    }
+    for (auto& w : watches) {
+        try {
+            if (auto panel = w.panel.get()) {
+                if (w.sizeChanged) {
+                    panel.SizeChanged(w.sizeChanged);
+                }
+            }
+        } catch (...) {
+        }
+    }
+}
+
+void EnsureIconPanelLayoutWatch(FrameworkElement button) {
+    if (!button || g_unloading.load()) {
+        return;
+    }
+    auto iconPanel = GetIconPanel(button);
+    if (!iconPanel) {
+        return;
+    }
+
+    const TaskbarEdge edge = DetectTaskbarEdge(iconPanel);
+    bool alreadyWatched = false;
+    bool edgeChanged = false;
+    TaskbarEdge previousEdge = TaskbarEdge::Bottom;
+    {
+        std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
+        for (auto& w : g_layoutWatches) {
+            try {
+                if (w.panel.get() != iconPanel) {
+                    continue;
+                }
+                alreadyWatched = true;
+                if (w.haveEdge && w.lastEdge != edge) {
+                    edgeChanged = true;
+                    previousEdge = w.lastEdge;
+                }
+                w.lastEdge = edge;
+                w.haveEdge = true;
+                break;
+            } catch (...) {
+            }
+        }
+    }
+    if (alreadyWatched) {
+        if (edgeChanged) {
+            Wh_Log(L"Taskbar edge %s -> %s (%.0fx%.0f)",
+                   TaskbarEdgeName(previousEdge), TaskbarEdgeName(edge),
+                   iconPanel.ActualWidth(), iconPanel.ActualHeight());
+            HealRunningIndicatorAfterRelayout(iconPanel);
+        }
+        return;
+    }
+
+    IconPanelLayoutWatch watch;
+    watch.panel = winrt::make_weak(iconPanel);
+    watch.lastEdge = edge;
+    watch.haveEdge = true;
+    winrt::weak_ref<FrameworkElement> weakPanel = watch.panel;
+    try {
+        watch.sizeChanged = iconPanel.SizeChanged(
+            [weakPanel](winrt::Windows::Foundation::IInspectable const&,
+                        SizeChangedEventArgs const& args) {
+                if (g_unloading.load()) {
+                    return;
+                }
+                if (g_iconPanelRelayoutDepth > 0) {
+                    return;
+                }
+                FrameworkElement panel = nullptr;
+                try {
+                    panel = weakPanel.get();
+                } catch (...) {
+                    return;
+                }
+                if (!panel) {
+                    return;
+                }
+                const double nw = args.NewSize().Width;
+                const double nh = args.NewSize().Height;
+                const double ow = args.PreviousSize().Width;
+                const double oh = args.PreviousSize().Height;
+                if (!(nw > 1.0 && nh > 1.0)) {
+                    return;
+                }
+                const bool relayout =
+                    ow > 1.0 && oh > 1.0 &&
+                    ((nw > ow + 1.5 || ow > nw + 1.5) ||
+                     (nh > oh + 1.5 || oh > nh + 1.5));
+                const bool firstMeasure = !(ow > 1.0 && oh > 1.0);
+                if (!relayout && !firstMeasure) {
+                    return;
+                }
+                if (relayout) {
+                    Wh_Log(L"IconPanel relayout: %.0fx%.0f -> %.0fx%.0f", ow,
+                           oh, nw, nh);
+                }
+                ++g_iconPanelRelayoutDepth;
+                try {
+                    HealRunningIndicatorAfterRelayout(panel);
+                    if (auto btn = TaskListButtonFromDescendant(panel)) {
+                        RefreshButtonHighlight(btn);
+                    }
+                } catch (...) {
+                }
+                --g_iconPanelRelayoutDepth;
+            });
+    } catch (...) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
+    g_layoutWatches.erase(
+        std::remove_if(g_layoutWatches.begin(), g_layoutWatches.end(),
+                       [](IconPanelLayoutWatch& w) {
+                           try {
+                               return !w.panel.get();
+                           } catch (...) {
+                               return true;
+                           }
+                       }),
+        g_layoutWatches.end());
+    g_layoutWatches.push_back(std::move(watch));
+}
+
 void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
     if (!button) {
         return;
@@ -2799,6 +3351,13 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             return;
         }
 
+        double boxW = panelW;
+        double boxH = panelH;
+        GlowContentBoxSize(host, iconPanel, panelW, panelH, boxW, boxH);
+
+        const TaskbarEdge edge = DetectTaskbarEdge(iconPanel);
+        const BarSide barSide = BarSideForGlowStyle(style, edge);
+
         // Heal native stacking first (Discord overlay / leftover attention
         // plate), then place our host under RunningIndicator + OverlayIcon.
         RestoreIconPanelNativeZOrder(iconPanel);
@@ -2809,19 +3368,23 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
 
         HideAllGlowLayers(host);
 
-        // Drop bottom-bar marker / indicator overrides when using other styles.
+        // Strip leftover Edge-bar marker from older builds. Do not touch
+        // RunningIndicator unless we actually left Visibility=Collapsed —
+        // ClearValue(Visible) is what killed the short inactive pills.
         if (style != GlowStyle::BottomBar) {
             if (FindChildByName(iconPanel, kBottomBarMarkerName)) {
                 if (auto p = iconPanel.try_as<Controls::Panel>()) {
                     RemoveNamedChild(p, kBottomBarMarkerName);
                 }
-                ClearRunningIndicatorStyle(iconPanel);
             }
+        }
+        if (RunningIndicatorHasLocalCollapsed(iconPanel)) {
+            RestoreNativeRunningIndicator(iconPanel, button);
         }
 
         if (style == GlowStyle::Frame || style == GlowStyle::Full) {
             const double baseInset =
-                (std::min)(panelW, panelH) * (1.0 - sizeFrac) * 0.5;
+                (std::min)(boxW, boxH) * (1.0 - sizeFrac) * 0.5;
             const bool isFrame = style == GlowStyle::Frame;
 
             for (int i = 0; i < kGlowMaxLayers; ++i) {
@@ -2838,7 +3401,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                     (i == 0) ? 0.0 : (3.0 + thickness * 0.55) * i;
                 const double inset = baseInset + step;
                 const double inner =
-                    (std::max)(8.0, (std::min)(panelW, panelH) - 2.0 * inset);
+                    (std::max)(8.0, (std::min)(boxW, boxH) - 2.0 * inset);
                 const double corner = inner * roundnessFrac;
                 const double layerT = t * (1.0 - 0.15 * i);
                 const double th =
@@ -2858,12 +3421,11 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                                    corner, inset, opacity);
             }
         } else if (style == GlowStyle::LeftBar) {
-            // Vertical pill on the left — similar short-side size to the
-            // native bottom running indicator (~2–4px), height follows size%.
-            const double barW = thickness + 1.0;  // short dimension
-            const double barH = panelH * sizeFrac;
-            const double vMargin = (std::max)(0.0, (panelH - barH) * 0.5);
-            const double corner = barW * 0.5;  // full pill
+            // Side bar: left of the icon on a bottom/top taskbar, under the
+            // icon on a left/right taskbar — never the native-pill edge.
+            const double barT = thickness + 1.0;
+            const double barLen = BarLengthForSide(
+                iconPanel, boxW, boxH, barSide, edge, sizeFrac, 1.0);
             const int fillBase =
                 static_cast<int>(fillOpacitySetting * 2.55 * (0.55 + 0.45 * t));
             const int nLeft = (std::max)(1, (std::min)(layers, 2));
@@ -2874,90 +3436,34 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                 if (!rect) {
                     continue;
                 }
-                // Outer soft glow slightly wider / more transparent.
-                const double w = barW + i * 2.0;
-                const double h = barH + i * 2.0;
-                const double left = 1.0 + static_cast<double>(i);
-                const double top =
-                    (std::max)(0.0, vMargin - static_cast<double>(i));
                 const int fillA =
-                    i == 0 ? fillBase
-                           : static_cast<int>(fillBase * 0.35);
+                    i == 0 ? fillBase : static_cast<int>(fillBase * 0.35);
                 const double opacity = i == 0 ? (0.85 + 0.15 * t) : 0.45;
-
-                rect.Stroke(nullptr);
-                rect.StrokeThickness(0);
-                rect.Fill(Media::SolidColorBrush{withAlpha(base, fillA)});
-                rect.RadiusX(corner + i);
-                rect.RadiusY(corner + i);
-                rect.Width(w);
-                rect.Height(h);
-                rect.HorizontalAlignment(HorizontalAlignment::Left);
-                rect.VerticalAlignment(VerticalAlignment::Top);
-                rect.Margin(Thickness{left, top, 0, 0});
-                rect.Opacity(opacity);
-                rect.IsHitTestVisible(false);
-                rect.Visibility(Visibility::Visible);
+                StyleGlowBarOnSide(rect, withAlpha(base, fillA), barT, barLen,
+                                   barSide, i, opacity);
             }
         } else if (style == GlowStyle::BottomBar) {
-            // Draw our own bottom pill — do NOT set Fill/Width/Height on the
-            // native RunningIndicator (ClearValue left short inactive bars
-            // missing until a full explorer restart). Hide native while we
-            // paint; Clear restores Visibility via ClearValue.
-            auto indicator = FindRunningIndicator(iconPanel);
-            if (indicator) {
-                try {
-                    indicator.Visibility(Visibility::Collapsed);
-                } catch (...) {
-                }
-            } else if (g_settings.glowDebugLog) {
-                Wh_Log(L"BottomBar: RunningIndicator not found on \"%s\"",
+            // Edge bar on the native RunningIndicator side. Cover the pill
+            // by z-order (host after RI). Never set Visibility/Width/Height
+            // on the native indicator.
+            if (g_settings.glowDebugLog && !FindRunningIndicator(iconPanel)) {
+                Wh_Log(L"EdgeBar: RunningIndicator not found on \"%s\"",
                        GetButtonAutomationName(button).c_str());
             }
 
             const int fillA =
                 static_cast<int>(fillOpacitySetting * 2.55 * (0.6 + 0.4 * t));
-            const double barH =
+            const double barT =
                 (std::max)(2.0, (std::min)(6.0, thickness));
-            const double barW =
-                panelW * sizeFrac * (0.55 + 0.45 * t);
-            const double left = (std::max)(0.0, (panelW - barW) * 0.5);
-            const double bottom = 2.0;
+            const double barLen = BarLengthForSide(
+                iconPanel, boxW, boxH, barSide, edge, sizeFrac, 1.0);
 
             if (auto rect = FindChildByName(host, kGlowLayerNames[0])
                                 .try_as<Shapes::Rectangle>()) {
-                rect.Stroke(nullptr);
-                rect.StrokeThickness(0);
-                rect.Fill(Media::SolidColorBrush{withAlpha(base, fillA)});
-                rect.RadiusX(barH * 0.5);
-                rect.RadiusY(barH * 0.5);
-                rect.Width(barW);
-                rect.Height(barH);
-                rect.HorizontalAlignment(HorizontalAlignment::Left);
-                rect.VerticalAlignment(VerticalAlignment::Bottom);
-                rect.Margin(Thickness{left, 0, 0, bottom});
-                rect.Opacity(0.9 + 0.1 * t);
-                rect.IsHitTestVisible(false);
-                rect.Visibility(Visibility::Visible);
+                StyleGlowBarOnSide(rect, withAlpha(base, fillA), barT, barLen,
+                                   barSide, 0, 0.9 + 0.1 * t);
             }
 
-            // Marker: ClearButtonHighlight restores native indicator.
-            if (!FindChildByName(iconPanel, kBottomBarMarkerName)) {
-                try {
-                    PCWSTR markerXaml =
-                        LR"(
-                        <Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                                Name="WhRecentFocusBottomBar"
-                                Width="0" Height="0" Opacity="0"
-                                IsHitTestVisible="False" Visibility="Collapsed"/>
-                    )";
-                    auto marker = Markup::XamlReader::Load(markerXaml)
-                                      .as<FrameworkElement>();
-                    panel.Children().Append(marker);
-                } catch (...) {
-                }
-            }
-            // Host already ordered under native chrome; native is Collapsed.
         }
 
         if (auto icon = FindChildByName(iconPanel, L"Icon")) {
@@ -2978,11 +3484,13 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         }
 
         if (g_settings.glowDebugLog) {
-            Wh_Log(L"Glow rank %d \"%s\" style=%s th=%.0f round=%d%% size=%d%% "
-                   L"layers=%d intensity=%d",
+            Wh_Log(L"Glow rank %d \"%s\" style=%s edge=%s bar=%s box=%.0fx%.0f "
+                   L"th=%.0f round=%d%% size=%d%% layers=%d intensity=%d",
                    rankOneBased, GetButtonAutomationName(button).c_str(),
-                   GlowStyleName(style), thickness, g_settings.glowRoundness,
-                   g_settings.glowSize, layers, intensity);
+                   GlowStyleName(style), TaskbarEdgeName(edge),
+                   BarSideName(barSide), boxW, boxH, thickness,
+                   g_settings.glowRoundness, g_settings.glowSize, layers,
+                   intensity);
         }
     } catch (...) {
         HRESULT hr = winrt::to_hresult();
@@ -3013,19 +3521,22 @@ void TrackButton_UIThread(FrameworkElement button) {
         std::lock_guard<std::mutex> lock(g_buttonsMutex);
         g_dispatcherAnchor = winrt::make_weak(button);
 
-        // Avoid duplicates.
+        bool tracked = false;
         for (auto& weak : g_trackedButtons) {
             try {
                 if (weak.get() == button) {
-                    EnsureButtonPathCached(button, /*force=*/false);
-                    return;
+                    tracked = true;
+                    break;
                 }
             } catch (...) {
             }
         }
-        g_trackedButtons.push_back(winrt::make_weak(button));
+        if (!tracked) {
+            g_trackedButtons.push_back(winrt::make_weak(button));
+        }
     }
     EnsureButtonPathCached(button, /*force=*/false);
+    EnsureIconPanelLayoutWatch(button);
 }
 
 // ---------------------------------------------------------------------------
@@ -6948,7 +7459,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.19");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.23");
 
     g_unloading = false;
     LoadSettings();
@@ -7010,6 +7521,7 @@ void Wh_ModUninit() {
     RunOnUiThread([]() {
         ClearAllHighlights_UIThread();
         ClearAllThumbnailHighlights_UIThread();
+        RevokeIconPanelLayoutWatches();
     });
     // Give the UI thread a brief moment to run the clear.
     Sleep(50);

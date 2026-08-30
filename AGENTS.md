@@ -246,7 +246,7 @@ window map. On flyout open, siblings are sorted by **this desktop’s** map
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Icon chrome | Own `WhRecentFocusGlow` only | Never style `BackgroundElement` |
-| Icon default | **Left bar** | Preferred product default |
+| Icon default | **Side bar** (`leftBar`) | Left on bottom/top taskbar; under icon on left/right — stays off the native running pill |
 | Frame Z-order | Overlay last (above icon) | Stroke not covered |
 | Full Z-order | Overlay first (behind icon) | Plate under glyph |
 | Button identity | Option C path cache + fuzzy | Volume-per-app stack |
@@ -262,7 +262,10 @@ window map. On flyout open, siblings are sorted by **this desktop’s** map
 | Preview titleBg | Tint-opacity ceiling × linear rank intensity | Readable; 100 vs 5 must differ |
 | Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank | Strong signal |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
-| RunningIndicator | Never set Fill/Width/Height; never reorder every paint | BottomBar draws own pill; glow host sits *under* native chrome |
+| RunningIndicator | Never set Fill/Width/Height; never reorder every paint | Edge bar draws own pill; glow host sits *under* native chrome. On taskbar-edge relayout (`IconPanel` SizeChanged / orientation visual state) restore z-order so the native pill is not left behind BackgroundElement. |
+| Bar geometry | Size vs glow **host** (padded inner box), `Center` alignment | IconPanel is 48×32 on a left taskbar but the host is 40×28 (padding 4,2). Length is `size%` of that cell, **same for every rank** (rank is opacity). Icon-width underlines on a left taskbar are too short to scan. |
+| RunningIndicator on style switch | Cover Edge bar via z-order only. Never ClearValue Visibility/Width/Height, never GoToState | VSM stores InactiveRunningIndicator `Visible` as a local value. ClearValue → template Collapsed. GoToState of the *current* state is a no-op, so the short unfocused pill stays gone. |
+| Bar auto-rotate | `leftBar` = side (perpendicular); `bottomBar` = edge (screen edge) | Settings keys stay `leftBar`/`bottomBar`. Detect: `VerticalOrientation` / panel 48×32 (wider than tall ⇒ **vertical** bar) first. Do not treat leftover RunningIndicator `VA=Bottom` as a bottom taskbar. |
 | OverlayIcon | Keep after Icon / DefaultIcon | Discord/Thunderbird/WhatsApp badge; our host insert can leave it behind the glyph |
 | Size boost | Icon `ScaleTransform` only | No layout width change |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
@@ -283,10 +286,11 @@ window map. On flyout open, siblings are sorted by **this desktop’s** map
 | `g_buttonPathCache` | `g_buttonPathMutex` | UI / resolve |
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
 | `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
+| `g_layoutWatches` | `g_layoutWatchMutex` | UI (`IconPanel` SizeChanged) |
 | `g_settings` | init / settings-changed | Read-mostly |
 | `g_unloading` | atomic | Any |
 
-Do **not** hold `g_stateMutex` across XAML or `Dispatcher` calls.
+Do **not** hold `g_stateMutex` or `g_layoutWatchMutex` across XAML or `Dispatcher` calls.
 
 ---
 
@@ -306,11 +310,11 @@ order** and `$name` prefixes: `[General]`, `[Icons]`, `[Previews]`,
 | General | `decayMinutes` | app decay |
 | General | `requireTaskbarButton` | tray-only filter |
 | General | `excludedPrograms[i]` | uppercase set |
-| Taskbar icons | `glowStyle` | `LeftBar` / `Frame` / `Full` / `BottomBar` |
+| Taskbar icons | `glowStyle` | `LeftBar` (side bar) / `Frame` / `Full` / `BottomBar` (edge bar) |
 | Taskbar icons | `glowColor` / `customGlowColor` | color mode + hex |
 | Taskbar icons | `glowIntensityRank1..3` | `glowIntensity[3]` |
 | Taskbar icons | `glowThickness` / `glowRoundness` / `glowSize` / `glowLayers` | metrics |
-| Taskbar icons | `glowFillOpacity` | Full / left / bottom icon bar strength |
+| Taskbar icons | `glowFillOpacity` | Full / side / edge icon bar strength |
 | Taskbar icons | `sizeBoostRank1..3` | `sizeBoostPercent[3]` |
 | Thumbnail previews | `previewHighlightEnabled` | preview master (also needs `enabled`) |
 | Thumbnail previews | `previewHighlightCount` | per-flyout top N |
@@ -358,7 +362,10 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    1>2>3 in that flyout only); two same-title windows; debug log
    `Preview resolve:` + `sibling[` + `rank=`; disable clears all chrome;
    two virtual desktops: glow on D1 must not remain on pinned-not-running
-   icons on D2; D1 ranks return after switching back.
+   icons on D2; D1 ranks return after switching back. Move the taskbar to
+   left/right/top: side bar must not cover the native running pill; unranked
+   icons keep their dots after relayout; edge bar follows the screen edge
+   and is centered on the icon.
 
 ### Useful log substrings
 
@@ -374,6 +381,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `thumbnail OnApplyTemplate unavailable` | Optional miss |
 | `no dispatcher anchor` | Before first button (logged once) |
 | `Button path cache:` | Option C resolve |
+| `IconPanel relayout:` / `Taskbar edge` | Button size / screen-edge change (heal running dots) |
 
 ---
 
@@ -385,3 +393,4 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 4. Classic / non-XAML thumbnail path if still needed on some builds.
 5. Multi-monitor secondary taskbars if weak refs only cover primary.
 6. Per-desktop prune of deleted virtual desktop GUIDs beyond decay.
+7. Per-monitor taskbar edge if a secondary bar can sit on a different side.
