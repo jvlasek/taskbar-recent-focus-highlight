@@ -194,6 +194,10 @@ focus work off the critical taskbar paint path except when marshaling apply.
 
 XAML must run on the tree’s dispatcher. `RunOnUiThread` uses a weak button
 anchor. Log “no dispatcher anchor” **once** until the first button is seen.
+`RequestApplyPreviewVisuals` must **not** `PostMessage` to the focus thread
+on failure (that used to self-post `WM_APP_REQUEST_PREVIEW_APPLY` forever and
+starve `WM_TIMER`). Same as `RequestApplyVisuals`: wait for the first button
+or thumbnail `OnApplyTemplate`.
 
 ### Why hook `UpdateVisualStates`?
 
@@ -213,7 +217,7 @@ anchor. Log “no dispatcher anchor” **once** until the first button is seen.
 | App rank key | Full image path (UPPER) | Distinct same-named exes |
 | Recency scope | Per virtual desktop GUID | Workspaces don’t share top-N |
 | Current desktop | Registry `CurrentVirtualDesktop`, VDM fallback | Public APIs only |
-| Window key | `HWND` (per desktop map) | Multi-instance previews |
+| Window key | `HWND` + PID (per desktop map) | Multi-instance previews; PID rejects a recycled handle |
 | Display name | File name only | Logs / exclude UX |
 | App min focus | Default 8s | Alt+Tab noise |
 | Promote mode | immediateTracked / immediateTopN / alwaysWait | When re-focus skips app min-focus |
@@ -239,8 +243,15 @@ Promotion (apps):
 Shared confirm helpers (do not fork another copy):
 
 - `StillPendingForeground` — same PID still focused (new top-level HWND OK)
-- `StampWindowRecencyLocked` — preview HWND tick + confirmSeq + prune
-- `DecayMsFromMinutes` / `IsTickDecayed` — app map and window map
+- `StampWindowRecencyLocked` — preview HWND tick + confirmSeq + PID + prune
+- `DecayMsFromMinutes` / `IsTickDecayed` / `RemainingDeadlineMs` — app map, window map, min-focus timers
+- `SettingsSnap` / `PublishSettings` — immutable settings; never mutate in place
+
+`KillTimer` does not flush a `WM_TIMER` already queued. App and preview
+min-focus handlers (`FromTimer`) re-check the *current* candidate’s start tick
+(`focusStartTick` / `previewStartTick`) and re-arm for the remainder instead
+of confirming a newer pending focus early. `Immediate` (min=0 / promoteMode /
+already-tracked window) skips that wait.
 
 Promotion (windows): `previewMinFocusSeconds` → `StampWindowRecencyLocked` on
 that desktop’s window map. On flyout open, siblings are sorted by **this
@@ -296,25 +307,29 @@ get ranks 1…N. HWND resolve is TaskItem → group-order → unique title.
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
 | `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
 | `g_layoutWatches` | `g_layoutWatchMutex` | UI (`IconPanel` SizeChanged) |
-| `g_settings` | init / settings-changed | Read-mostly |
+| `g_settingsPtr` (`SettingsSnap`) | `std::atomic<std::shared_ptr<const Settings>>` | LoadSettings publishes a whole object; any thread loads a snapshot |
+| Click sentinels (`g_clickSentinel_Task*`) | `thread_local` + save/restore | Nested / cross-thread ReportClicked |
 | `g_unloading` | atomic | Any |
 
 Do **not** hold `g_stateMutex` or `g_layoutWatchMutex` across XAML or `Dispatcher` calls.
+`SettingsSnap()` is wait-free and safe under those locks.
 
 ---
 
 ## Settings ↔ code
 
-YAML keys map to `LoadSettings()`. Windhawk rejects unknown metadata such as
-`$group` (schema: no additional properties). UI grouping is done with **list
-order** and `$name` prefixes: `[General]`, `[Icons]`, `[Previews]`,
-`[Advanced]`. **Keys are stable** for saved configs.
+YAML keys map to `LoadSettings()`, which fills a local `Settings` then
+`PublishSettings()` (atomic shared_ptr). Readers use `SettingsSnap()`.
+Windhawk rejects unknown metadata such as `$group` (schema: no additional
+properties). UI grouping is done with **list order** and `$name` prefixes:
+`[General]`, `[Icons]`, `[Previews]`, `[Advanced]`. **Keys are stable** for
+saved configs.
 
 | Group | Setting key | Field |
 |-------|-------------|--------|
-| General | `enabled` | `g_settings.enabled` |
-| General | `highlightCount` | `g_settings.highlightCount` |
-| General | `minFocusSeconds` | `g_settings.minFocusSeconds` |
+| General | `enabled` | `Settings::enabled` |
+| General | `highlightCount` | `Settings::highlightCount` |
+| General | `minFocusSeconds` | `Settings::minFocusSeconds` |
 | General | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
 | General | `decayMinutes` | app decay |
 | General | `requireTaskbarButton` | tray-only filter |
@@ -364,10 +379,12 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 4. **Layout bugs on thumbnails:** never add sized children only to grid row 0;
    use span + transform.
 5. **Crashes:** try/catch around XAML; don’t block focus hooks; clear on uninit.
+   Bound `QueryViaVtable` / task-item array offsets; fail closed on miss.
 6. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
 7. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
    for thumbnail symbols so older builds still load.
-8. **Test:** app min-focus 0–1s; preview 0–1s; three windows of one app (ranks
+8. **Test:** app min-focus 0–1s; preview 0–1s (explorer start with preview
+   min 0 must not spin the focus thread / starve timers); three windows of one app (ranks
    1>2>3 in that flyout only); two same-title windows; debug log
    `Preview resolve:` + `sibling[` + `rank=` + `how=taskitem|group-order|title`;
    disable clears all chrome;
@@ -388,6 +405,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `Current virtual desktop:` / `Virtual desktop switch:` | Per-desktop recency |
 | `Preview focus confirmed:` | Window recency |
 | `Preview click confirmed:` | Thumbnail / grouped-icon click → window recency |
+| `HWND recycled` | Preview map dropped a reused handle (PID mismatch) |
 | `Preview resolve:` / `sibling[` | Per-card HWND + `how=taskitem\|group-order\|title` |
 | `ApplyAllHighlights` | Full identity rebind (debug log only) |
 | `Hooked Taskbar.View.dll` | View symbols |
@@ -407,3 +425,6 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 5. Multi-monitor secondary taskbars if weak refs only cover primary.
 6. Per-desktop prune of deleted virtual desktop GUIDs beyond decay.
 7. Per-monitor taskbar edge if a secondary bar can sit on a different side.
+8. Preview `plate` style: save/restore the native `BackgroundBorder` brush so
+   Taskbar Styler (and other mods that tint that plate) survive our clear.
+   Today we overwrite `Background` and `ClearValue` when the marker is present.
