@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.8.25
+// @version         0.8.26
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -402,17 +402,21 @@ struct Settings {
 
 // Published as a whole. LoadSettings builds a local Settings, then stores it
 // here so the focus thread and UI dispatchers never iterate a set mid-rehash.
-std::atomic<std::shared_ptr<const Settings>> g_settingsPtr{
-    std::make_shared<const Settings>()};
+// Windhawk's libc++ has no std::atomic<shared_ptr> specialization (T must be
+// trivially copyable), so the pointer is swapped under a mutex.
+std::mutex g_settingsMutex;
+std::shared_ptr<const Settings> g_settingsPtr =
+    std::make_shared<const Settings>();
 
 std::shared_ptr<const Settings> SettingsSnap() {
-    auto p = g_settingsPtr.load(std::memory_order_acquire);
-    return p ? std::move(p) : std::make_shared<const Settings>();
+    std::lock_guard<std::mutex> lock(g_settingsMutex);
+    return g_settingsPtr ? g_settingsPtr : std::make_shared<const Settings>();
 }
 
 void PublishSettings(Settings s) {
-    g_settingsPtr.store(std::make_shared<const Settings>(std::move(s)),
-                        std::memory_order_release);
+    auto next = std::make_shared<const Settings>(std::move(s));
+    std::lock_guard<std::mutex> lock(g_settingsMutex);
+    g_settingsPtr = std::move(next);
 }
 
 // WM_TIMER may be a leftover from a previous candidate (KillTimer does not
@@ -1119,6 +1123,31 @@ bool ShouldIgnoreHwnd(HWND hWnd) {
     return false;
 }
 
+bool IsShellHostFileName(const std::wstring& fileNameUpper) {
+    return fileNameUpper == L"EXPLORER.EXE" ||
+           fileNameUpper == L"SEARCHHOST.EXE" ||
+           fileNameUpper == L"STARTMENUXPERIENCEHOST.EXE" ||
+           fileNameUpper == L"SHELLHOST.EXE" ||
+           fileNameUpper == L"TEXTINPUTHOST.EXE";
+}
+
+// Alt-Tab UI, taskbar, desktop, IME: not a real app switch. Must not cancel
+// an in-flight min-focus candidate — the landed app often sends no second
+// FOREGROUND after these.
+bool IsTransientForeground(HWND hWnd) {
+    hWnd = NormalizeFocusHwnd(hWnd);
+    if (ShouldIgnoreHwnd(hWnd)) {
+        return true;
+    }
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hWnd, &processId);
+    if (!processId || IsOwnExplorerProcess(processId)) {
+        return true;
+    }
+    return IsShellHostFileName(
+        ToUpper(FileNameFromPath(GetProcessImagePath(processId))));
+}
+
 std::wstring GetWindowTitle(HWND hWnd) {
     wchar_t buf[512];
     int n = GetWindowTextW(hWnd, buf, ARRAYSIZE(buf));
@@ -1160,12 +1189,8 @@ bool ResolveAppIdentity(HWND hWnd,
     std::wstring fileName = FileNameFromPath(path);
     std::wstring fileNameUpper = ToUpper(fileName);
 
-    if (fileNameUpper == L"EXPLORER.EXE" ||
-        fileNameUpper == L"APPLICATIONFRAMEHOST.EXE" ||
-        fileNameUpper == L"SEARCHHOST.EXE" ||
-        fileNameUpper == L"STARTMENUXPERIENCEHOST.EXE" ||
-        fileNameUpper == L"SHELLHOST.EXE" ||
-        fileNameUpper == L"TEXTINPUTHOST.EXE") {
+    if (IsShellHostFileName(fileNameUpper) ||
+        fileNameUpper == L"APPLICATIONFRAMEHOST.EXE") {
         return false;
     }
 
@@ -6767,6 +6792,21 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     HWND confirmHwnd = nullptr;
     std::wstring title;
     if (!StillPendingForeground(pending, &confirmHwnd, &title)) {
+        if (mode == MinFocusConfirmMode::FromTimer &&
+            IsTransientForeground(GetForegroundWindow())) {
+            const ULONGLONG start = pending.previewStartTick
+                                        ? pending.previewStartTick
+                                        : pending.focusStartTick;
+            ULONGLONG remaining = RemainingDeadlineMs(
+                start, settings->previewMinFocusSeconds, GetTickCount64());
+            if (remaining == 0) {
+                remaining = 200;
+            }
+            if (g_hookThreadHwnd) {
+                SetTimer(g_hookThreadHwnd, kPreviewMinFocusTimerId,
+                         ClampWinTimerMs(remaining), nullptr);
+            }
+        }
         // Focus left the app — drop only preview; app timer may still be pending.
         return;
     }
@@ -6820,6 +6860,28 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     HWND confirmHwnd = nullptr;
     std::wstring title;
     if (!StillPendingForeground(pending, &confirmHwnd, &title)) {
+        if (mode == MinFocusConfirmMode::FromTimer &&
+            IsTransientForeground(GetForegroundWindow())) {
+            // Alt-Tab / taskbar stole FG briefly. WndProc already KillTimer'd;
+            // keep the candidate and wait out the rest of min-focus.
+            ULONGLONG remaining = RemainingDeadlineMs(
+                pending.focusStartTick, settings->minFocusSeconds,
+                GetTickCount64());
+            if (remaining == 0) {
+                remaining = 200;
+            }
+            if (g_hookThreadHwnd) {
+                SetTimer(g_hookThreadHwnd, kMinFocusTimerId,
+                         ClampWinTimerMs(remaining), nullptr);
+            }
+            if (settings->glowDebugLog) {
+                Wh_Log(L"Min-focus timer: transient FG, still waiting on %s "
+                       L"(%llums left)",
+                       pending.displayName.c_str(),
+                       static_cast<unsigned long long>(remaining));
+            }
+            return;
+        }
         Wh_Log(L"Min-focus timer: focus left %s before confirmation",
                pending.displayName.c_str());
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -6960,6 +7022,33 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     });
 }
 
+// Keep the app min-focus one-shot alive. A stale WM_TIMER KillTimer's the
+// live timer; same-app FOREGROUND used to assume it was still running.
+void EnsurePendingAppTimer() {
+    auto settings = SettingsSnap();
+    if (settings->minFocusSeconds <= 0) {
+        return;
+    }
+    PendingFocus pending;
+    {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        if (!g_pendingFocus.valid) {
+            return;
+        }
+        pending = g_pendingFocus;
+    }
+    const ULONGLONG remaining = RemainingDeadlineMs(
+        pending.focusStartTick, settings->minFocusSeconds, GetTickCount64());
+    if (remaining == 0) {
+        OnMinFocusTimerElapsed(MinFocusConfirmMode::Immediate);
+        return;
+    }
+    if (g_hookThreadHwnd) {
+        SetTimer(g_hookThreadHwnd, kMinFocusTimerId,
+                 ClampWinTimerMs(remaining), nullptr);
+    }
+}
+
 void SchedulePreviewConfirm(bool windowAlreadyTracked) {
     if (!SettingsSnap()->previewHighlightEnabled || !SettingsSnap()->enabled) {
         return;
@@ -6982,6 +7071,19 @@ void HandleForegroundChanged(HWND hWnd) {
     }
 
     hWnd = NormalizeFocusHwnd(hWnd);
+
+    if (IsTransientForeground(hWnd)) {
+        // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.
+        bool ranksNonEmpty = false;
+        {
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            ranksNonEmpty = !CurrentDeskLocked().rankedApps.empty();
+        }
+        if (ranksNonEmpty) {
+            RequestApplyVisuals();
+        }
+        return;
+    }
 
     const bool desktopChanged = RefreshCurrentDesktopId();
     if (desktopChanged) {
@@ -7091,6 +7193,7 @@ void HandleForegroundChanged(HWND hWnd) {
         if (hwndChanged || !windowAlreadyTracked) {
             SchedulePreviewConfirm(windowAlreadyTracked);
         }
+        EnsurePendingAppTimer();
         return;
     }
 
@@ -7599,7 +7702,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.25");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.8.26");
 
     g_unloading = false;
     LoadSettings();

@@ -253,6 +253,12 @@ min-focus handlers (`FromTimer`) re-check the *current* candidate’s start tick
 of confirming a newer pending focus early. `Immediate` (min=0 / promoteMode /
 already-tracked window) skips that wait.
 
+Alt-Tab UI, taskbar, desktop, and IME (`IsTransientForeground`) are **not**
+a leave: do not clear `g_pendingFocus` or cancel min-focus timers. The landed
+app often does not get a second `EVENT_SYSTEM_FOREGROUND`. Same-app
+foreground events call `EnsurePendingAppTimer` so a stale `WM_TIMER` that
+`KillTimer`’d the live one-shot cannot leave a candidate with no clock.
+
 Promotion (windows): `previewMinFocusSeconds` → `StampWindowRecencyLocked` on
 that desktop’s window map. On flyout open, siblings are sorted by **this
 desktop’s** map (tick, then confirmSeq) and the top `previewHighlightCount`
@@ -307,19 +313,21 @@ get ranks 1…N. HWND resolve is TaskItem → group-order → unique title.
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
 | `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
 | `g_layoutWatches` | `g_layoutWatchMutex` | UI (`IconPanel` SizeChanged) |
-| `g_settingsPtr` (`SettingsSnap`) | `std::atomic<std::shared_ptr<const Settings>>` | LoadSettings publishes a whole object; any thread loads a snapshot |
+| `g_settingsPtr` (`SettingsSnap`) | `g_settingsMutex` + `shared_ptr<const Settings>` | LoadSettings publishes a whole object; any thread copies the pointer under the mutex. Never take `g_settingsMutex` then `g_stateMutex`. |
 | Click sentinels (`g_clickSentinel_Task*`) | `thread_local` + save/restore | Nested / cross-thread ReportClicked |
 | `g_unloading` | atomic | Any |
 
 Do **not** hold `g_stateMutex` or `g_layoutWatchMutex` across XAML or `Dispatcher` calls.
-`SettingsSnap()` is wait-free and safe under those locks.
+`SettingsSnap()` takes only `g_settingsMutex` and is safe under `g_stateMutex`
+(lock order: state → settings). Do not publish settings while holding `g_stateMutex`.
 
 ---
 
 ## Settings ↔ code
 
 YAML keys map to `LoadSettings()`, which fills a local `Settings` then
-`PublishSettings()` (atomic shared_ptr). Readers use `SettingsSnap()`.
+`PublishSettings()` (mutex + `shared_ptr<const Settings>`). Readers use
+`SettingsSnap()`.
 Windhawk rejects unknown metadata such as `$group` (schema: no additional
 properties). UI grouping is done with **list order** and `$name` prefixes:
 `[General]`, `[Icons]`, `[Previews]`, `[Advanced]`. **Keys are stable** for
@@ -384,7 +392,9 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 7. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
    for thumbnail symbols so older builds still load.
 8. **Test:** app min-focus 0–1s; preview 0–1s (explorer start with preview
-   min 0 must not spin the focus thread / starve timers); three windows of one app (ranks
+   min 0 must not spin the focus thread / starve timers); rapid Alt-Tab
+   between two unranked apps then rest on one — that app must still confirm
+   after min-focus (switcher/tray must not drop the candidate); three windows of one app (ranks
    1>2>3 in that flyout only); two same-title windows; debug log
    `Preview resolve:` + `sibling[` + `rank=` + `how=taskitem|group-order|title`;
    disable clears all chrome;
