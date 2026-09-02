@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.8.26 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars
+**Status:** v0.9.0 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -38,10 +38,14 @@ too — so “which one did I just use?” is unclear.
 - Optional subtle **icon size scaling** per rank
 - **Minimum focus time** — filters Alt+Tab noise (default 8s for apps)
 - **Decay** — apps drop out after idle (default 30 min)
-- **Exclude list** — paths / exe names / app IDs
+- **Exclude list** — paths / exe names / AppUserModelIDs
 - **Tray-only filter** — ignore focus targets with no taskbar button (default on)
+- **UWP** — hosted apps (`ApplicationFrameHost`) ranked by AppUserModelID
+  (Calculator ≠ Settings; Windows Security does not copy Settings)
 - **Thumbnail previews** — multi-window flyouts only; own top-N ranks, intensities,
   min-focus, decay, and style
+- Plays nicely with **Windows 11 Taskbar Styler** (own overlays; preview plate
+  restores Styler tints; side bar stays visible on hover plates)
 - Fully configurable through Windhawk settings
 
 ## Settings
@@ -93,7 +97,7 @@ the flat list:
 |-------|------|--------|
 | **Title bar** (default) | Thin accent line under the window title | Good default; sits just below the text |
 | **Title background** | Soft wash behind the title | Kept light so text stays readable; intensity scales linearly |
-| **Whole preview plate** | Tints the card chrome (`BackgroundBorder`) | Strong, clear signal |
+| **Whole preview plate** | Tints the card chrome (`BackgroundBorder`) | Strong signal; previous brush restored on clear (Taskbar Styler) |
 | **Hybrid (plate + title)** | Plate on rank 1, title wash on ranks 2+ | Rank 1 pops; 2+ stay light |
 | **Ring** | Hollow frame around the card | Simple placeholder |
 
@@ -133,6 +137,13 @@ if you then used Notepad. Set the window count to **1** to restore the old
 7. Virtual desktops: highlight apps on desktop 1, switch to desktop 2 —
    pinned-not-running icons must not glow. Use apps on desktop 2; switch
    back — desktop 1’s ranks should still be there.
+8. UWP: Calculator and Settings get **different** ranks. Windows Security
+   must not glow just because Settings is rank 1.
+9. Taskbar Styler (optional): hover a ranked icon — the side bar stays.
+   Without Styler, unranked running dots still show. Preview **plate** style
+   should not wipe a Styler card tint after you move away.
+10. Two copies of the same exe in different folders stay distinct. Rapid
+    Alt+Tab then rest on one app — it must still enter ranks after min-focus.
 
 ---
 
@@ -142,13 +153,15 @@ if you then used Notepad. Set the window count to **1** to restore the old
 
 | Side | What we get | Example |
 |------|-------------|---------|
-| **Focus tracking** | `HWND` → process image path | `C:\…\WindowsTerminal.exe` |
+| **Focus tracking** | `HWND` → process path, or AppUserModelID for UWP hosts | `C:\…\WindowsTerminal.exe` / `APPID:WINDOWS.IMMERSIVECONTROLPANEL_…` |
 | **Taskbar UI** | XAML `TaskListButton` | Automation name `"Windows Terminal"` |
 
 Buttons are not HWNDs. The mod:
 
-1. Keeps a **recency list per virtual desktop**, keyed by process path.
-2. **Matches** buttons via taskband path cache (primary), then name scores.
+1. Keeps a **recency list per virtual desktop**, keyed by process path
+   (Win32) or `APPID:` + AUMID (ApplicationFrameHost / WWAHost).
+2. **Matches** buttons via taskband path cache (primary), AUMID for hosted
+   UWP, then name scores (1:1 — not copied across different apps).
 3. **Paints** only matched **running** buttons (`IsRunning`, plus a short
    Alt-Tab grace — not pinned-only icons on another desktop).
 
@@ -165,11 +178,11 @@ DataContext does not line up with the map, then unique title assignment.
 Identical titles cannot be disambiguated by name alone.
 
 ```
-  Focus (HWND / path)
+  Focus (HWND / path or APPID)
          │
-         ├─► App recency (path)  ──match──►  TaskListButton glow
+         ├─► App recency (path or APPID)  ──match──►  TaskListButton glow
          │
-         └─► Window recency (HWND) ──match──►  Thumbnail ranks (2+ cards)
+         └─► Window recency (HWND+PID) ──match──►  Thumbnail ranks (2+ cards)
 ```
 
 ### Other important decisions
@@ -178,14 +191,18 @@ Identical titles cannot be disambiguated by name alone.
 |-------|----------|-----|
 | App min focus | Default 8s | Alt+Tab should not reshuffle ranks |
 | Preview min focus | Default 1s (separate) | Snappier for multi-window |
-| Rank key | Full process path (UPPER) | Distinct installs of same exe name |
+| Rank key | Full process path (UPPER); `APPID:…` for AFH/WWAHost | Distinct installs; UWP apps share a host exe |
+| Window key | HWND + PID | Recycled handles don’t inherit recency |
 | Virtual desktops | Separate app + window maps per desktop GUID | Workspaces don’t share recency |
 | Icon default style | Side bar (left on bottom/top, under icon on left/right) | Stays off the native running pill on all four edges |
 | Preview default | Title bar under label | Light; plate available for stronger mark |
 | Focus hook | Dedicated WinEvent thread | Reliable timers + pump |
+| Min-focus timers | Absolute deadline; ignore Alt-Tab/tray transients | Stale `WM_TIMER` must not confirm the wrong app or drop the candidate |
+| Settings | Immutable snapshot (`SettingsSnap`) | No data race on exclude-list reload |
 | UI updates | XAML dispatcher only | Unsafe to touch tree off UI thread |
 | Glow chrome | Own named overlays | Avoid fighting hover/active storyboards |
-| Shell / UWP host | Skipped | Don’t rank explorer / AFH as the app |
+| Shell hosts | explorer / SearchHost / Start / IME skipped | Don’t rank the shell. AFH is ranked by AUMID |
+| Taskbar Styler | Side bar above hover plate; plate style saves/restores brush | Themes restyle `RunningIndicator` / `BackgroundBorder` |
 
 ### High-level runtime flow
 
@@ -198,7 +215,8 @@ Identical titles cannot be disambiguated by name alone.
    inside that flyout → paint top N at preview intensities.
 5. Virtual desktop switch → load that desktop’s ranks and re-apply (pinned
    not-running icons stay dark).
-6. Unload / disable → clear icon and preview chrome.
+6. Unload / disable → wait for each UI dispatcher and the focus thread, then
+   clear icon and preview chrome.
 
 ---
 
@@ -206,8 +224,9 @@ Identical titles cannot be disambiguated by name alone.
 
 - Injects into `explorer.exe` only (`@include explorer.exe`)
 - Windows 11 XAML taskbar (`Taskbar.View.dll` + `taskbar.dll` identity hooks)
-- Should coexist with **Windows 11 Taskbar Styler** where possible (own named
-  elements; not guaranteed conflict-free)
+- Intended to coexist with **Windows 11 Taskbar Styler** (own named overlays;
+  preview plate restores the previous `BackgroundBorder` brush; icon side bar
+  stacks above a Styler full-cell hover plate)
 - Must stay lightweight — taskbar is critical UI
 - Thumbnail symbol hooks are **optional**; missing symbols leave app ranks working
 
@@ -220,15 +239,15 @@ Identical titles cannot be disambiguated by name alone.
 | 3 | **Done** | Multi-layer / bars / bottom indicator; path cache (option C) |
 | 4 | **Done** | Thumbnail recency, per-flyout ranks + intensities, styles, HWND maps |
 | 5 | **Done** | Per-virtual-desktop recency lists + `IsRunning` grace |
-| 6 | Later | Composition shadow, reliable UWP AppId, less fuzzy app matching |
+| 6 | **Done** | UWP `APPID:` ranking, Styler hover/plate coexistence, unload handshake |
 
 ## Potential future enhancements
 
 - Per-app custom boost strength
 - Temporary manual boost
-- Composition / true GPU outer glow
-- Stronger AppId / package identity for UWP
+- Composition / true GPU outer glow (optional; current bar/frame/plate is the look)
 - Classic (non-XAML) thumbnail path if still needed on some builds
+- Table-driven tests for ranking / identity (split headers + `make release` concat)
 
 ## Target users
 

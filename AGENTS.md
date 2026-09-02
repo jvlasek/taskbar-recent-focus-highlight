@@ -1,6 +1,6 @@
 # Agent / contributor guide
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.8.x). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.9.x). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -30,13 +30,16 @@ bridge them.
 
 | Field | Example | Role |
 |--------|---------|------|
-| Process image path | `C:\…\WindowsTerminal.exe` | Stable **key** for app ranking |
-| File name | `WindowsTerminal.exe` | Logs, exclude list, fuzzy match |
-| PID | `12345` | Min-focus “still same app?” checks |
-| HWND | window handle | Preview recency map key |
+| Process image path | `C:\…\WindowsTerminal.exe` | Stable **key** for Win32 ranking |
+| AppUserModelID | `windows.immersivecontrolpanel_…` | **Key** for AFH/WWAHost (`APPID:…`) |
+| File name / window title | `WindowsTerminal.exe` / `Settings` | Logs, exclude list, fuzzy match |
+| PID | `12345` | Min-focus “still same app?” (Win32) |
+| HWND + PID | window handle | Preview recency map (PID rejects recycle) |
 
-The app recency map is keyed by **uppercase full path**. That is deliberate: two
-different `foo.exe` binaries in different folders stay distinct.
+The app recency map is keyed by **uppercase full path**, except UWP windows
+hosted by `ApplicationFrameHost.exe` / `WWAHost.exe`, which use `APPID:` +
+AppUserModelID. Win32 keeps path-only keys (Windhawk’s editor is still
+VSCodium.exe even when the window AppId is RAMENSOFTWARE.WINDHAWK).
 
 ### World B — taskbar XAML buttons
 
@@ -67,10 +70,17 @@ ranked apps (path / exe)
 Order of preference:
 
 1. **Process path cache (option C)** — resolve button → HWND/PID → image path;
-   score 1000 exact / 900 same file name. Same stack as volume-per-app.
-2. **Cached automation name** — after learn `path → "Windows Terminal"`.
-3. **Fuzzy / title scores** — alphanumeric compare, greedy 1:1 assignment.
-4. **Active-button association** — on confirm, store active running button name.
+   score 1000 exact / 900 same file name (900 is **1:1**, not a replica).
+2. **AppUserModelID** — only when the rank key is `APPID:…` (UWP host). Button
+   AutomationId / window AUMID, score 1000. Mismatch → score 0 (no fuzzy).
+   Do not use PID+class: AFH is shared.
+3. **Cached automation name** — after learn `path → "Windows Terminal"` (1:1).
+4. **Fuzzy / title scores** — alphanumeric compare, greedy 1:1 assignment.
+5. **Active-button association** — on confirm, store active running button name
+   (APPID keys only associate buttons with the same AUMID).
+
+Only **score 1000** may bind the same rank to many buttons (secondary taskbar /
+Never Combine). Name-cache 96 used to copy Settings onto Windows Security.
 
 Pinned-only icons: no highlight (`IsRunning == false`). Virtual-desktop lists
 are separate: a pinned icon that is not running on this desktop must not glow.
@@ -84,7 +94,6 @@ Only the **currently focused** app is Active. Ranks 2 and 3 are recent but
 
 | Gap | Impact | Possible fix |
 |-----|--------|----------------|
-| UWP / `ApplicationFrameHost.exe` | Skipped today | AppUserModelID / package family |
 | Fuzzy false positive/negative | Wrong or missing glow | Prefer path cache / AppId |
 | Combined icons | One button per app group | Correct for combined mode |
 | Localization of automation names | Fuzzy may fail | Path cache + active association |
@@ -98,8 +107,8 @@ in this flyout?”.
 
 | Layer | Key | Timers |
 |-------|-----|--------|
-| App ranks | Process path (UPPER) per desktop GUID | `minFocusSeconds`, `decayMinutes` |
-| Preview glow | `HWND` per desktop GUID | `previewMinFocusSeconds`, `previewDecayMinutes` |
+| App ranks | Path (UPPER) or `APPID:…` per desktop GUID | `minFocusSeconds`, `decayMinutes` |
+| Preview glow | `HWND` + PID per desktop GUID | `previewMinFocusSeconds`, `previewDecayMinutes` |
 
 ### Product rules
 
@@ -157,11 +166,13 @@ Rules:
 |----------------|----------------|
 | `titleBar` | Thin rect just under title baseline (~2px gap) |
 | `titleBg` | Soft wash; alpha = tint-opacity × rank intensity (linear) |
-| `plate` | Prefer tint `BackgroundBorder`; marker-cleared on clear |
+| `plate` | Tint `BackgroundBorder`; marker Tag holds the previous Brush (Taskbar Styler / template) and is restored on clear |
 | `plateTitle` | Rank 1 = plate; ranks 2+ = titleBg |
 | `ring` | Hollow frame via transform (placeholder) |
 
-Clear always removes named overlays; plate clears local Background when marker present.
+Clear always removes named overlays. Plate restores the saved `BackgroundBorder`
+brush (or `ClearValue` if there was no local value) so Taskbar Styler tints
+survive. If the marker cannot be created, fall back to our overlay plate.
 
 ---
 
@@ -214,19 +225,19 @@ or thumbnail `OnApplyTemplate`.
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| App rank key | Full image path (UPPER) | Distinct same-named exes |
+| App rank key | Full image path (UPPER); `APPID:…` for ApplicationFrameHost / WWAHost | Distinct same-named exes; UWP apps share a host exe |
 | Recency scope | Per virtual desktop GUID | Workspaces don’t share top-N |
 | Current desktop | Registry `CurrentVirtualDesktop`, VDM fallback | Public APIs only |
 | Window key | `HWND` + PID (per desktop map) | Multi-instance previews; PID rejects a recycled handle |
-| Display name | File name only | Logs / exclude UX |
+| Display name | Win32: file name; UWP host: window title (else AUMID stem) | Logs / exclude UX |
 | App min focus | Default 8s | Alt+Tab noise |
 | Promote mode | immediateTracked / immediateTopN / alwaysWait | When re-focus skips app min-focus |
 | Preview min focus | Default 1s | Snappier window mark |
-| Same-PID during app timer | Still same candidate | New top-level window of app |
+| Same-PID during app timer | Still same candidate (Win32). `APPID:` also needs same AUMID | New window of app; AFH is shared |
 | App decay | Default 30 min | List stays “recent” |
 | Preview decay | Default 15 min | Separate |
 | Exclude list | Path / file / AppId, case-insensitive | Standard Windhawk UX |
-| Shell hosts ignored | explorer, AFH, SearchHost, … | Don’t rank the shell |
+| Shell hosts ignored | explorer, SearchHost, StartMenu, ShellHost, TextInputHost | Don’t rank the shell. AFH/WWAHost **are** ranked via `APPID:` |
 | Highlight count | 0–16 (UI suggests 1–6) | Settings-capped |
 | Preview highlight count | 0–16 (UI suggests 1–6) | Per-flyout cap |
 | Tray-only | `requireTaskbarButton` default on | No TaskListButton ⇒ not ranked |
@@ -242,7 +253,8 @@ Promotion (apps):
 
 Shared confirm helpers (do not fork another copy):
 
-- `StillPendingForeground` — same PID still focused (new top-level HWND OK)
+- `StillPendingForeground` — same PID still focused (new top-level HWND OK);
+  `APPID:` keys also require the same AppUserModelID (AFH is shared)
 - `StampWindowRecencyLocked` — preview HWND tick + confirmSeq + PID + prune
 - `DecayMsFromMinutes` / `IsTickDecayed` / `RemainingDeadlineMs` — app map, window map, min-focus timers
 - `SettingsSnap` / `PublishSettings` — immutable settings; never mutate in place
@@ -277,7 +289,7 @@ get ranks 1…N. HWND resolve is TaskItem → group-order → unique title.
 | Button identity | Option C path cache + fuzzy | Volume-per-app stack |
 | Path cache | First UVS + force on press; 2s debounce | Not every paint |
 | UVS vs rebind | UVS re-paints cached rank; full identity rebind on recency / 300ms debounce | Hover `UpdateVisualStates` must not O(buttons×ranks) every mouse-over. Siblings Windows resets without another UVS wait for the debounce. |
-| Rank match | Path 1000 / file 900 / fuzzy | 1:1 greedy. Path hit skips fuzzy. |
+| Rank match | Only score 1000 (path / HWND / AUMID) is a replica. 96 name-cache and 900 filename are 1:1. | Settings must not copy onto Windows Security. Secondary taskbar still multi-binds exact path/AUMID. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
 | Virtual desktops | Nested recency maps; no taskband reordering hooks | Explorer already filters `IsRunning` |
@@ -286,16 +298,16 @@ get ranks 1…N. HWND resolve is TaskItem → group-order → unique title.
 | Preview layout | Span rows + RenderTransform | Title-row expansion bug |
 | Preview titleBar | ~2px under baseline | Not hugging image; not strikethrough |
 | Preview titleBg | Tint-opacity ceiling × linear rank intensity | Readable; 100 vs 5 must differ |
-| Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank | Strong signal |
+| Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank; previous Brush stashed on marker Tag | Strong signal; Styler survives clear |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
-| RunningIndicator | Never set Fill/Width/Height; never reorder every paint | Edge bar draws own pill; glow host sits *under* native chrome. On taskbar-edge relayout (`IconPanel` SizeChanged / orientation visual state) restore z-order so the native pill is not left behind BackgroundElement. |
+| RunningIndicator | Never set Fill/Width/Height; never reorder every paint | Edge bar draws own pill. Glow host sits *under* a native thin pill, *above* a Taskbar Styler hover plate (RunningIndicator restyled to fill the icon cell — otherwise PointerOver acrylic covers the side bar). On taskbar-edge relayout restore z-order so the native pill is not left behind BackgroundElement. |
 | Bar geometry | Size vs glow **host** (padded inner box), `Center` alignment | IconPanel is 48×32 on a left taskbar but the host is 40×28 (padding 4,2). Length is `size%` of that cell, **same for every rank** (rank is opacity). Icon-width underlines on a left taskbar are too short to scan. |
 | RunningIndicator on style switch | Cover Edge bar via z-order only. Never ClearValue Visibility/Width/Height, never GoToState | VSM stores InactiveRunningIndicator `Visible` as a local value. ClearValue → template Collapsed. GoToState of the *current* state is a no-op, so the short unfocused pill stays gone. |
 | Bar auto-rotate | `leftBar` = side (perpendicular); `bottomBar` = edge (screen edge) | Settings keys stay `leftBar`/`bottomBar`. Detect: `VerticalOrientation` / panel 48×32 (wider than tall ⇒ **vertical** bar) first. Do not treat leftover RunningIndicator `VA=Bottom` as a bottom taskbar. |
 | OverlayIcon | Keep after Icon / DefaultIcon | Discord/Thunderbird/WhatsApp badge; our host insert can leave it behind the glyph |
 | Size boost | Icon `ScaleTransform` only | No layout width change |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
-| Coexistence | Own names; clear on unload | Taskbar Styler friendlier |
+| Coexistence | Own names; plate save/restore `BackgroundBorder`; side bar above Styler hover plate | Taskbar Styler (themes restyle `RunningIndicator` into a full-cell acrylic on PointerOver) |
 | Pinned-only | No highlight | Product rule |
 
 **Not done yet:** Composition `DropShadow` / true GPU glow. Large spread may clip.
@@ -312,10 +324,13 @@ get ranks 1…N. HWND resolve is TaskItem → group-order → unique title.
 | `g_buttonPathCache` (includes `lastPaintRank`) | `g_buttonPathMutex` | UI / resolve / paint-only UVS |
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
 | `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
-| `g_layoutWatches` | `g_layoutWatchMutex` | UI (`IconPanel` SizeChanged) |
+| `g_layoutWatches` | `g_layoutWatchMutex` | UI (`IconPanel` SizeChanged). Revoke only on the panel’s dispatcher. |
 | `g_settingsPtr` (`SettingsSnap`) | `g_settingsMutex` + `shared_ptr<const Settings>` | LoadSettings publishes a whole object; any thread copies the pointer under the mutex. Never take `g_settingsMutex` then `g_stateMutex`. |
 | Click sentinels (`g_clickSentinel_Task*`) | `thread_local` + save/restore | Nested / cross-thread ReportClicked |
 | `g_unloading` | atomic | Any |
+| Focus thread shutdown | `WM_APP_SHUTDOWN` to the message HWND + `PostThreadMessage`; wait 8s and log if still running | Uninit |
+| UI uninit | `RunOnEachUiDispatcherAndWait` (High cleanup + Low drain) | Revoke `SizeChanged` per dispatcher; do not `Sleep` and hope |
+| Native probing | `QueryViaVtable` max 32 slots; task-items array offset under 64; fail closed | Explorer-safe |
 
 Do **not** hold `g_stateMutex` or `g_layoutWatchMutex` across XAML or `Dispatcher` calls.
 `SettingsSnap()` takes only `g_settingsMutex` and is safe under `g_stateMutex`
@@ -388,6 +403,9 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    use span + transform.
 5. **Crashes:** try/catch around XAML; don’t block focus hooks; clear on uninit.
    Bound `QueryViaVtable` / task-item array offsets; fail closed on miss.
+   Uninit must wait for each dispatcher (High cleanup + Low drain) and the
+   focus thread; never `Sleep` and hope. Revoke `SizeChanged` only on that
+   panel’s dispatcher.
 6. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
 7. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
    for thumbnail symbols so older builds still load.
@@ -405,7 +423,13 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    and is centered on the icon. Hover-storm: ranked glows stay without
    `ApplyAllHighlights` log spam (debug off). Total Commander + Lister:
    focusing Lister must glow Lister, not Commander (preview flyout ranks
-   Lister windows independently).
+   Lister windows independently). Two copies of the same exe in different
+   folders must not share one icon rank. Disable/unload while a flyout is
+   open and while hovering: chrome gone, no explorer crash, Styler plate
+   tints return. UWP: Calculator vs Settings (ApplicationFrameHost) must
+   get separate icon ranks; Windows Security must **not** copy Settings.
+   Taskbar Styler: hover a ranked icon — side bar stays; vanilla native pill
+   still shows. Two `python.exe` folders stay distinct.
 
 ### Useful log substrings
 
@@ -421,6 +445,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `Hooked Taskbar.View.dll` | View symbols |
 | `thumbnail OnApplyTemplate unavailable` | Optional miss |
 | `no dispatcher anchor` | Before first button (logged once) |
+| `ERROR: UI dispatcher cleanup` / `SizeChanged watches not revoked` / `focus thread still running` | Unload handshake failed — explorer may crash |
 | `Button path cache:` | Option C resolve |
 | `IconPanel relayout:` / `Taskbar edge` | Button size / screen-edge change (heal running dots) |
 
@@ -428,13 +453,15 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 
 ## Future work (ordered suggestions)
 
-1. Composition shadow / true GPU outer glow if XAML halo stays clipped.
-2. Reliable UWP identity (AppUserModelID / package).
-3. Stronger DataContext ↔ TaskItemThumbnail identity (less group-order reliance).
-4. Classic / non-XAML thumbnail path if still needed on some builds.
-5. Multi-monitor secondary taskbars if weak refs only cover primary.
-6. Per-desktop prune of deleted virtual desktop GUIDs beyond decay.
-7. Per-monitor taskbar edge if a secondary bar can sit on a different side.
-8. Preview `plate` style: save/restore the native `BackgroundBorder` brush so
-   Taskbar Styler (and other mods that tint that plate) survive our clear.
-   Today we overwrite `Background` and `ClearValue` when the marker is present.
+Done in 0.9.x and not listed: UWP `APPID:` keys, preview plate brush restore,
+Styler hover-plate z-order, settings snapshots, timer deadlines, transient
+foreground, bounded vtable probe, deterministic unload.
+
+1. Composition shadow / true GPU outer glow if XAML halo stays clipped
+   (optional polish; current bar/frame/plate is the product).
+2. Stronger DataContext ↔ TaskItemThumbnail identity (less group-order).
+3. Classic / non-XAML thumbnail path if still needed on some builds.
+4. Multi-monitor secondary taskbars if weak refs only cover primary.
+5. Per-desktop prune of deleted virtual desktop GUIDs beyond decay.
+6. Per-monitor taskbar edge if a secondary bar can sit on a different side.
+7. Test seam + `make release` concat (pure ranking/identity table tests).
