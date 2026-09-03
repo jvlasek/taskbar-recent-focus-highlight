@@ -70,4 +70,5 @@ Testing/
 tmp/
 example/
 *.png
+!screenshots/
 data/
