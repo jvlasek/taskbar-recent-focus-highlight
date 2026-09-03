@@ -129,19 +129,21 @@ TaskItemThumbnailView::OnApplyTemplate → collect siblings → assign HWNDs →
 
 Resolve order in `RefreshThumbnailFlyout_UIThread`:
 
-1. **TaskItem** — `DataContext` ↔ ctor map (COM identity compare). Often fails
-   in practice (projection mismatch) even when maps exist. Rejected when the
-   HWND title uniquely matches a *different* card (same-process ebooks).
-2. **Group-order** — live mappings only (current flyout ctor order, not the
-   previous hover). Find `taskGroup` with N unique HWNDs matching sibling
-   count, or last N mapped HWNDs. Siblings sorted by `PositionInSet`.
-   Dropped whenever card titles are distinct — index ≠ visual after a click.
-3. **Title unique** — prefer `DisplayNameTextBlock` when those texts differ
-   across siblings (ebook book names). Automation Name is often the shared
-   `"App - 2 running windows"`. Each HWND used once. **Ambiguous** when two
-   windows share the same title. Bracketed `[EPUB]` / `[PDF]` is a format
-   tag, **not** a file path — only `[c:\…\file]` or `[name.ext]` is an
-   identity key (Calibre used to bind every book to the first HWND).
+1. **Repeater index** — `ItemsRepeater.TryGetElement(i)` + `Thumbnails.GetAt(i)`
+   + ctor map (raw ABI pointer, same as taskbar-thumbnail-reorder). Optional
+   symbols; missing → skip this pass.
+2. **TaskItem** — `DataContext` ↔ ctor map (COM identity). Often fails in
+   practice (projection mismatch) even when maps exist.
+3. **Title unique** — only for unresolved cards. Prefer `DisplayNameTextBlock`
+   when those texts differ across siblings. Each HWND used once. **Ambiguous**
+   when two windows share the same title. Bracketed `[EPUB]` / `[PDF]` is a
+   format tag, **not** a file path — only `[c:\…\file]` or `[name.ext]` is an
+   identity key.
+
+Do **not** assign HWNDs by group construction order or `EnumWindows`.
+`AutomationProperties.PositionInSet` is not refreshed on thumbnail reorder;
+repeater index is the visual order. Snap-group cards: `IconsRepeater` with
+2+ children (language-independent) — never glow those.
 
 Then sort siblings with a recency tick (tick, confirmSeq, foreground) and
 paint the top `previewHighlightCount` at `previewIntensity` ranks.
@@ -274,7 +276,7 @@ foreground events call `EnsurePendingAppTimer` so a stale `WM_TIMER` that
 Promotion (windows): `previewMinFocusSeconds` → `StampWindowRecencyLocked` on
 that desktop’s window map. On flyout open, siblings are sorted by **this
 desktop’s** map (tick, then confirmSeq) and the top `previewHighlightCount`
-get ranks 1…N. HWND resolve is TaskItem → group-order → unique title.
+get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 
 ---
 
@@ -305,7 +307,7 @@ get ranks 1…N. HWND resolve is TaskItem → group-order → unique title.
 | RunningIndicator on style switch | Cover Edge bar via z-order only. Never ClearValue Visibility/Width/Height, never GoToState | VSM stores InactiveRunningIndicator `Visible` as a local value. ClearValue → template Collapsed. GoToState of the *current* state is a no-op, so the short unfocused pill stays gone. |
 | Bar auto-rotate | `leftBar` = side (perpendicular); `bottomBar` = edge (screen edge) | Settings keys stay `leftBar`/`bottomBar`. Detect: `VerticalOrientation` / panel 48×32 (wider than tall ⇒ **vertical** bar) first. Do not treat leftover RunningIndicator `VA=Bottom` as a bottom taskbar. |
 | OverlayIcon | Keep after Icon / DefaultIcon | Discord/Thunderbird/WhatsApp badge; our host insert can leave it behind the glyph |
-| Size boost | Icon `ScaleTransform` only | No layout width change |
+| Size boost | Icon `ScaleTransform` only; remember our instance and clear only that object | Other mods (taskbar-dock-animation) scale the same `Icon` |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
 | Coexistence | Own names; plate save/restore `BackgroundBorder`; side bar above Styler hover plate | Taskbar Styler (themes restyle `RunningIndicator` into a full-cell acrylic on PointerOver) |
 | Pinned-only | No highlight | Product rule |
@@ -319,20 +321,23 @@ get ranks 1…N. HWND resolve is TaskItem → group-order → unique title.
 | Object | Guard | Thread |
 |--------|--------|--------|
 | `g_desktopMaps`, `g_currentDesktopId`, `g_pendingFocus`, `g_keyToAutomationName` | `g_stateMutex` | Focus write; UI read under lock |
-| `g_vdm` | `g_vdmMutex` | Lazy public `IVirtualDesktopManager` |
-| `g_trackedButtons`, `g_dispatcherAnchor` | `g_buttonsMutex` | UI primarily |
-| `g_buttonPathCache` (includes `lastPaintRank`) | `g_buttonPathMutex` | UI / resolve / paint-only UVS |
+| `g_vdm` | `g_vdmMutex` | Created/used/released **only on the focus thread**. UI reads cached `g_currentDesktopId`. |
+| `g_trackedButtons`, `g_dispatcherAnchor` | `g_buttonsMutex` | UI primarily. Do not `weak.get()` these off the UI thread. |
+| `g_uiDispatchers` | `g_dispatchersMutex` | Agile `CoreDispatcher` list, captured on the UI thread. `CollectUiDispatchers` copies this — never XAML `weak.get()` off-thread. |
+| `g_hookThreadHwnd` | `std::atomic<HWND>` | Focus thread writes; others `PostMessage` / `HookThreadWindow()`. `SetTimer` only on the owner thread. |
+| `g_buttonPathCache` (includes `lastPaintRank`, `ourIconScale`) | `g_buttonPathMutex` | UI / resolve / paint-only UVS |
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
 | `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
 | `g_layoutWatches` | `g_layoutWatchMutex` | UI (`IconPanel` SizeChanged). Revoke only on the panel’s dispatcher. |
-| `g_settingsPtr` (`SettingsSnap`) | `g_settingsMutex` + `shared_ptr<const Settings>` | LoadSettings publishes a whole object; any thread copies the pointer under the mutex. Never take `g_settingsMutex` then `g_stateMutex`. |
+| `g_settingsPtr` (`SettingsSnap`) | `g_settingsMutex` + `shared_ptr<const Settings>` | LoadSettings publishes a whole object; any thread copies the pointer under the mutex. Never take `g_settingsMutex` then `g_stateMutex`. Accent color is cached here (`cachedAccent`). |
 | Click sentinels (`g_clickSentinel_Task*`) | `thread_local` + save/restore | Nested / cross-thread ReportClicked |
 | `g_unloading` | atomic | Any |
-| Focus thread shutdown | `WM_APP_SHUTDOWN` to the message HWND + `PostThreadMessage`; wait 8s and log if still running | Uninit |
-| UI uninit | `RunOnEachUiDispatcherAndWait` (High cleanup + Low drain) | Revoke `SizeChanged` per dispatcher; do not `Sleep` and hope |
+| Focus thread shutdown | `WM_APP_SHUTDOWN` to the message HWND + `PostThreadMessage`; wait **INFINITE** | Uninit must not return while the thread is in the image |
+| UI uninit | `RunOnEachUiDispatcherAndWait` (High cleanup + Low drain, **INFINITE**) | Revoke `SizeChanged` per dispatcher; do not time out |
 | Native probing | `QueryViaVtable` max 32 slots; task-items array offset under 64; fail closed | Explorer-safe |
 
-Do **not** hold `g_stateMutex` or `g_layoutWatchMutex` across XAML or `Dispatcher` calls.
+Do **not** hold `g_stateMutex` or `g_layoutWatchMutex` across XAML, COM
+(`SHGetPropertyStoreForWindow`, `GetProcessImagePath`), or `Dispatcher` calls.
 `SettingsSnap()` takes only `g_settingsMutex` and is safe under `g_stateMutex`
 (lock order: state → settings). Do not publish settings while holding `g_stateMutex`.
 
@@ -396,16 +401,18 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 ## When changing code
 
 1. **Matching bugs (wrong icon):** prefer path cache / AppId over fuzzier names.
-2. **Matching bugs (wrong preview):** prefer TaskItem HWND maps / group-order;
-   never assign the same HWND to two siblings; don’t rely on title for twins.
+2. **Matching bugs (wrong preview):** prefer repeater GetAt + ctor maps;
+   never assign the same HWND to two siblings; don’t rely on title for twins;
+   don’t EnumWindows or assign by construction order.
 3. **Visual bugs:** [UWPSpy](https://ramensoftware.com/uwpspy); names vary by build.
 4. **Layout bugs on thumbnails:** never add sized children only to grid row 0;
    use span + transform.
 5. **Crashes:** try/catch around XAML; don’t block focus hooks; clear on uninit.
    Bound `QueryViaVtable` / task-item array offsets; fail closed on miss.
-   Uninit must wait for each dispatcher (High cleanup + Low drain) and the
-   focus thread; never `Sleep` and hope. Revoke `SizeChanged` only on that
-   panel’s dispatcher.
+   Uninit must wait for each dispatcher (High cleanup + Low drain, INFINITE)
+   and the focus thread (INFINITE); never `Sleep` or a timeout. Revoke
+   `SizeChanged` only on that panel’s dispatcher. Register the message-window
+   class with the **mod** module handle (`UNCHANGED_REFCOUNT`).
 6. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
 7. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
    for thumbnail symbols so older builds still load.
@@ -414,7 +421,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    between two unranked apps then rest on one — that app must still confirm
    after min-focus (switcher/tray must not drop the candidate); three windows of one app (ranks
    1>2>3 in that flyout only); two same-title windows; debug log
-   `Preview resolve:` + `sibling[` + `rank=` + `how=taskitem|group-order|title`;
+   `Preview resolve:` + `sibling[` + `rank=` + `how=repeater|taskitem|title`;
    disable clears all chrome;
    two virtual desktops: glow on D1 must not remain on pinned-not-running
    icons on D2; D1 ranks return after switching back. Move the taskbar to
@@ -440,7 +447,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `Preview focus confirmed:` | Window recency |
 | `Preview click confirmed:` | Thumbnail / grouped-icon click → window recency |
 | `HWND recycled` | Preview map dropped a reused handle (PID mismatch) |
-| `Preview resolve:` / `sibling[` | Per-card HWND + `how=taskitem\|group-order\|title` |
+| `Preview resolve:` / `sibling[` | Per-card HWND + `how=repeater\|taskitem\|title` |
 | `ApplyAllHighlights` | Full identity rebind (debug log only) |
 | `Hooked Taskbar.View.dll` | View symbols |
 | `thumbnail OnApplyTemplate unavailable` | Optional miss |
@@ -459,7 +466,7 @@ foreground, bounded vtable probe, deterministic unload.
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).
-2. Stronger DataContext ↔ TaskItemThumbnail identity (less group-order).
+2. Stronger DataContext ↔ TaskItemThumbnail identity (repeater GetAt is primary).
 3. Classic / non-XAML thumbnail path if still needed on some builds.
 4. Multi-monitor secondary taskbars if weak refs only cover primary.
 5. Per-desktop prune of deleted virtual desktop GUIDs beyond decay.
