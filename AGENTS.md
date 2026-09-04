@@ -32,7 +32,7 @@ bridge them.
 |--------|---------|------|
 | Process image path | `C:\…\WindowsTerminal.exe` | Stable **key** for Win32 ranking |
 | AppUserModelID | `windows.immersivecontrolpanel_…` | **Key** for AFH/WWAHost (`APPID:…`) |
-| File name / window title | `WindowsTerminal.exe` / `Settings` | Logs, exclude list, fuzzy match |
+| File name / window title | `WindowsTerminal.exe` / `Settings` | Logs, exclude list |
 | PID | `12345` | Min-focus “still same app?” (Win32) |
 | HWND + PID | window handle | Preview recency map (PID rejects recycle) |
 
@@ -58,29 +58,28 @@ What we *can* observe:
 ### App matching (in practice)
 
 ```
-ranked apps (path / exe)
+ranked apps (path / APPID)
         │
         ▼
-   path cache (option C) + name scores  ──►  TaskListButton
+   path cache (option C): HWND / AUMID / full path
         │
         ▼
    ApplyButtonHighlight(rank)  or  ClearButtonHighlight()
 ```
 
-Order of preference:
+Order of preference (icons — **no name fuzzy**):
 
-1. **Process path cache (option C)** — resolve button → HWND/PID → image path;
-   score 1000 exact / 900 same file name (900 is **1:1**, not a replica).
+1. **HWND** on the button’s task item / group — score 1000.
 2. **AppUserModelID** — only when the rank key is `APPID:…` (UWP host). Button
-   AutomationId / window AUMID, score 1000. Mismatch → score 0 (no fuzzy).
-   Do not use PID+class: AFH is shared.
-3. **Cached automation name** — after learn `path → "Windows Terminal"` (1:1).
-4. **Fuzzy / title scores** — alphanumeric compare, greedy 1:1 assignment.
-5. **Active-button association** — on confirm, store active running button name
-   (APPID keys only associate buttons with the same AUMID).
+   AutomationId / window AUMID, score 1000. Mismatch → 0. Do not use PID+class:
+   AFH is shared.
+3. **Process path cache** — button → HWND/PID → image path; score 1000 exact.
+   Same file name, different folder → 900 (**1:1**, not a replica). Same path
+   but **different window class** → 0 (two icons from one process).
 
 Only **score 1000** may bind the same rank to many buttons (secondary taskbar /
-Never Combine). Name-cache 96 used to copy Settings onto Windows Security.
+Never Combine). If the taskband resolve is missing, **do not glow** — a wrong
+icon is worse than none.
 
 Pinned-only icons: no highlight (`IsRunning == false`). Virtual-desktop lists
 are separate: a pinned icon that is not running on this desktop must not glow.
@@ -88,15 +87,14 @@ are separate: a pinned icon that is not running on this desktop must not glow.
 ### Why not only match on “active button”?
 
 Only the **currently focused** app is Active. Ranks 2 and 3 are recent but
-**not** active, so they need identity matching.
+**not** active, so they need identity matching (path / AUMID / HWND).
 
 ### Known gaps (app matching)
 
 | Gap | Impact | Possible fix |
 |-----|--------|----------------|
-| Fuzzy false positive/negative | Wrong or missing glow | Prefer path cache / AppId |
 | Combined icons | One button per app group | Correct for combined mode |
-| Localization of automation names | Fuzzy may fail | Path cache + active association |
+| Taskband hooks missing | No icon glow | Fail closed (no name guess) |
 
 ---
 
@@ -288,10 +286,10 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 | Icon default | **Side bar** (`leftBar`) | Left on bottom/top taskbar; under icon on left/right — stays off the native running pill |
 | Frame Z-order | Overlay last (above icon) | Stroke not covered |
 | Full Z-order | Overlay first (behind icon) | Plate under glyph |
-| Button identity | Option C path cache + fuzzy | Volume-per-app stack |
-| Path cache | First UVS + force on press; 2s debounce | Not every paint |
+| Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
+| Path cache | Resolve once when empty; `force` on press only | UVS must not `ReportClicked` / `OpenProcess` on a timer |
 | UVS vs rebind | UVS re-paints cached rank; full identity rebind on recency / 300ms debounce | Hover `UpdateVisualStates` must not O(buttons×ranks) every mouse-over. Siblings Windows resets without another UVS wait for the debounce. |
-| Rank match | Only score 1000 (path / HWND / AUMID) is a replica. 96 name-cache and 900 filename are 1:1. | Settings must not copy onto Windows Security. Secondary taskbar still multi-binds exact path/AUMID. |
+| Rank match | Only score 1000 (path / HWND / AUMID) is a replica. 900 filename is 1:1. | Settings must not copy onto Windows Security. Secondary taskbar still multi-binds exact path/AUMID. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
 | Virtual desktops | Nested recency maps; no taskband reordering hooks | Explorer already filters `IsRunning` |
@@ -320,11 +318,11 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 
 | Object | Guard | Thread |
 |--------|--------|--------|
-| `g_desktopMaps`, `g_currentDesktopId`, `g_pendingFocus`, `g_keyToAutomationName` | `g_stateMutex` | Focus write; UI read under lock |
+| `g_desktopMaps`, `g_currentDesktopId`, `g_pendingFocus` | `g_stateMutex` | Focus write; UI read under lock |
 | `g_vdm` | `g_vdmMutex` | Created/used/released **only on the focus thread**. UI reads cached `g_currentDesktopId`. |
 | `g_trackedButtons`, `g_dispatcherAnchor` | `g_buttonsMutex` | UI primarily. Do not `weak.get()` these off the UI thread. |
-| `g_uiDispatchers` | `g_dispatchersMutex` | Agile `CoreDispatcher` list, captured on the UI thread. `CollectUiDispatchers` copies this — never XAML `weak.get()` off-thread. |
-| `g_hookThreadHwnd` | `std::atomic<HWND>` | Focus thread writes; others `PostMessage` / `HookThreadWindow()`. `SetTimer` only on the owner thread. |
+| `g_uiDispatchers` | `g_dispatchersMutex` | `[[clang::no_destroy]] optional<vector<CoreDispatcher>>`. Capture on UI thread. `reset()` in Uninit. Never `weak.get()` XAML off-thread. |
+| `g_hookThreadHwnd` | `std::atomic<HWND>` | Focus thread writes; others `PostMessage` / `HookThreadWindow()`. `SetTimer` only on the owner thread. Ready event before `Start` returns. |
 | `g_buttonPathCache` (includes `lastPaintRank`, `ourIconScale`) | `g_buttonPathMutex` | UI / resolve / paint-only UVS |
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
 | `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
@@ -332,8 +330,8 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 | `g_settingsPtr` (`SettingsSnap`) | `g_settingsMutex` + `shared_ptr<const Settings>` | LoadSettings publishes a whole object; any thread copies the pointer under the mutex. Never take `g_settingsMutex` then `g_stateMutex`. Accent color is cached here (`cachedAccent`). |
 | Click sentinels (`g_clickSentinel_Task*`) | `thread_local` + save/restore | Nested / cross-thread ReportClicked |
 | `g_unloading` | atomic | Any |
-| Focus thread shutdown | `WM_APP_SHUTDOWN` to the message HWND + `PostThreadMessage`; wait **INFINITE** | Uninit must not return while the thread is in the image |
-| UI uninit | `RunOnEachUiDispatcherAndWait` (High cleanup + Low drain, **INFINITE**) | Revoke `SizeChanged` per dispatcher; do not time out |
+| Focus thread shutdown | `g_unloading` then **stop worker first** (ready event + `WM_APP_SHUTDOWN` + `PostThreadMessage`); wait **INFINITE**; then UI drain | Worker must not `TryRunAsync` after the drain sentinel. Do not time out — leftover `SizeChanged` crashes Explorer |
+| UI uninit | `RunOnEachUiDispatcherAndWait` (High cleanup + Low drain, **INFINITE**) **after** the worker has joined | Revoke `SizeChanged` per dispatcher |
 | Native probing | `QueryViaVtable` max 32 slots; task-items array offset under 64; fail closed | Explorer-safe |
 
 Do **not** hold `g_stateMutex` or `g_layoutWatchMutex` across XAML, COM
@@ -400,23 +398,41 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 
 ## When changing code
 
-1. **Matching bugs (wrong icon):** prefer path cache / AppId over fuzzier names.
+1. **Matching bugs (wrong icon):** path / AUMID / HWND only. Do **not** add
+   automation-name fuzzy, initials, or per-app special cases (`LISTER`, etc.).
+   Missing identity → no glow.
 2. **Matching bugs (wrong preview):** prefer repeater GetAt + ctor maps;
    never assign the same HWND to two siblings; don’t rely on title for twins;
-   don’t EnumWindows or assign by construction order.
+   don’t EnumWindows or assign by construction order. Unique-title is preview
+   fallback only.
 3. **Visual bugs:** [UWPSpy](https://ramensoftware.com/uwpspy); names vary by build.
 4. **Layout bugs on thumbnails:** never add sized children only to grid row 0;
    use span + transform.
-5. **Crashes:** try/catch around XAML; don’t block focus hooks; clear on uninit.
+5. **Crashes / unload:** try/catch around XAML; don’t block focus hooks.
    Bound `QueryViaVtable` / task-item array offsets; fail closed on miss.
-   Uninit must wait for each dispatcher (High cleanup + Low drain, INFINITE)
-   and the focus thread (INFINITE); never `Sleep` or a timeout. Revoke
-   `SizeChanged` only on that panel’s dispatcher. Register the message-window
-   class with the **mod** module handle (`UNCHANGED_REFCOUNT`).
-6. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
-7. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
+   `Wh_ModUninit`: set `g_unloading`, **stop the focus thread first**, then
+   drain each dispatcher (High cleanup + Low drain, INFINITE). Never time out
+   a drain — leftover `SizeChanged` lambdas crash Explorer. Ready event before
+   `StartWinEventHookThread` returns so shutdown `PostMessage` cannot miss the
+   queue. Register the message-window class with the **mod** module handle
+   (`UNCHANGED_REFCOUNT`); `ERROR_CLASS_ALREADY_EXISTS` is a **hard fail**
+   (stale `WndProc`). `g_uiDispatchers` is `no_destroy` + `reset()` on Uninit
+   — do not put strong XAML/`CoreDispatcher` in a type with a CRT destructor.
+   Revoke `SizeChanged` only on that panel’s dispatcher.
+6. **Do not** `SetTimer` on the hook HWND from the UI thread (window must be
+   owned by the caller). `PostMessage` and arm the timer in `WndProc`.
+7. **Do not** call `SHGetPropertyStoreForWindow` / `GetProcessImagePath` /
+   `GetWindowClassName` while holding `g_stateMutex`.
+8. **Do not** `CoCreate`/`Release` `IVirtualDesktopManager` off the focus
+   thread. UI reads `g_currentDesktopId`. Registry first; VDM only if that
+   fails.
+9. **Do not** re-resolve button → path on a debounce timer. Resolve once
+   (`pathUpper` empty / first attempt) or on `OnPointerPressed` `force`.
+   Do not `DetectTaskbarEdge` on every UVS — `SizeChanged` is enough.
+10. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
+11. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
    for thumbnail symbols so older builds still load.
-8. **Test:** app min-focus 0–1s; preview 0–1s (explorer start with preview
+12. **Test:** app min-focus 0–1s; preview 0–1s (explorer start with preview
    min 0 must not spin the focus thread / starve timers); rapid Alt-Tab
    between two unranked apps then rest on one — that app must still confirm
    after min-focus (switcher/tray must not drop the candidate); three windows of one app (ranks
@@ -452,7 +468,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `Hooked Taskbar.View.dll` | View symbols |
 | `thumbnail OnApplyTemplate unavailable` | Optional miss |
 | `no dispatcher anchor` | Before first button (logged once) |
-| `ERROR: UI dispatcher cleanup` / `SizeChanged watches not revoked` / `focus thread still running` | Unload handshake failed — explorer may crash |
+| `ERROR: UI dispatcher cleanup` / `SizeChanged watches not revoked` / `focus thread wait failed` | Unload handshake failed — explorer may crash |
 | `Button path cache:` | Option C resolve |
 | `IconPanel relayout:` / `Taskbar edge` | Button size / screen-edge change (heal running dots) |
 
@@ -460,9 +476,36 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 
 ## Future work (ordered suggestions)
 
+## Catalog review lessons (do not regress)
+
+These were flagged on ramensoftware/windhawk-mods PR #5331. The pattern is:
+Explorer-injected mods must be unload-safe, keep COM/XAML on the right thread,
+and must not guess identity from localized UI strings.
+
+| Lesson | Why it bit us | Rule |
+|--------|----------------|------|
+| Uninit **worker first**, then UI drain | Drain then stop: decay/`RequestApplyVisuals` `TryRunAsync` after the Low sentinel → `FreeLibrary` then crash | `g_unloading`; stop focus thread; then `RunOnEachUiDispatcherAndWait` |
+| Unbounded drain, not a timeout | Timed-out drain leaves `SizeChanged` in the image | INFINITE wait for dispatcher join **and** focus thread |
+| Ready event before `Start` returns | `PostThreadMessage` fails until the worker has a queue → INFINITE hang on Disable | Manual-reset event after `CreateWindowExW` (and on every early-fail path) |
+| Mod `hInstance` for the message class | `GetModuleHandle(nullptr)` is explorer.exe; leaked class + dangling `WndProc` | `GetModuleHandleExW(FROM_ADDRESS \| UNCHANGED_REFCOUNT)` |
+| `ERROR_CLASS_ALREADY_EXISTS` is fatal | Reusing a previous instance’s class jumps into unmapped memory | Fail the thread; do not `CreateWindow` on a stale class |
+| No strong XAML in CRT-destroyed globals | Process teardown runs `~vector<CoreDispatcher>` after XAML threads are dead | `[[clang::no_destroy]] optional<…>` + `reset()` in Uninit |
+| No `weak_ref<FrameworkElement>::get()` off UI | Last-ref `~FrameworkElement` on the worker/uninit thread | Store agile `CoreDispatcher` captured on the UI thread |
+| No `SetTimer` cross-thread | HWND belongs to the focus thread; debounce never armed | `PostMessage` → `SetTimer` in `WndProc` |
+| No COM under `g_stateMutex` | UI takes that mutex to paint; hung `SHGetPropertyStoreForWindow` freezes the taskbar | Resolve class/AUMID/path **then** lock |
+| VDM on the focus thread only | STA `CoCreate` on one thread, use/release on another | Registry first; VDM fallback on the worker; UI reads cached GUID |
+| Accent / desktop id not per-paint | `UISettings` + registry on every UVS | Cache in `LoadSettings` / desktop-switch + decay |
+| Path cache is not a poll | `EnsureButtonPathCached` from UVS + 250ms miss debounce = `ReportClicked` storm | Resolve once; `force` only on press |
+| No icon name fuzzy | English `" running"` / `" pinned"`, `LISTER`/`VSCODIUM` special cases, wrong glow | HWND / AUMID / path only. Preview unique-title is the one name fallback |
+| Own `ScaleTransform` instance | `ClearValue` wiped `taskbar-dock-animation` | Remember the object we set; clear only that |
+| YAML defaults are real | All-zero preview intensities must not be “unset” | Do not override user 0s after an in-place recompile |
+| README is the catalog page | Users never see the repo README | Screenshots on `raw.githubusercontent.com`; no tester checklist |
+
+---
+
 Done in 0.9.x and not listed: UWP `APPID:` keys, preview plate brush restore,
 Styler hover-plate z-order, settings snapshots, timer deadlines, transient
-foreground, bounded vtable probe, deterministic unload.
+foreground, bounded vtable probe, deterministic unload, icon fuzzy removal.
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).
