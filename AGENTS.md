@@ -287,8 +287,9 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 | Frame Z-order | Overlay last (above icon) | Stroke not covered |
 | Full Z-order | Overlay first (behind icon) | Plate under glyph |
 | Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
-| Path cache | Resolve once when empty; `force` on press only | UVS must not `ReportClicked` / `OpenProcess` on a timer |
-| UVS vs rebind | UVS re-paints cached rank; full identity rebind on recency / 300ms debounce | Hover `UpdateVisualStates` must not O(buttons×ranks) every mouse-over. Siblings Windows resets without another UVS wait for the debounce. |
+| Path cache | Resolve once when empty; `force` on press only. Maps keyed by `IUnknown*` identity. | UVS must not `ReportClicked` / `OpenProcess` on a timer, and must not linear-scan `weak.get()` per hover. |
+| UVS vs rebind | UVS re-paints cached rank only if `(rank, settingsGen)` changed or chrome is missing. Unranked + no chrome is a no-op. Full identity rebind on recency / 300ms debounce (ranked buttons only). | Hover `UpdateVisualStates` must not O(buttons×ranks) every mouse-over, and must not paint or reorder icons we never highlighted. |
+| Native z-order | `RestoreIconPanelNativeZOrder` only after we insert or remove `WhRecentFocusGlow` | Healing unranked buttons fights Taskbar Styler / badges and is not undone on unload |
 | Rank match | Only score 1000 (path / HWND / AUMID) is a replica. 900 filename is 1:1. | Settings must not copy onto Windows Security. Secondary taskbar still multi-binds exact path/AUMID. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
@@ -320,14 +321,14 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 |--------|--------|--------|
 | `g_desktopMaps`, `g_currentDesktopId`, `g_pendingFocus` | `g_stateMutex` | Focus write; UI read under lock |
 | `g_vdm` | `g_vdmMutex` | Created/used/released **only on the focus thread**. UI reads cached `g_currentDesktopId`. |
-| `g_trackedButtons`, `g_dispatcherAnchor` | `g_buttonsMutex` | UI primarily. Do not `weak.get()` these off the UI thread. |
+| `g_trackedButtons` | `g_buttonsMutex` | UI. `unordered_map<IUnknown*, weak_ref>`. Do not `weak.get()` off the UI thread. |
 | `g_uiDispatchers` | `g_dispatchersMutex` | `[[clang::no_destroy]] optional<vector<CoreDispatcher>>`. Capture on UI thread. `reset()` in Uninit. Never `weak.get()` XAML off-thread. |
 | `g_hookThreadHwnd` | `std::atomic<HWND>` | Focus thread writes; others `PostMessage` / `HookThreadWindow()`. `SetTimer` only on the owner thread. Ready event before `Start` returns. |
-| `g_buttonPathCache` (includes `lastPaintRank`, `ourIconScale`) | `g_buttonPathMutex` | UI / resolve / paint-only UVS |
+| `g_buttonPathCache` (includes `lastPaintRank`, `lastPaintSettingsGen`, `ourIconScale`) | `g_buttonPathMutex` | UI. `unordered_map<IUnknown*, entry>`. Resolve once; UVS paints cached rank. |
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
 | `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
-| `g_layoutWatches` | `g_layoutWatchMutex` | UI (`IconPanel` SizeChanged). Revoke only on the panel’s dispatcher. |
-| `g_settingsPtr` (`SettingsSnap`) | `g_settingsMutex` + `shared_ptr<const Settings>` | LoadSettings publishes a whole object; any thread copies the pointer under the mutex. Never take `g_settingsMutex` then `g_stateMutex`. Accent color is cached here (`cachedAccent`). |
+| `g_layoutWatches` | `g_layoutWatchMutex` | UI. `unordered_map` keyed by panel identity. Install only when we paint. Revoke only on that panel’s dispatcher. Never register `SizeChanged` unless `RememberUiDispatcher` recorded the thread. |
+| `g_settingsPtr` (`SettingsSnap`) | `g_settingsMutex` + `shared_ptr<const Settings>` | LoadSettings publishes a whole object (`generation` bumped). Accent is queried on the focus-thread STA (`WM_DWMCOLORIZATIONCOLORCHANGED` / `WM_SETTINGCHANGE`). Never take `g_settingsMutex` then `g_stateMutex`. |
 | Click sentinels (`g_clickSentinel_Task*`) | `thread_local` + save/restore | Nested / cross-thread ReportClicked |
 | `g_unloading` | atomic | Any |
 | Focus thread shutdown | `g_unloading` then **stop worker first** (ready event + `WM_APP_SHUTDOWN` + `PostThreadMessage`); wait **INFINITE**; then UI drain | Worker must not `TryRunAsync` after the drain sentinel. Do not time out — leftover `SizeChanged` crashes Explorer |
@@ -346,34 +347,35 @@ Do **not** hold `g_stateMutex` or `g_layoutWatchMutex` across XAML, COM
 YAML keys map to `LoadSettings()`, which fills a local `Settings` then
 `PublishSettings()` (mutex + `shared_ptr<const Settings>`). Readers use
 `SettingsSnap()`.
-Windhawk rejects unknown metadata such as `$group` (schema: no additional
-properties). UI grouping is done with **list order** and `$name` prefixes:
-`[General]`, `[Icons]`, `[Previews]`, `[Advanced]`. **Keys are stable** for
-saved configs.
+Nested YAML groups (compact-start-menu / accent-color-sync shape) render as
+real groups in the Windhawk UI. `$group` is still rejected by the schema.
+General keys stay top-level; icon/preview keys are dotted.
 
 | Group | Setting key | Field |
 |-------|-------------|--------|
-| General | `enabled` | `Settings::enabled` |
 | General | `highlightCount` | `Settings::highlightCount` |
 | General | `minFocusSeconds` | `Settings::minFocusSeconds` |
 | General | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
 | General | `decayMinutes` | app decay |
 | General | `requireTaskbarButton` | tray-only filter |
 | General | `excludedPrograms[i]` | uppercase set |
-| Taskbar icons | `glowStyle` | `LeftBar` (side bar) / `Frame` / `Full` / `BottomBar` (edge bar) |
-| Taskbar icons | `glowColor` / `customGlowColor` | color mode + hex |
-| Taskbar icons | `glowIntensityRank1..3` | `glowIntensity[3]` |
-| Taskbar icons | `glowThickness` / `glowRoundness` / `glowSize` / `glowLayers` | metrics |
-| Taskbar icons | `glowFillOpacity` | Full / side / edge icon bar strength |
-| Taskbar icons | `sizeBoostRank1..3` | `sizeBoostPercent[3]` |
-| Thumbnail previews | `previewHighlightEnabled` | preview master (also needs `enabled`) |
-| Thumbnail previews | `previewHighlightCount` | per-flyout top N |
-| Thumbnail previews | `previewStyle` | `titleBar` / `titleBg` / `plate` / `plateTitle` / `ring` |
-| Thumbnail previews | `previewIntensityRank1..3` | `previewIntensity[3]` |
-| Thumbnail previews | `previewFillOpacity` | plate + titleBg wash (not title bar line) |
-| Thumbnail previews | `previewMinFocusSeconds` | window confirm |
-| Thumbnail previews | `previewDecayMinutes` | window decay |
-| Advanced | `glowDebugLog` | verbose bind + preview resolve logs |
+| Taskbar icons | `icons.glowStyle` | `LeftBar` (side bar) / `Frame` / `Full` / `BottomBar` (edge bar) |
+| Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | color mode + hex |
+| Taskbar icons | `icons.glowIntensityRank1..3` | `glowIntensity[3]` |
+| Taskbar icons | `icons.glowThickness` / `icons.glowRoundness` / `icons.glowSize` / `icons.glowLayers` | metrics |
+| Taskbar icons | `icons.glowFillOpacity` | Full / side / edge icon bar strength |
+| Taskbar icons | `icons.sizeBoostRank1..3` | `sizeBoostPercent[3]` |
+| Thumbnail previews | `previews.highlightEnabled` | preview master |
+| Thumbnail previews | `previews.highlightCount` | per-flyout top N |
+| Thumbnail previews | `previews.style` | `titleBar` / `titleBg` / `plate` / `plateTitle` / `ring` |
+| Thumbnail previews | `previews.intensityRank1..3` | `previewIntensity[3]` |
+| Thumbnail previews | `previews.fillOpacity` | plate + titleBg wash (not title bar line) |
+| Thumbnail previews | `previews.minFocusSeconds` | window confirm |
+| Thumbnail previews | `previews.decayMinutes` | window decay |
+
+There is no in-mod `enabled` or `glowDebugLog` setting. Disable the mod in
+Windhawk to turn highlighting off. Verbose bind / preview-resolve lines use
+`Wh_Log` (Windhawk Advanced tab: None / Mod logs / Detailed debug).
 
 Ranks beyond 3 reuse rank-3 intensity/size (icons and previews separately).
 Preview reuses icon color and shared thickness/roundness; plate/titleBg use
@@ -418,7 +420,9 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    (`UNCHANGED_REFCOUNT`); `ERROR_CLASS_ALREADY_EXISTS` is a **hard fail**
    (stale `WndProc`). `g_uiDispatchers` is `no_destroy` + `reset()` on Uninit
    — do not put strong XAML/`CoreDispatcher` in a type with a CRT destructor.
-   Revoke `SizeChanged` only on that panel’s dispatcher.
+   Revoke `SizeChanged` only on that panel’s dispatcher. Do not register
+   `SizeChanged` unless `RememberUiDispatcher` recorded that thread. Do not
+   reorder native `IconPanel` children on buttons we never painted.
 6. **Do not** `SetTimer` on the hook HWND from the UI thread (window must be
    owned by the caller). `PostMessage` and arm the timer in `WndProc`.
 7. **Do not** call `SHGetPropertyStoreForWindow` / `GetProcessImagePath` /
@@ -428,7 +432,10 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    fails.
 9. **Do not** re-resolve button → path on a debounce timer. Resolve once
    (`pathUpper` empty / first attempt) or on `OnPointerPressed` `force`.
-   Do not `DetectTaskbarEdge` on every UVS — `SizeChanged` is enough.
+   Do not `DetectTaskbarEdge` on every UVS — cache the edge on the layout
+   watch and refresh from `SizeChanged`. Key button/path/watch maps by
+   `IUnknown` identity. Rank 0 with no chrome is a no-op; do not reorder
+   native `IconPanel` children on untouched icons.
 10. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
 11. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
    for thumbnail symbols so older builds still load.
@@ -438,7 +445,9 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    after min-focus (switcher/tray must not drop the candidate); three windows of one app (ranks
    1>2>3 in that flyout only); two same-title windows; debug log
    `Preview resolve:` + `sibling[` + `rank=` + `how=repeater|taskitem|title`;
-   disable clears all chrome;
+   disable/unload clears all chrome; hover two multi-window apps in sequence
+   (recycled flyout cards must re-rank); accent change without a settings
+   reload must update the glow colour;
    two virtual desktops: glow on D1 must not remain on pinned-not-running
    icons on D2; D1 ranks return after switching back. Move the taskbar to
    left/right/top: side bar must not cover the native running pill; unranked
@@ -494,9 +503,14 @@ and must not guess identity from localized UI strings.
 | No `SetTimer` cross-thread | HWND belongs to the focus thread; debounce never armed | `PostMessage` → `SetTimer` in `WndProc` |
 | No COM under `g_stateMutex` | UI takes that mutex to paint; hung `SHGetPropertyStoreForWindow` freezes the taskbar | Resolve class/AUMID/path **then** lock |
 | VDM on the focus thread only | STA `CoCreate` on one thread, use/release on another | Registry first; VDM fallback on the worker; UI reads cached GUID |
-| Accent / desktop id not per-paint | `UISettings` + registry on every UVS | Cache in `LoadSettings` / desktop-switch + decay |
+| Accent / desktop id not per-paint | `UISettings` + registry on every UVS | Cache accent on the focus-thread STA; refresh on `WM_DWMCOLORIZATIONCOLORCHANGED` / `ImmersiveColorSet`. Desktop id from switch + decay |
 | Path cache is not a poll | `EnsureButtonPathCached` from UVS + 250ms miss debounce = `ReportClicked` storm | Resolve once; `force` only on press |
+| Identity-keyed maps, not linear `weak.get()` | Four COM-resolving scans per UVS per button | `unordered_map<IUnknown*, …>`; keep the map, skip paint on unranked |
+| No native reorder of untouched icons | `ClearButtonHighlight` healed z-order on every unranked UVS | Only restore `IconPanel` child order after we insert/remove our host |
+| No `SizeChanged` without a drainable dispatcher | `RememberUiDispatcher` can fail; uninit never revokes that watch | Register the watch only if the dispatcher was recorded |
 | No icon name fuzzy | English `" running"` / `" pinned"`, `LISTER`/`VSCODIUM` special cases, wrong glow | HWND / AUMID / path only. Preview unique-title is the one name fallback |
+| No in-mod enable / debug toggles | Duplicates Windhawk’s mod on/off and Advanced logging | Drop `enabled` and `glowDebugLog`; use `Wh_Log` |
+| Keep `-loleaut32` even if we do not call `Sys*` | WinRT `hresult_error` needs `SysFreeString` / `SysStringLen` | Drop `-lpropsys` if unused; do not drop oleaut32 |
 | Own `ScaleTransform` instance | `ClearValue` wiped `taskbar-dock-animation` | Remember the object we set; clear only that |
 | YAML defaults are real | All-zero preview intensities must not be “unset” | Do not override user 0s after an in-place recompile |
 | README is the catalog page | Users never see the repo README | Screenshots on `raw.githubusercontent.com`; no tester checklist |
@@ -505,7 +519,9 @@ and must not guess identity from localized UI strings.
 
 Done in 0.9.x and not listed: UWP `APPID:` keys, preview plate brush restore,
 Styler hover-plate z-order, settings snapshots, timer deadlines, transient
-foreground, bounded vtable probe, deterministic unload, icon fuzzy removal.
+foreground, bounded vtable probe, deterministic unload, icon fuzzy removal,
+identity-keyed UVS maps, no native reorder of untouched icons, nested settings
+groups, `Wh_Log` instead of an in-mod debug toggle.
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).

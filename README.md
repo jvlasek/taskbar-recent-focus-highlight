@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.2 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.3 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -50,14 +50,13 @@ too — so “which one did I just use?” is unclear.
 
 ## Settings
 
-Windhawk’s settings schema does **not** support section headers (`$group` is
-rejected). Options are ordered and named with prefixes so groups stay clear in
-the flat list:
+Icon and preview options are nested groups in the Windhawk UI (`icons.*` /
+`previews.*`). Disable the mod itself to turn highlighting off. Verbose bind
+and preview-resolve lines go to Windhawk’s **Mod logs** (Advanced tab).
 
 ### General
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Enabled | Master toggle (icons + previews) | On |
 | Number of highlighted apps | How many recent apps to boost (1–6 recommended) | 3 |
 | Minimum focus time (seconds) | App must stay focused this long to enter ranks | 8 |
 | When to skip min-focus | Immediate if in map / only if already top-N / always wait | Immediate if in map |
@@ -86,11 +85,6 @@ the flat list:
 | Preview minimum focus (seconds) | Window→preview recency (separate from apps) | 1 |
 | Preview decay (minutes) | Drop window from preview recency | 15 |
 
-### Advanced
-| Setting | Description | Default |
-|---------|-------------|---------|
-| Debug log (verbose) | Path binds + preview resolve details | Off |
-
 ### Preview styles (multi-window flyout only)
 
 | Style | Look | Notes |
@@ -106,13 +100,19 @@ is **per flyout**: Chrome’s last-used window is rank 1 in the Chrome flyout ev
 if you then used Notepad. Set the window count to **1** to restore the old
 “most recent only” look.
 
+Preview cards prefer the flyout’s thumbnail index. If that is unavailable, a
+unique window title is used as a last resort. Title cleanup understands
+English “N running windows” / “pinned” suffixes; on other languages that strip
+is a no-op, so two cards with the same stem may stay unmatched instead of
+guessing.
+
 ## Share / install (for testers)
 
 1. Install [Windhawk](https://windhawk.net/).
 2. Create a **local mod** (or update yours) and paste / load
    `taskbar-recent-focus-highlight.wh.cpp`.
 3. Compile, enable (injects into `explorer.exe` only).
-4. Optional: enable **Debug logging** on the mod while testing.
+4. Optional: set the mod’s Advanced tab **Debug logging** to **Mod logs** while testing.
 5. After updating the `.cpp`, recompile in Windhawk; a full **explorer restart**
    is the cleanest way to pick up new hooks.
 
