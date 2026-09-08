@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.4 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.6 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -53,6 +53,12 @@ too — so “which one did I just use?” is unclear.
 Icon and preview options are nested groups in the Windhawk UI (`icons.*` /
 `previews.*`). Disable the mod itself to turn highlighting off. Verbose bind
 and preview-resolve lines go to Windhawk’s **Mod logs** (Advanced tab).
+
+The YAML block is the shipped default. After a settings-schema change (for
+example renaming keys into groups), the editor can show **empty fields**
+because saved values still sit under the old names — that is not “unconfigured
+on purpose.” Use **Reset to default** (or save once) so the new keys are
+written. First-time catalog installs get the YAML defaults with no extra step.
 
 ### General
 | Setting | Description | Default |
@@ -127,13 +133,13 @@ guessing.
    icon → previews show ranks 1 > 2 > 3 (strongest on the last focused window
    of that app). Unranked cards stay unmarked.
 4. Same-title windows (e.g. two Calibre views of the same file) should still
-   track separately when TaskItem maps resolve (`how=group-order` / `taskitem`
-   in debug log).
+   track separately when TaskItem maps resolve (`how=repeater` / `taskitem`
+   in the log).
 5. Useful log lines: `Confirmed focus:`, `Preview focus confirmed:`,
    `Preview resolve:`, `sibling[`, `ApplyAllHighlights`,
    `Current virtual desktop:`, `Virtual desktop switch:`,
    `IconPanel relayout:`, `Taskbar edge`.
-6. Disable the mod or toggle **Enabled** off → all chrome clears.
+6. Disable the mod in Windhawk → all chrome clears.
 7. Virtual desktops: highlight apps on desktop 1, switch to desktop 2 —
    pinned-not-running icons must not glow. Use apps on desktop 2; switch
    back — desktop 1’s ranks should still be there.
@@ -144,6 +150,10 @@ guessing.
    should not wipe a Styler card tint after you move away.
 10. Two copies of the same exe in different folders stay distinct. Rapid
     Alt+Tab then rest on one app — it must still enter ranks after min-focus.
+11. Launch a **pinned** app with one click and leave it focused for min-focus
+    — the icon must glow without a second click. A new taskbar button that
+    appears while other apps are already ranked must pick up a glow on its
+    own (not only after the next Alt+Tab).
 
 ---
 

@@ -34,7 +34,7 @@ bridge them.
 | AppUserModelID | `windows.immersivecontrolpanel_…` | **Key** for AFH/WWAHost (`APPID:…`) |
 | File name / window title | `WindowsTerminal.exe` / `Settings` | Logs, exclude list |
 | PID | `12345` | Min-focus “still same app?” (Win32) |
-| HWND + PID | window handle | Preview recency map (PID rejects recycle) |
+| HWND + PID | window handle | Preview recency map (PID rejects recycle). App ranks store `lastHwnd` **and** `lastPid` for the same reason. |
 
 The app recency map is keyed by **uppercase full path**, except UWP windows
 hosted by `ApplicationFrameHost.exe` / `WWAHost.exe`, which use `APPID:` +
@@ -74,8 +74,10 @@ Order of preference (icons — **no name fuzzy**):
    AutomationId / window AUMID, score 1000. Mismatch → 0. Do not use PID+class:
    AFH is shared.
 3. **Process path cache** — button → HWND/PID → image path; score 1000 exact.
-   Same file name, different folder → 900 (**1:1**, not a replica). Same path
-   but **different window class** → 0 (two icons from one process).
+   Same path but **different window class** → 0 (two icons from one process).
+   No filename-only score. An empty resolve is **not** permanent: retry while
+   path and AUMID are both empty (`lastResolveTick` throttle for pinned-not-
+   running; `IsRunning` bypasses the throttle so launch-from-pinned works).
 
 Only **score 1000** may bind the same rank to many buttons (secondary taskbar /
 Never Combine). If the taskband resolve is missing, **do not glow** — a wrong
@@ -129,7 +131,11 @@ Resolve order in `RefreshThumbnailFlyout_UIThread`:
 
 1. **Repeater index** — `ItemsRepeater.TryGetElement(i)` + `Thumbnails.GetAt(i)`
    + ctor map (raw ABI pointer, same as taskbar-thumbnail-reorder). Optional
-   symbols; missing → skip this pass.
+   symbols; missing → skip this pass. `repeaterSourceIndex` is the ItemsSource
+   slot (unrealized children must not shift GetAt). If a snap-group card is in
+   the repeater and not in `Thumbnails` (sizes: window-card count ==
+   `Thumbnails.Size()`), compact GetAt to the window ordinal. Other size
+   mismatches skip this pass.
 2. **TaskItem** — `DataContext` ↔ ctor map (COM identity). Often fails in
    practice (projection mismatch) even when maps exist.
 3. **Title unique** — only for unresolved cards. Prefer `DisplayNameTextBlock`
@@ -145,6 +151,12 @@ repeater index is the visual order. Snap-group cards: `IconsRepeater` with
 
 Then sort siblings with a recency tick (tick, confirmSeq, foreground) and
 paint the top `previewHighlightCount` at `previewIntensity` ranks.
+
+`OnApplyTemplate`, hover-switch (`TargetItemKey`), and title remeasure all
+coalesce onto one Low-priority flyout refresh. The callback picks a live card
+that still has an `ItemsRepeater` ancestor (do not reuse the oldest tracked
+weak_ref). Thumbnail / grouped-icon click posts `WM_APP_PREVIEW_CLICK` to the
+focus thread; `ConfirmPreviewFocusNow` does not run inside `HandleClick`.
 
 Hooks for thumbnails are **optional**. Missing symbols: app ranks still work;
 preview may fall back to title-only (weak for identical titles).
@@ -229,6 +241,7 @@ or thumbnail `OnApplyTemplate`.
 | Recency scope | Per virtual desktop GUID | Workspaces don’t share top-N |
 | Current desktop | Registry `CurrentVirtualDesktop`, VDM fallback | Public APIs only |
 | Window key | `HWND` + PID (per desktop map) | Multi-instance previews; PID rejects a recycled handle |
+| App last HWND | `lastHwnd` + `lastPid` | Same recycle guard as preview; HWND-only would bind the rank to whichever button now owns the handle |
 | Display name | Win32: file name; UWP host: window title (else AUMID stem) | Logs / exclude UX |
 | App min focus | Default 8s | Alt+Tab noise |
 | Promote mode | immediateTracked / immediateTopN / alwaysWait | When re-focus skips app min-focus |
@@ -263,7 +276,10 @@ Shared confirm helpers (do not fork another copy):
 min-focus handlers (`FromTimer`) re-check the *current* candidate’s start tick
 (`focusStartTick` / `previewStartTick`) and re-arm for the remainder instead
 of confirming a newer pending focus early. `Immediate` (min=0 / promoteMode /
-already-tracked window) skips that wait.
+already-tracked window) skips that wait. The 30 s decay timer is **not**
+started with the focus thread; first confirmed app or window recency arms it,
+and `OnDecayTimer` stops it when every desktop map is empty and there is no
+pending focus.
 
 Alt-Tab UI, taskbar, desktop, and IME (`IsTransientForeground`) are **not**
 a leave: do not clear `g_pendingFocus` or cancel min-focus timers. The landed
@@ -287,8 +303,8 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 | Frame Z-order | Overlay last (above icon) | Stroke not covered |
 | Full Z-order | Overlay first (behind icon) | Plate under glyph |
 | Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
-| Path cache | Resolve once on full bind / press. Maps keyed by `IUnknown*` **and** checked against the live weak_ref (Explorer reuses heap addresses). | UVS must not `ReportClicked` / `OpenProcess`. Recycled keys must not inherit another app’s path or rank. |
-| UVS vs rebind | UVS re-paints cached rank only if `(rank, settingsGen)` changed or chrome is missing. Unranked + no chrome is a no-op. Full identity rebind on recency / 300ms debounce (ranked buttons only). | Hover `UpdateVisualStates` must not O(buttons×ranks) every mouse-over, and must not paint or reorder icons we never highlighted. |
+| Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. Successful path/AUMID is once; empty identity is retried (`kUnresolvedRetryMs`, skipped if `IsRunning`). | UVS must not `ReportClicked`. Explorer reuses a pinned `TaskListButton` when the app launches; the click’s `force` often runs *before* the process exists. |
+| UVS vs rebind | Cached paint rank: **-1** = identity unknown (schedule the 300 ms full bind), **0** = resolved unranked (no-op if no chrome), **>0** = paint if `(rank, generation, accent)` changed. | Writing 0 before the first resolve suppressed the rebind that would have filled the path cache. Do not treat unknown as unranked. |
 | Native z-order | `RestoreIconPanelNativeZOrder` only after we insert or remove `WhRecentFocusGlow` | Healing unranked buttons fights Taskbar Styler / badges and is not undone on unload |
 | Rank match | Exact path / HWND / AUMID only (score 1000, replicas OK for secondary taskbars). No filename-900. | Two folders of `python.exe` stay distinct; a missing exact button is no glow, not a namesake. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
@@ -323,7 +339,7 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 | `g_vdm` | `g_vdmMutex` | Created/used/released **only on the focus thread**. UI reads cached `g_currentDesktopId`. |
 | `g_trackedButtons` | `g_buttonsMutex` | UI. `unordered_map<IUnknown*, weak_ref>`. Do not `weak.get()` off the UI thread. |
 | `g_uiDispatchers` | `g_dispatchersMutex` | `[[clang::no_destroy]] optional<vector<CoreDispatcher>>`. Capture on UI thread. `reset()` in Uninit. Never `weak.get()` XAML off-thread. |
-| `g_hookThreadHwnd` | `std::atomic<HWND>` | Focus thread writes; others `PostMessage` / `HookThreadWindow()`. `SetTimer` only on the owner thread. Ready event before `Start` returns. |
+| `g_hookThreadHwnd` | `std::atomic<HWND>` | Focus thread writes; others `PostMessage` / `HookThreadWindow()`. `SetTimer` only on the owner thread. Ready event before `Start` returns. Decay timer armed on first confirm, stopped when maps are empty. |
 | `g_buttonPathCache` (includes `lastPaintRank`, `lastPaintSettingsGen`, `lastPaintAccent`, `ourIconScale`) | `g_buttonPathMutex` | UI. `unordered_map<IUnknown*, entry>`. Resolve on full bind / press; UVS paints cached rank. Drop entry if weak_ref is not this button. |
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
 | `g_trackedThumbViews` | `g_thumbViewsMutex` | UI |
@@ -427,6 +443,8 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    reorder native `IconPanel` children on buttons we never painted.
 6. **Do not** `SetTimer` on the hook HWND from the UI thread (window must be
    owned by the caller). `PostMessage` and arm the timer in `WndProc`.
+   `ConfirmPreviewFocusNow` is posted (`WM_APP_PREVIEW_CLICK` + HWND/PID), not
+   called from `HandleClick`.
 7. **Do not** call `SHGetPropertyStoreForWindow` / `GetProcessImagePath` /
    `GetWindowClassName` while holding `g_stateMutex`.
 8. **Do not** `CoCreate`/`Release` `IVirtualDesktopManager` off the focus
@@ -436,9 +454,12 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    (`ApplyAllHighlights`) and `OnPointerPressed` `force` only — the sentinel
    `ReportClicked` must not run on hover. On identity-map lookup, drop the
    entry unless the weak_ref is this live element (heap addresses recycle).
-   Do not `DetectTaskbarEdge` on every UVS — cache the edge on the layout
-   watch and refresh from `SizeChanged`. Rank 0 with no chrome is a no-op;
-   overlay sweep must not reorder native `IconPanel` children.
+   Do **not** cache an empty resolve forever — retry until path or AUMID is
+   set. Do **not** write paint rank 0 when identity is still unknown (leave
+   **-1** and schedule the full bind). Do not `DetectTaskbarEdge` on every
+   UVS — cache the edge on the layout watch and refresh from `SizeChanged`.
+   Rank 0 with no chrome is a no-op; overlay sweep must not reorder native
+   `IconPanel` children.
 10. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
 11. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
    for thumbnail symbols so older builds still load.
@@ -449,7 +470,10 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    1>2>3 in that flyout only); two same-title windows; debug log
    `Preview resolve:` + `sibling[` + `rank=` + `how=repeater|taskitem|title`;
    disable/unload clears all chrome; hover two multi-window apps in sequence
-   (recycled flyout cards must re-rank); accent change without a settings
+   (recycled flyout cards must re-rank; one Low flyout pass, not per card);
+   a flyout that contains a snap-group card plus windows must not shift HWND
+   binds; clicking a thumbnail must rank that window without stalling the
+   click; accent change without a settings
    reload must update the glow colour;
    two virtual desktops: glow on D1 must not remain on pinned-not-running
    icons on D2; D1 ranks return after switching back. Move the taskbar to
@@ -464,7 +488,10 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    tints return. UWP: Calculator vs Settings (ApplicationFrameHost) must
    get separate icon ranks; Windows Security must **not** copy Settings.
    Taskbar Styler: hover a ranked icon — side bar stays; vanilla native pill
-   still shows. Two `python.exe` folders stay distinct.
+   still shows. Two `python.exe` folders stay distinct. Launch a **pinned**
+   app (click once, do not click again after it is running) — that icon must
+   glow after min-focus. A new taskbar button that appears while ranks
+   already exist must pick up a glow without waiting for the next Alt+Tab.
 
 ### Useful log substrings
 
@@ -476,7 +503,9 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `Preview click confirmed:` | Thumbnail / grouped-icon click → window recency |
 | `HWND recycled` | Preview map dropped a reused handle (PID mismatch) |
 | `Preview resolve:` / `sibling[` | Per-card HWND + `how=repeater\|taskitem\|title` |
-| `ApplyAllHighlights` | Full identity rebind (debug log only) |
+| `snap-group extra in repeater` / `size mismatch` | Pass 1 compacted or skipped because Thumbnails ≠ repeater |
+| `Decay timer armed` / `Decay timer stopped` | 30 s decay tick started or idled |
+| `ApplyAllHighlights` | Full identity rebind (`Wh_Log`; visible when Windhawk **Mod logs** is on) |
 | `Hooked Taskbar.View.dll` | View symbols |
 | `thumbnail OnApplyTemplate unavailable` | Optional miss |
 | `no dispatcher anchor` | Before first button (logged once) |
@@ -515,11 +544,18 @@ and must not guess identity from localized UI strings.
 | No icon name fuzzy | English `" running"` / `" pinned"`, `LISTER`/`VSCODIUM` special cases, wrong glow | HWND / AUMID / path only. Preview unique-title is the one name fallback |
 | No in-mod enable / debug toggles | Duplicates Windhawk’s mod on/off and Advanced logging | Drop `enabled` and `glowDebugLog`; use `Wh_Log` |
 | Keep `-loleaut32` even if we do not call `Sys*` | WinRT `hresult_error` needs `SysFreeString` / `SysStringLen` | Drop `-lpropsys` if unused; do not drop oleaut32 |
-| No `UpdateLayout` from `OnApplyTemplate` | Synchronous layout during measure is a XAML layout cycle | Return false + `ScheduleThumbnailRelayout` at Low |
+| No `UpdateLayout` from `OnApplyTemplate` | Synchronous layout during measure is a XAML layout cycle | Return false + `SchedulePreviewFlyoutRefresh` at Low |
 | Overlay sweep does not heal native z-order | `g_pendingOverlaySweep` re-opened the unranked reorder path | Sweep only removes `WhRecentFocusGlow` |
+| Empty path cache is not permanent | Pinned icon: first resolve has no task item; Explorer reuses the same `TaskListButton` on launch; click `force` often runs before the process exists | Retry while path and AUMID are empty; throttle pinned-not-running; `IsRunning` retries immediately |
+| Paint rank **-1** ≠ **0** | First UVS scored an unresolved button as 0 and skipped the full bind | Unknown identity stays -1 and schedules rebind; 0 only after a real resolve said “no rank” |
 | Own `ScaleTransform` instance | `ClearValue` wiped `taskbar-dock-animation` | Remember the object we set; clear only that |
 | YAML defaults are real | All-zero preview intensities must not be “unset” | Do not override user 0s after an in-place recompile |
 | README is the catalog page | Users never see the repo README | Screenshots on `raw.githubusercontent.com`; no tester checklist |
+| `lastHwnd` needs a PID | HWND values recycle; icon bind would follow the new owner | Store `lastPid`; `HwndMatchesStoredPid` before HWND identity |
+| `ConfirmPreviewFocusNow` off the click thread | `HandleClick` + `ResolveAppIdentity` + inline `RunOnUiThread` stalled the taskbar | `WM_APP_PREVIEW_CLICK` + HWND/PID; worker resolves |
+| Flyout refresh uses a stale card | Shared pending latch + oldest `g_trackedThumbViews` weak_ref | Coalesce onto one Low pass; pick a live in-repeater card at callback time |
+| Repeater index ≠ `Thumbnails` index | Snap-group card extra in one collection shifts every later GetAt | Compare sizes; compact window ordinal or skip pass 1 |
+| Decay timer is not a heartbeat | 30 s tick with empty maps is wasted registry/COM work | Arm on first confirm; stop when every desktop map is empty |
 
 ---
 
@@ -528,7 +564,9 @@ Styler hover-plate z-order, settings snapshots, timer deadlines, transient
 foreground, bounded vtable probe, deterministic unload, icon fuzzy removal,
 identity-keyed UVS maps, no native reorder of untouched icons, nested settings
 groups, `Wh_Log` instead of an in-mod debug toggle, `UISettings::ColorValuesChanged`,
-filename-900 dropped, `ReportClicked` off UVS.
+filename-900 dropped, `ReportClicked` off UVS, empty-resolve retry, rank -1 vs 0,
+`lastHwnd`+pid, replica/score prune, flyout Low coalesce, snap-group GetAt
+guard, click confirm on the focus thread, idle decay timer.
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).
@@ -538,3 +576,6 @@ filename-900 dropped, `ReportClicked` off UVS.
 5. Per-desktop prune of deleted virtual desktop GUIDs beyond decay.
 6. Per-monitor taskbar edge if a secondary bar can sit on a different side.
 7. Test seam + `make release` concat (pure ranking/identity table tests).
+8. Optional: log when preview unique-title fires vs `how=repeater|taskitem`
+   before adding or dropping that fallback. Watch `ReportClicked` for jump-list
+   / MRU side effects (once per button on full bind / press, not on hover).
