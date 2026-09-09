@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.7 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.8 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -89,7 +89,7 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 | Preview highlight style | Title bar / Title bg / Plate / Hybrid / Ring | **Hybrid** |
 | Intensity rank 1/2/3 | Strength per window rank (0–100) | 100 / 70 / 45 |
 | Preview tint opacity | Plate + title-background wash (0–100) | 40 |
-| Preview minimum focus (seconds) | Window→preview recency (separate from apps) | 1 |
+| Preview minimum focus (seconds) | Window→preview recency (separate from apps). A thumbnail / grouped-icon click confirms immediately. | 1 |
 | Preview decay (minutes) | Drop window from preview recency | 15 |
 
 ### Preview styles (multi-window flyout only)

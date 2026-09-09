@@ -310,8 +310,8 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 | Full Z-order | Overlay first (behind icon) | Plate under glyph |
 | Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
 | Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Re-resolve once on not-running → running (`resolvedWhileRunning`); `kUnresolvedRetryMs` otherwise. | UVS must not `ReportClicked`. Explorer reuses a pinned `TaskListButton` on launch; AutomationId made last round’s empty-retry think it was done. |
-| UVS vs rebind | Cached paint rank: **-1** = identity unknown (schedule the 300 ms full bind), **0** = resolved unranked (no-op if no chrome), **>0** = paint if `(rank, generation, accent)` changed. | Writing 0 before the first resolve suppressed the rebind that would have filled the path cache. Do not treat unknown as unranked. |
-| Native z-order | `RestoreIconPanelNativeZOrder` only after we insert or remove `WhRecentFocusGlow` | Healing unranked buttons fights Taskbar Styler / badges and is not undone on unload |
+| UVS vs rebind | Cached paint: **-1** unknown, **0** unranked, **>0** paint if `(rank, generation, accent, edge, panel size)` changed. | `{rank, gen, accent}` alone left the bar on the old side after a taskbar-edge / icon-size relayout. |
+| Native z-order | `RestoreIconPanelNativeZOrder` only after we insert or remove `WhRecentFocusGlow`. Snapshot child names **before** the first move; restore that list, not an assumed stock order. | Healing unranked buttons fights Taskbar Styler. Stock restore rewrote Styler themes on disable. |
 | Rank match | Exact path / HWND / AUMID only (score 1000, replicas OK for secondary taskbars). No filename-900. | Two folders of `python.exe` stay distinct; a missing exact button is no glow, not a namesake. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
@@ -559,6 +559,8 @@ and must not guess identity from localized UI strings.
 | Pinned AutomationId is not a finished Win32 resolve | `appIdUpper` from `Appid: discord…` made `haveIdentity` true; launch never re-resolved; rank key is the image path | `resolvedWhileRunning`: one resolve on not-running → running; tick throttle otherwise |
 | Do not deref ctor-map `taskItem` | HWND gone ⇒ native `ITaskItem` likely freed; `GetWindowFromTaskItem` UAF | Store HWND at ctor; raw pointer is compare-only (thumbnail-reorder) |
 | UVS must not clear on overlay sweep | Desktop switch / decay set the flag then UVS blanked ranked icons until `ApplyAllHighlights` | Paint cached rank; the full bind is the sweep |
+| Paint cache includes edge + size | SizeChanged updated `lastEdge` then `ApplyButtonHighlight` early-out | Key is rank + settings + accent + edge + panel size |
+| Restore native z-order from a snapshot | Assumed `BackgroundElement` first / OverlayIcon above Icon | Save `IconPanel` child names before first move; Styler order comes back on clear |
 | Paint rank **-1** ≠ **0** | First UVS scored an unresolved button as 0 and skipped the full bind | Unknown identity stays -1 and schedules rebind; 0 only after a real resolve said “no rank” |
 | Own `ScaleTransform` instance | `ClearValue` wiped `taskbar-dock-animation` | Remember the object we set; clear only that |
 | YAML defaults are real | All-zero preview intensities must not be “unset” | Do not override user 0s after an in-place recompile |
@@ -579,7 +581,8 @@ groups, `Wh_Log` instead of an in-mod debug toggle, `UISettings::ColorValuesChan
 filename-900 dropped, `ReportClicked` off UVS, empty-resolve retry, rank -1 vs 0,
 `lastHwnd`+pid, replica/score prune, flyout Low coalesce, snap-group GetAt
 guard, click confirm on the focus thread, idle decay timer, pinned→running
-re-resolve, ctor-map HWND only, no UVS clear on overlay sweep.
+re-resolve, ctor-map HWND only, no UVS clear on overlay sweep, paint cache
+edge+size, native z-order snapshot.
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).
