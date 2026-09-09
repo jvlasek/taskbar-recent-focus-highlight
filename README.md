@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.6 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.7 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -23,8 +23,9 @@ too — so “which one did I just use?” is unclear.
    icons (side bar, frame, full plate, or edge bar).
 2. **Preview ranks** — separately track focus per **window** (`HWND`). When a
    multi-window thumbnail flyout opens, that flyout gets its own recency list
-   and marks the top N windows with rank intensities (title bar, soft title
-   tint, whole plate, hybrid plate+title, or ring).
+   and marks the top N windows with rank intensities. Default is **hybrid**
+   (plate for rank 1, title tint for 2+); title bar, title wash, whole plate,
+   and ring are also available.
 
 ## Features
 
@@ -85,7 +86,7 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 |---------|-------------|---------|
 | Highlight recent windows in previews | Multi-window flyout ranks | On |
 | Number of highlighted windows | Top N in **that** flyout (1–6 recommended) | 3 |
-| Preview highlight style | Title bar / Title bg / Plate / Hybrid / Ring | **Title bar** |
+| Preview highlight style | Title bar / Title bg / Plate / Hybrid / Ring | **Hybrid** |
 | Intensity rank 1/2/3 | Strength per window rank (0–100) | 100 / 70 / 45 |
 | Preview tint opacity | Plate + title-background wash (0–100) | 40 |
 | Preview minimum focus (seconds) | Window→preview recency (separate from apps) | 1 |
@@ -95,10 +96,10 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 
 | Style | Look | Notes |
 |-------|------|--------|
-| **Title bar** (default) | Thin accent line under the window title | Good default; sits just below the text |
+| **Hybrid (plate + title)** (default) | Plate on rank 1, title wash on ranks 2+ | Rank 1 pops; 2+ stay light |
+| **Title bar** | Thin accent line under the window title | Sits just below the text |
 | **Title background** | Soft wash behind the title | Kept light so text stays readable; intensity scales linearly |
 | **Whole preview plate** | Tints the card chrome (`BackgroundBorder`) | Strong signal; previous brush restored on clear (Taskbar Styler) |
-| **Hybrid (plate + title)** | Plate on rank 1, title wash on ranks 2+ | Rank 1 pops; 2+ stay light |
 | **Ring** | Hollow frame around the card | Simple placeholder |
 
 Single-window flyouts are **never** marked (nothing to disambiguate). Ranking
@@ -111,6 +112,11 @@ unique window title is used as a last resort. Title cleanup understands
 English “N running windows” / “pinned” suffixes; on other languages that strip
 is a no-op, so two cards with the same stem may stay unmatched instead of
 guessing.
+
+Button → process identity is adapted from
+[taskbar-volume-control-per-app](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-volume-control-per-app.wh.cpp).
+Thumbnail HWND mapping follows
+[taskbar-thumbnail-reorder](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-thumbnail-reorder.wh.cpp).
 
 ## Share / install (for testers)
 
@@ -205,7 +211,7 @@ Identical titles cannot be disambiguated by name alone.
 | Window key | HWND + PID | Recycled handles don’t inherit recency |
 | Virtual desktops | Separate app + window maps per desktop GUID | Workspaces don’t share recency |
 | Icon default style | Side bar (left on bottom/top, under icon on left/right) | Stays off the native running pill on all four edges |
-| Preview default | Title bar under label | Light; plate available for stronger mark |
+| Preview default | Hybrid (plate rank 1, title tint 2+) | Rank 1 is obvious; 2+ stay a light ladder |
 | Focus hook | Dedicated WinEvent thread | Reliable timers + pump |
 | Min-focus timers | Absolute deadline; ignore Alt-Tab/tray transients | Stale `WM_TIMER` must not confirm the wrong app or drop the candidate |
 | Settings | Immutable snapshot (`SettingsSnap`) | No data race on exclude-list reload |

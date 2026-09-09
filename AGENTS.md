@@ -75,9 +75,10 @@ Order of preference (icons — **no name fuzzy**):
    AFH is shared.
 3. **Process path cache** — button → HWND/PID → image path; score 1000 exact.
    Same path but **different window class** → 0 (two icons from one process).
-   No filename-only score. An empty resolve is **not** permanent: retry while
-   path and AUMID are both empty (`lastResolveTick` throttle for pinned-not-
-   running; `IsRunning` bypasses the throttle so launch-from-pinned works).
+   No filename-only score. An empty resolve is **not** permanent. A pinned
+   AutomationId is **not** a finished Win32 resolve (rank key is the image
+   path). Re-resolve once when the same `TaskListButton` flips to running
+   (`resolvedWhileRunning`); otherwise `lastResolveTick` throttles retries.
 
 Only **score 1000** may bind the same rank to many buttons (secondary taskbar /
 Never Combine). If the taskband resolve is missing, **do not glow** — a wrong
@@ -153,10 +154,12 @@ Then sort siblings with a recency tick (tick, confirmSeq, foreground) and
 paint the top `previewHighlightCount` at `previewIntensity` ranks.
 
 `OnApplyTemplate`, hover-switch (`TargetItemKey`), and title remeasure all
-coalesce onto one Low-priority flyout refresh. The callback picks a live card
-that still has an `ItemsRepeater` ancestor (do not reuse the oldest tracked
-weak_ref). Thumbnail / grouped-icon click posts `WM_APP_PREVIEW_CLICK` to the
-focus thread; `ConfirmPreviewFocusNow` does not run inside `HandleClick`.
+coalesce onto one Low-priority flyout refresh. The callback prefers the card
+that scheduled the pass if it is still live under an `ItemsRepeater`, else a
+live in-repeater tracked view. Thumbnail / grouped-icon click posts
+`WM_APP_PREVIEW_CLICK` to the focus thread; `ConfirmPreviewFocusNow` does not
+run inside `HandleClick`. Ctor-map `taskItem` is compared, never dereferenced
+after the HWND is captured.
 
 Hooks for thumbnails are **optional**. Missing symbols: app ranks still work;
 preview may fall back to title-only (weak for identical titles).
@@ -286,6 +289,9 @@ a leave: do not clear `g_pendingFocus` or cancel min-focus timers. The landed
 app often does not get a second `EVENT_SYSTEM_FOREGROUND`. Same-app
 foreground events call `EnsurePendingAppTimer` so a stale `WM_TIMER` that
 `KillTimer`’d the live one-shot cannot leave a candidate with no clock.
+Transient and “ranks already exist” repaints use `RequestApplyVisualsDebounced`
+(300 ms) so Alt+Tab is one full bind, not two. Confirm, decay, and desktop
+switch stay immediate.
 
 Promotion (windows): `previewMinFocusSeconds` → `StampWindowRecencyLocked` on
 that desktop’s window map. On flyout open, siblings are sorted by **this
@@ -303,7 +309,7 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 | Frame Z-order | Overlay last (above icon) | Stroke not covered |
 | Full Z-order | Overlay first (behind icon) | Plate under glyph |
 | Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
-| Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. Successful path/AUMID is once; empty identity is retried (`kUnresolvedRetryMs`, skipped if `IsRunning`). | UVS must not `ReportClicked`. Explorer reuses a pinned `TaskListButton` when the app launches; the click’s `force` often runs *before* the process exists. |
+| Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Re-resolve once on not-running → running (`resolvedWhileRunning`); `kUnresolvedRetryMs` otherwise. | UVS must not `ReportClicked`. Explorer reuses a pinned `TaskListButton` on launch; AutomationId made last round’s empty-retry think it was done. |
 | UVS vs rebind | Cached paint rank: **-1** = identity unknown (schedule the 300 ms full bind), **0** = resolved unranked (no-op if no chrome), **>0** = paint if `(rank, generation, accent)` changed. | Writing 0 before the first resolve suppressed the rebind that would have filled the path cache. Do not treat unknown as unranked. |
 | Native z-order | `RestoreIconPanelNativeZOrder` only after we insert or remove `WhRecentFocusGlow` | Healing unranked buttons fights Taskbar Styler / badges and is not undone on unload |
 | Rank match | Exact path / HWND / AUMID only (score 1000, replicas OK for secondary taskbars). No filename-900. | Two folders of `python.exe` stay distinct; a missing exact button is no glow, not a namesake. |
@@ -455,11 +461,14 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    `ReportClicked` must not run on hover. On identity-map lookup, drop the
    entry unless the weak_ref is this live element (heap addresses recycle).
    Do **not** cache an empty resolve forever — retry until path or AUMID is
-   set. Do **not** write paint rank 0 when identity is still unknown (leave
-   **-1** and schedule the full bind). Do not `DetectTaskbarEdge` on every
-   UVS — cache the edge on the layout watch and refresh from `SizeChanged`.
-   Rank 0 with no chrome is a no-op; overlay sweep must not reorder native
-   `IconPanel` children.
+   set. A pinned AutomationId is not a finished Win32 resolve: re-resolve
+   once when `IsRunning` becomes true. Do **not** write paint rank 0 when
+   identity is still unknown (leave **-1** and schedule the full bind). Do
+   not `DetectTaskbarEdge` on every UVS — cache the edge on the layout watch
+   and refresh from `SizeChanged`. Rank 0 with no chrome is a no-op; overlay
+   sweep must not reorder native `IconPanel` children. UVS must not
+   `ClearButtonHighlight` just because `g_pendingOverlaySweep` is set
+   (flicker on icons that keep their rank).
 10. **WinRT collections:** include `winrt/Windows.Foundation.Collections.h`.
 11. **Hooks:** `WindhawkUtils::SetFunctionHook` / `SYMBOL_HOOK` with **optional**
    for thumbnail symbols so older builds still load.
@@ -546,14 +555,17 @@ and must not guess identity from localized UI strings.
 | Keep `-loleaut32` even if we do not call `Sys*` | WinRT `hresult_error` needs `SysFreeString` / `SysStringLen` | Drop `-lpropsys` if unused; do not drop oleaut32 |
 | No `UpdateLayout` from `OnApplyTemplate` | Synchronous layout during measure is a XAML layout cycle | Return false + `SchedulePreviewFlyoutRefresh` at Low |
 | Overlay sweep does not heal native z-order | `g_pendingOverlaySweep` re-opened the unranked reorder path | Sweep only removes `WhRecentFocusGlow` |
-| Empty path cache is not permanent | Pinned icon: first resolve has no task item; Explorer reuses the same `TaskListButton` on launch; click `force` often runs before the process exists | Retry while path and AUMID are empty; throttle pinned-not-running; `IsRunning` retries immediately |
+| Empty path cache is not permanent | Pinned icon: first resolve has no task item; Explorer reuses the same `TaskListButton` on launch; click `force` often runs before the process exists | Retry while path and AUMID are empty; throttle pinned-not-running |
+| Pinned AutomationId is not a finished Win32 resolve | `appIdUpper` from `Appid: discord…` made `haveIdentity` true; launch never re-resolved; rank key is the image path | `resolvedWhileRunning`: one resolve on not-running → running; tick throttle otherwise |
+| Do not deref ctor-map `taskItem` | HWND gone ⇒ native `ITaskItem` likely freed; `GetWindowFromTaskItem` UAF | Store HWND at ctor; raw pointer is compare-only (thumbnail-reorder) |
+| UVS must not clear on overlay sweep | Desktop switch / decay set the flag then UVS blanked ranked icons until `ApplyAllHighlights` | Paint cached rank; the full bind is the sweep |
 | Paint rank **-1** ≠ **0** | First UVS scored an unresolved button as 0 and skipped the full bind | Unknown identity stays -1 and schedules rebind; 0 only after a real resolve said “no rank” |
 | Own `ScaleTransform` instance | `ClearValue` wiped `taskbar-dock-animation` | Remember the object we set; clear only that |
 | YAML defaults are real | All-zero preview intensities must not be “unset” | Do not override user 0s after an in-place recompile |
 | README is the catalog page | Users never see the repo README | Screenshots on `raw.githubusercontent.com`; no tester checklist |
 | `lastHwnd` needs a PID | HWND values recycle; icon bind would follow the new owner | Store `lastPid`; `HwndMatchesStoredPid` before HWND identity |
 | `ConfirmPreviewFocusNow` off the click thread | `HandleClick` + `ResolveAppIdentity` + inline `RunOnUiThread` stalled the taskbar | `WM_APP_PREVIEW_CLICK` + HWND/PID; worker resolves |
-| Flyout refresh uses a stale card | Shared pending latch + oldest `g_trackedThumbViews` weak_ref | Coalesce onto one Low pass; pick a live in-repeater card at callback time |
+| Flyout refresh uses a stale card | Shared pending latch + oldest `g_trackedThumbViews` weak_ref | Coalesce onto one Low pass; prefer the card that scheduled it if still in a repeater |
 | Repeater index ≠ `Thumbnails` index | Snap-group card extra in one collection shifts every later GetAt | Compare sizes; compact window ordinal or skip pass 1 |
 | Decay timer is not a heartbeat | 30 s tick with empty maps is wasted registry/COM work | Arm on first confirm; stop when every desktop map is empty |
 
@@ -566,7 +578,8 @@ identity-keyed UVS maps, no native reorder of untouched icons, nested settings
 groups, `Wh_Log` instead of an in-mod debug toggle, `UISettings::ColorValuesChanged`,
 filename-900 dropped, `ReportClicked` off UVS, empty-resolve retry, rank -1 vs 0,
 `lastHwnd`+pid, replica/score prune, flyout Low coalesce, snap-group GetAt
-guard, click confirm on the focus thread, idle decay timer.
+guard, click confirm on the focus thread, idle decay timer, pinned→running
+re-resolve, ctor-map HWND only, no UVS clear on overlay sweep.
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).
