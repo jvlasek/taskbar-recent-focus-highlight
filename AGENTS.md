@@ -79,6 +79,11 @@ Order of preference (icons — **no name fuzzy**):
    AutomationId is **not** a finished Win32 resolve (rank key is the image
    path). Re-resolve once when the same `TaskListButton` flips to running
    (`resolvedWhileRunning`); otherwise `lastResolveTick` throttles retries.
+   A successful path is not forever: if the button is running and the cached
+   HWND is dead (or `GetProcessImagePath` of that HWND no longer equals
+   `pathUpper`), re-resolve. Explorer reuses a `TaskListButton` when the exe
+   is deleted/renamed and another copy with the same name launches. Do not
+   treat a missing file on disk as stale (deleted-but-still-running).
 
 Only **score 1000** may bind the same rank to many buttons (secondary taskbar /
 Never Combine). If the taskband resolve is missing, **do not glow** — a wrong
@@ -255,7 +260,7 @@ or thumbnail `OnApplyTemplate`.
 | Shell hosts ignored | explorer, SearchHost, StartMenu, ShellHost, TextInputHost | Don’t rank the shell. AFH/WWAHost **are** ranked via `APPID:` |
 | Highlight count | 0–16 (UI suggests 1–6) | Settings-capped |
 | Preview highlight count | 0–16 (UI suggests 1–6) | Per-flyout cap |
-| Tray-only | `requireTaskbarButton` default on | No TaskListButton ⇒ not ranked |
+| Tray-only | `requireTaskbarButton` default on | No TaskListButton ⇒ not ranked. Unmatched + exact path/AUMID gone from the cache ⇒ demote even if `seenOnTaskbar` (filename is not “still on the taskbar”). |
 
 Promotion (apps):
 
@@ -308,10 +313,10 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 | Frame Z-order | Overlay last (above icon) | Stroke not covered |
 | Full Z-order | Overlay first (behind icon) | Plate under glyph |
 | Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
-| Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Re-resolve once on not-running → running (`resolvedWhileRunning`); `kUnresolvedRetryMs` otherwise. | UVS must not `ReportClicked`. Explorer reuses a pinned `TaskListButton` on launch; AutomationId made last round’s empty-retry think it was done. |
+| Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Re-resolve once on not-running → running (`resolvedWhileRunning`); `kUnresolvedRetryMs` otherwise. Running + dead sample HWND or live image-path mismatch also re-resolves. Empty re-resolve does not wipe a known path. | UVS must not `ReportClicked`. Explorer reuses the same `TaskListButton` on launch **and** when the exe is replaced by another folder’s copy. |
 | UVS vs rebind | Cached paint: **-1** unknown, **0** unranked, **>0** paint if `(rank, generation, accent, edge, panel size)` changed. | `{rank, gen, accent}` alone left the bar on the old side after a taskbar-edge / icon-size relayout. |
 | Native z-order | `RestoreIconPanelNativeZOrder` only after we insert or remove `WhRecentFocusGlow`. Snapshot child names **before** the first move; restore that list, not an assumed stock order. | Healing unranked buttons fights Taskbar Styler. Stock restore rewrote Styler themes on disable. |
-| Rank match | Exact path / HWND / AUMID only (score 1000, replicas OK for secondary taskbars). No filename-900. | Two folders of `python.exe` stay distinct; a missing exact button is no glow, not a namesake. |
+| Rank match | Exact path / HWND / AUMID only (score 1000, replicas OK for secondary taskbars). No filename-900. `PathAppearsOnTaskbar` is exact path / AUMID too (not filename). Unmatched ranks whose exact identity is gone from the cache are demoted even if `seenOnTaskbar`. | Two folders of `python.exe` stay distinct; deleting `C:\A\foo.exe` must not glow `C:\B\foo.exe` with A’s rank, and must not leave A occupying a slot. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
 | Virtual desktops | Nested recency maps; no taskband reordering hooks | Explorer already filters `IsRunning` |
@@ -425,7 +430,9 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 
 1. **Matching bugs (wrong icon):** path / AUMID / HWND only. Do **not** add
    automation-name fuzzy, initials, or per-app special cases (`LISTER`, etc.).
-   Missing identity → no glow.
+   Missing identity → no glow. `PathAppearsOnTaskbar` must not match by
+   filename (deleted `C:\A\foo.exe` must not count as still on the taskbar
+   because `C:\B\foo.exe` is).
 2. **Matching bugs (wrong preview):** prefer repeater GetAt + ctor maps;
    never assign the same HWND to two siblings; don’t rely on title for twins;
    don’t EnumWindows or assign by construction order. Unique-title is preview
@@ -451,7 +458,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    `ConfirmPreviewFocusNow` is posted (`WM_APP_PREVIEW_CLICK` + HWND/PID), not
    called from `HandleClick`.
 7. **Do not** call `SHGetPropertyStoreForWindow` / `GetProcessImagePath` /
-   `GetWindowClassName` while holding `g_stateMutex`.
+   `GetWindowClassName` while holding `g_stateMutex` or `g_buttonPathMutex`.
 8. **Do not** `CoCreate`/`Release` `IVirtualDesktopManager` off the focus
    thread. UI reads `g_currentDesktopId`. Registry first; VDM only if that
    fails.
@@ -461,7 +468,12 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    entry unless the weak_ref is this live element (heap addresses recycle).
    Do **not** cache an empty resolve forever — retry until path or AUMID is
    set. A pinned AutomationId is not a finished Win32 resolve: re-resolve
-   once when `IsRunning` becomes true. Do **not** write paint rank 0 when
+   once when `IsRunning` becomes true. A known path is not forever either:
+   re-resolve when the button is running and the sample HWND is dead or the
+   live image path diverges. Do not wipe a known path on an empty retry, and
+   do not treat `GetFileAttributes` missing as stale. UVS must not paint a
+   cached rank when the sample HWND is gone (clear chrome, rank **-1**,
+   schedule the full bind). Do **not** write paint rank 0 when
    identity is still unknown (leave **-1** and schedule the full bind). Do
    not `DetectTaskbarEdge` on every UVS — cache the edge on the layout watch
    and refresh from `SizeChanged`. Rank 0 with no chrome is a no-op; overlay
@@ -496,7 +508,11 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    tints return. UWP: Calculator vs Settings (ApplicationFrameHost) must
    get separate icon ranks; Windows Security must **not** copy Settings.
    Taskbar Styler: hover a ranked icon — side bar stays; vanilla native pill
-   still shows. Two `python.exe` folders stay distinct. Launch a **pinned**
+   still shows. Two `python.exe` folders stay distinct. Delete/rename a
+   ranked exe and launch the same file name from another folder — that icon
+   must **not** inherit the old rank (no immediate glow; new path confirms
+   after min-focus). If the old path was never ranked, the new copy still
+   must not stay `UNMATCHED` against a stale cache. Launch a **pinned**
    app (click once, do not click again after it is running) — that icon must
    glow after min-focus. A new taskbar button that appears while ranks
    already exist must pick up a glow without waiting for the next Alt+Tab.
@@ -519,6 +535,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `no dispatcher anchor` | Before first button (logged once) |
 | `ERROR: UI dispatcher cleanup` / `SizeChanged watches not revoked` / `focus thread wait failed` | Unload handshake failed — explorer may crash |
 | `Button path cache:` | Option C resolve |
+| `stale identity` | Cached HWND dead or live image path ≠ cached path; re-resolving |
 | `IconPanel relayout:` / `Taskbar edge` | Button size / screen-edge change (heal running dots) |
 
 ---
@@ -570,6 +587,7 @@ and must not guess identity from localized UI strings.
 | Repeater index ≠ `Thumbnails` index | Snap-group card extra in one collection shifts every later GetAt | Compare sizes; compact window ordinal or skip GetAt |
 | Stale global `Thumbnails` collection | `g_TaskGroup_Thumbnails` is from the last `TargetItemKey`; refresh also runs from OnApplyTemplate / decay | DataContext first; GetAt only if it agrees with a DataContext HWND |
 | Decay timer is not a heartbeat | 30 s tick with empty maps is wasted registry/COM work | Arm on first confirm; stop when every desktop map is empty |
+| Path cache survives exe replace | Explorer reuses `TaskListButton`; cached `C:\A\foo.exe` bound any `foo.exe`; `PathAppearsOnTaskbar` filename match kept A ranked | Re-resolve when running and HWND dead or live path differs; exact path/AUMID only for “on the taskbar”; demote unmatched when that identity is gone, even if `seenOnTaskbar` |
 
 ---
 
@@ -579,6 +597,7 @@ foreground, bounded vtable probe, deterministic unload, icon fuzzy removal,
 identity-keyed UVS maps, no native reorder of untouched icons, nested settings
 groups, `Wh_Log` instead of an in-mod debug toggle, `UISettings::ColorValuesChanged`,
 filename-900 dropped, `ReportClicked` off UVS, empty-resolve retry, rank -1 vs 0,
+exe-replace path-cache re-resolve, `PathAppearsOnTaskbar` exact-only, unmatched demote without filename steal,
 `lastHwnd`+pid, replica/score prune, flyout Low coalesce, snap-group GetAt
 guard, click confirm on the focus thread, idle decay timer, pinned→running
 re-resolve, ctor-map HWND only, no UVS clear on overlay sweep, paint cache

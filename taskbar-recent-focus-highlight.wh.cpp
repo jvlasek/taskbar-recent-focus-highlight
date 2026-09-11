@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.9
+// @version         0.9.10
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -550,6 +550,8 @@ struct ButtonPathCacheEntry {
     std::vector<HWND> groupHwnds;
     bool resolveAttempted = false;
     bool resolvedWhileRunning = false;  // re-resolve once on pinned → running
+    // Running + dead sample HWND / live image-path mismatch also re-resolves
+    // (Explorer reuses TaskListButton when the exe is replaced).
     int emptyResolveAttempts = 0;  // capped while path and AUMID stay empty
     ULONGLONG lastResolveTick = 0;  // empty-identity retry throttle
     ULONGLONG lastRunningTick = 0;  // IsRunning grace (Alt-Tab flicker)
@@ -1506,18 +1508,15 @@ FrameworkElement FindDescendantByName(FrameworkElement element, PCWSTR name) {
 // Ranking
 // ---------------------------------------------------------------------------
 
-// True if any cached TaskListButton resolved to this process path (or same
-// file name). Call from UI thread after EnsureButtonPathCached, or any thread
-// if only reading the path cache.
-bool PathAppearsOnTaskbar(const std::wstring& keyOrPath,
-                          const std::wstring& displayName) {
+// True if any cached TaskListButton resolved to this exact process path or
+// AppUserModelID. Filename-only is not a match (two folders of python.exe).
+// Call from UI thread after EnsureButtonPathCached, or any thread if only
+// reading the path cache. Do not weak.get() here — RecomputeRanks can run
+// on the focus thread.
+bool PathAppearsOnTaskbar(const std::wstring& keyOrPath) {
     const std::wstring pathUpper = PathFromAppKey(keyOrPath);
     const std::wstring wantAppId = CanonicalAppId(AppIdFromAppKey(keyOrPath));
-    std::wstring fileUpper = ToUpper(displayName);
-    if (fileUpper.empty() && !pathUpper.empty()) {
-        fileUpper = ToUpper(FileNameFromPath(pathUpper));
-    }
-    if (pathUpper.empty() && fileUpper.empty() && wantAppId.empty()) {
+    if (pathUpper.empty() && wantAppId.empty()) {
         return false;
     }
 
@@ -1535,10 +1534,6 @@ bool PathAppearsOnTaskbar(const std::wstring& keyOrPath,
         // Class is for *which* button to highlight, not whether the app
         // exists on the taskbar (TC + Lister share a path, different class).
         if (!pathUpper.empty() && e.pathUpper == pathUpper) {
-            return true;
-        }
-        if (!fileUpper.empty() &&
-            ToUpper(FileNameFromPath(e.pathUpper)) == fileUpper) {
             return true;
         }
     }
@@ -1573,7 +1568,7 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
         // Tray-only / no taskbar button: keep optional history but never rank.
         if (settings->requireTaskbarButton && !info.seenOnTaskbar) {
             // Refresh from path cache if buttons resolved since last time.
-            if (PathAppearsOnTaskbar(info.key, info.displayName)) {
+            if (PathAppearsOnTaskbar(info.key)) {
                 info.seenOnTaskbar = true;
             } else {
                 ++it;
@@ -3854,6 +3849,34 @@ DWORD GetProcessIdFromTaskListButton(UIElement element) {
     return 0;
 }
 
+// True when a running button's cached HWND is gone or now belongs to a
+// different image path / AUMID. Do not call while holding g_buttonPathMutex
+// (OpenProcess / SHGetPropertyStoreForWindow). A deleted-but-still-running
+// process can keep the old path — empty GetProcessImagePath is not stale,
+// and a missing file on disk is not a reason to re-resolve.
+bool CachedButtonIdentityStale(HWND sampleHwnd,
+                               const std::wstring& pathUpper,
+                               const std::wstring& appIdUpper) {
+    if (!sampleHwnd || !IsWindow(sampleHwnd)) {
+        return true;
+    }
+    if (!pathUpper.empty() && !IsUwpHostPath(pathUpper)) {
+        const DWORD pid = PidFromHwnd(sampleHwnd);
+        if (!pid) {
+            return true;
+        }
+        const std::wstring live = ToUpper(GetProcessImagePath(pid));
+        return !live.empty() && live != pathUpper;
+    }
+    if (!appIdUpper.empty()) {
+        const std::wstring liveId =
+            CanonicalAppId(ToUpper(GetWindowAppUserModelId(sampleHwnd)));
+        const std::wstring want = CanonicalAppId(appIdUpper);
+        return !liveId.empty() && liveId != want;
+    }
+    return false;
+}
+
 // Resolve button → path; force=true on click. Returns path upper or empty.
 std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
     if (!button || !g_taskbandResolveReady.load()) {
@@ -3863,6 +3886,11 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
     const ULONGLONG now = GetTickCount64();
     const bool running = TaskListButton_IsRunning(button);
     void* id = InspectableIdentity(button);
+    std::wstring cachedPath;
+    HWND cachedHwnd = nullptr;
+    std::wstring cachedAppId;
+    bool skipResolve = false;
+    bool checkStale = false;
     {
         std::lock_guard<std::mutex> lock(g_buttonPathMutex);
         auto it = id ? g_buttonPathCache.find(id) : g_buttonPathCache.end();
@@ -3880,10 +3908,30 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
                     now - it->second.lastResolveTick < kUnresolvedRetryMs ||
                     it->second.emptyResolveAttempts >=
                         kMaxEmptyResolveAttempts) {
-                    return it->second.pathUpper;
+                    cachedPath = it->second.pathUpper;
+                    if (!haveIdentity || !running) {
+                        skipResolve = true;
+                    } else {
+                        checkStale = true;
+                        cachedHwnd = it->second.sampleHwnd;
+                        cachedAppId = it->second.appIdUpper;
+                    }
                 }
             }
         }
+    }
+    if (skipResolve) {
+        return cachedPath;
+    }
+    if (checkStale &&
+        !CachedButtonIdentityStale(cachedHwnd, cachedPath, cachedAppId)) {
+        return cachedPath;
+    }
+    if (checkStale) {
+        Wh_Log(L"Button path cache: stale identity, re-resolving name=\"%s\" "
+               L"oldPath=%s",
+               GetButtonAutomationName(button).c_str(),
+               cachedPath.empty() ? L"(none)" : cachedPath.c_str());
     }
 
     DWORD pid = 0;
@@ -3973,21 +4021,50 @@ std::wstring EnsureButtonPathCached(FrameworkElement button, bool force) {
             e = &it->second;
         }
         if (e) {
-            e->pathUpper = pathUpper;
-            e->appIdUpper = appIdUpper;
-            e->classUpper = classUpper;
-            e->sampleHwnd = hwnd;
-            e->groupHwnds = std::move(groupHwnds);
             e->resolveAttempted = true;
-            e->resolvedWhileRunning = running;
             e->lastResolveTick = now;
-            if (e->pathUpper.empty() && e->appIdUpper.empty()) {
-                if (e->emptyResolveAttempts < kMaxEmptyResolveAttempts) {
-                    ++e->emptyResolveAttempts;
-                }
-            } else {
-                e->emptyResolveAttempts = 0;
+            if (running) {
+                e->resolvedWhileRunning = true;
             }
+            if (!pathUpper.empty()) {
+                if (e->pathUpper != pathUpper ||
+                    e->appIdUpper != appIdUpper) {
+                    e->lastPaintRank = -1;
+                }
+                e->pathUpper = pathUpper;
+                e->appIdUpper = appIdUpper;
+                e->classUpper = classUpper;
+                e->sampleHwnd = hwnd;
+                e->groupHwnds = std::move(groupHwnds);
+                e->emptyResolveAttempts = 0;
+            } else if (!appIdUpper.empty() && e->pathUpper.empty()) {
+                // Pinned AutomationId only — do not treat as a Win32 path.
+                e->appIdUpper = appIdUpper;
+                if (hwnd) {
+                    e->sampleHwnd = hwnd;
+                    e->groupHwnds = std::move(groupHwnds);
+                    if (!classUpper.empty()) {
+                        e->classUpper = classUpper;
+                    }
+                }
+                e->emptyResolveAttempts = 0;
+            } else {
+                // Task item flickered (hwnd dead during close / replace).
+                // Do not wipe a known path — the next bind retries.
+                if (e->pathUpper.empty() && e->appIdUpper.empty()) {
+                    if (e->emptyResolveAttempts < kMaxEmptyResolveAttempts) {
+                        ++e->emptyResolveAttempts;
+                    }
+                }
+                if (hwnd) {
+                    e->sampleHwnd = hwnd;
+                    e->groupHwnds = std::move(groupHwnds);
+                    if (!classUpper.empty()) {
+                        e->classUpper = classUpper;
+                    }
+                }
+            }
+            pathUpper = e->pathUpper;
         }
         if (g_buttonPathCache.size() > 128) {
             for (auto it = g_buttonPathCache.begin();
@@ -4259,6 +4336,7 @@ void ApplyAllHighlights_UIThread() {
         size_t rankIdx;
         size_t buttonIdx;
     };
+    ProcessImagePathCacheScope pathCacheScope;
     std::vector<Cand> cands;
     std::vector<std::wstring> buttonPaths(live.size());
     std::vector<ButtonIdentity> idents(live.size());
@@ -4322,6 +4400,16 @@ void ApplyAllHighlights_UIThread() {
                live.size());
     }
 
+    size_t resolvedButtons = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+        for (const auto& [id, e] : g_buttonPathCache) {
+            if (!e.pathUpper.empty() || !e.appIdUpper.empty()) {
+                ++resolvedButtons;
+            }
+        }
+    }
+    const bool requireTb = SettingsSnap()->requireTaskbarButton;
     std::vector<std::wstring> demoteKeys;
     for (size_t ri = 0; ri < ranks.size(); ++ri) {
         if (rankTaken[ri]) {
@@ -4330,33 +4418,30 @@ void ApplyAllHighlights_UIThread() {
         Wh_Log(L"  UNMATCHED rank %zu: %s (title=\"%s\")", ri + 1,
                ranks[ri].displayName.c_str(),
                ranks[ri].lastWindowTitle.c_str());
-        size_t resolvedButtons = 0;
-        {
-            std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-            for (const auto& [id, e] : g_buttonPathCache) {
-                if (!e.pathUpper.empty()) {
-                    ++resolvedButtons;
-                }
-            }
-        }
-        if (SettingsSnap()->requireTaskbarButton && resolvedButtons >= 2) {
+        // Drop the old path even if it was bound before — filename-only is
+        // not "still on the taskbar" (deleted exe, same name elsewhere).
+        if (requireTb && resolvedButtons >= 2 &&
+            !PathAppearsOnTaskbar(ranks[ri].key)) {
             demoteKeys.push_back(ranks[ri].key);
         }
     }
     // Demote after the loop so rank list stays stable while matching.
     if (!demoteKeys.empty()) {
-        std::lock_guard<std::mutex> lock(g_stateMutex);
-        auto& map = CurrentDeskLocked().appFocusMap;
-        for (const auto& key : demoteKeys) {
-            auto it = map.find(key);
-            if (it != map.end() && !it->second.seenOnTaskbar) {
-                Wh_Log(L"  demoting non-taskbar app from ranks: %s",
-                       it->second.displayName.c_str());
-                it->second.lastConfirmedFocusTick = 0;
-                it->second.seenOnTaskbar = false;
+        {
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            auto& map = CurrentDeskLocked().appFocusMap;
+            for (const auto& key : demoteKeys) {
+                auto it = map.find(key);
+                if (it != map.end()) {
+                    Wh_Log(L"  demoting unmatched app from ranks: %s",
+                           it->second.displayName.c_str());
+                    it->second.lastConfirmedFocusTick = 0;
+                    it->second.seenOnTaskbar = false;
+                }
             }
+            RecomputeRanksLocked();
         }
-        RecomputeRanksLocked();
+        RequestApplyVisualsDebounced();
     }
 }
 
@@ -6108,6 +6193,21 @@ void RefreshButtonHighlight(FrameworkElement button) {
         return;
     }
 
+    // Explorer reuses a TaskListButton when the exe is replaced. The cached
+    // paint rank still belongs to the old path if that HWND is gone. IsWindow
+    // only — do not OpenProcess from UpdateVisualStates.
+    if (TaskListButton_IsRunning(button)) {
+        const ButtonIdentity ident = GetCachedButtonIdentity(button);
+        if (ident.sampleHwnd && !IsWindow(ident.sampleHwnd)) {
+            if (ButtonHasOurChrome(button)) {
+                ClearButtonHighlight(button);
+            }
+            SetCachedPaintState(button, -1, SettingsSnap()->generation);
+            ScheduleRefreshAllHighlights(button);
+            return;
+        }
+    }
+
     // Sweep is ApplyAllHighlights. Clearing here blanks ranked icons until
     // that pass (desktop switch / decay flicker).
     int rank = GetCachedPaintState(button).rank;
@@ -6925,18 +7025,19 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     // that never show a TaskListButton.
     RunOnUiThread([key = pending.key, displayName = pending.displayName,
                    desktopId = pending.desktopId]() {
+        ProcessImagePathCacheScope pathCacheScope;
         auto live = CollectLiveButtonsOnThisDispatcher();
         for (auto& b : live) {
             EnsureButtonPathCached(b, /*force=*/false);
         }
 
-        const bool appears = PathAppearsOnTaskbar(key, displayName);
+        const bool appears = PathAppearsOnTaskbar(key);
 
         size_t resolvedButtons = 0;
         {
             std::lock_guard<std::mutex> lock(g_buttonPathMutex);
             for (const auto& [id, e] : g_buttonPathCache) {
-                if (!e.pathUpper.empty()) {
+                if (!e.pathUpper.empty() || !e.appIdUpper.empty()) {
                     ++resolvedButtons;
                 }
             }
@@ -7680,7 +7781,7 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.9.9");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.9.10");
 
     g_unloading = false;
     LoadSettings();
