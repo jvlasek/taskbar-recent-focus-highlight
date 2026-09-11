@@ -130,15 +130,13 @@ TaskItemThumbnailView::OnApplyTemplate → collect siblings → assign HWNDs →
 
 Resolve order in `RefreshThumbnailFlyout_UIThread`:
 
-1. **Repeater index** — `ItemsRepeater.TryGetElement(i)` + `Thumbnails.GetAt(i)`
-   + ctor map (raw ABI pointer, same as taskbar-thumbnail-reorder). Optional
-   symbols; missing → skip this pass. `repeaterSourceIndex` is the ItemsSource
-   slot (unrealized children must not shift GetAt). If a snap-group card is in
-   the repeater and not in `Thumbnails` (sizes: window-card count ==
-   `Thumbnails.Size()`), compact GetAt to the window ordinal. Other size
-   mismatches skip this pass.
-2. **TaskItem** — `DataContext` ↔ ctor map (COM identity). Often fails in
-   practice (projection mismatch) even when maps exist.
+1. **TaskItem** — `DataContext` ↔ ctor map (COM identity, per card). Exact;
+   cannot bind another flyout’s HWNDs.
+2. **Repeater index** — `ItemsRepeater.TryGetElement(i)` + `Thumbnails.GetAt(i)`
+   + ctor map, **holes only**. `g_TaskGroup_Thumbnails` is a global captured
+   on `TargetItemKey` and can be stale. Skip GetAt if sizes disagree, or if a
+   DataContext HWND on the same card disagrees with GetAt. Snap-group extra
+   in the repeater: compact to window ordinal.
 3. **Title unique** — only for unresolved cards. Prefer `DisplayNameTextBlock`
    when those texts differ across siblings. Each HWND used once. **Ambiguous**
    when two windows share the same title. Bracketed `[EPUB]` / `[PDF]` is a
@@ -148,7 +146,8 @@ Resolve order in `RefreshThumbnailFlyout_UIThread`:
 Do **not** assign HWNDs by group construction order or `EnumWindows`.
 `AutomationProperties.PositionInSet` is not refreshed on thumbnail reorder;
 repeater index is the visual order. Snap-group cards: `IconsRepeater` with
-2+ children (language-independent) — never glow those.
+2+ children **and** no window HWND — never glow those. A window card that
+gained a second icon still resolves an HWND and is not skipped.
 
 Then sort siblings with a recency tick (tick, confirmSeq, foreground) and
 paint the top `previewHighlightCount` at `previewIntensity` ranks.
@@ -560,7 +559,7 @@ and must not guess identity from localized UI strings.
 | Do not deref ctor-map `taskItem` | HWND gone ⇒ native `ITaskItem` likely freed; `GetWindowFromTaskItem` UAF | Store HWND at ctor; raw pointer is compare-only (thumbnail-reorder) |
 | UVS must not clear on overlay sweep | Desktop switch / decay set the flag then UVS blanked ranked icons until `ApplyAllHighlights` | Paint cached rank; the full bind is the sweep |
 | Paint cache includes edge + size | SizeChanged updated `lastEdge` then `ApplyButtonHighlight` early-out | Key is rank + settings + accent + edge + panel size |
-| Restore native z-order from a snapshot | Assumed `BackgroundElement` first / OverlayIcon above Icon | Save `IconPanel` child names before first move; Styler order comes back on clear |
+| Restore native z-order from a snapshot | Assumed `BackgroundElement` first / OverlayIcon above Icon | Save `weak_ref<UIElement>` in visual order (unnamed Styler children too) |
 | Paint rank **-1** ≠ **0** | First UVS scored an unresolved button as 0 and skipped the full bind | Unknown identity stays -1 and schedules rebind; 0 only after a real resolve said “no rank” |
 | Own `ScaleTransform` instance | `ClearValue` wiped `taskbar-dock-animation` | Remember the object we set; clear only that |
 | YAML defaults are real | All-zero preview intensities must not be “unset” | Do not override user 0s after an in-place recompile |
@@ -568,7 +567,8 @@ and must not guess identity from localized UI strings.
 | `lastHwnd` needs a PID | HWND values recycle; icon bind would follow the new owner | Store `lastPid`; `HwndMatchesStoredPid` before HWND identity |
 | `ConfirmPreviewFocusNow` off the click thread | `HandleClick` + `ResolveAppIdentity` + inline `RunOnUiThread` stalled the taskbar | `WM_APP_PREVIEW_CLICK` + HWND/PID; worker resolves |
 | Flyout refresh uses a stale card | Shared pending latch + oldest `g_trackedThumbViews` weak_ref | Coalesce onto one Low pass; prefer the card that scheduled it if still in a repeater |
-| Repeater index ≠ `Thumbnails` index | Snap-group card extra in one collection shifts every later GetAt | Compare sizes; compact window ordinal or skip pass 1 |
+| Repeater index ≠ `Thumbnails` index | Snap-group card extra in one collection shifts every later GetAt | Compare sizes; compact window ordinal or skip GetAt |
+| Stale global `Thumbnails` collection | `g_TaskGroup_Thumbnails` is from the last `TargetItemKey`; refresh also runs from OnApplyTemplate / decay | DataContext first; GetAt only if it agrees with a DataContext HWND |
 | Decay timer is not a heartbeat | 30 s tick with empty maps is wasted registry/COM work | Arm on first confirm; stop when every desktop map is empty |
 
 ---
@@ -582,7 +582,7 @@ filename-900 dropped, `ReportClicked` off UVS, empty-resolve retry, rank -1 vs 0
 `lastHwnd`+pid, replica/score prune, flyout Low coalesce, snap-group GetAt
 guard, click confirm on the focus thread, idle decay timer, pinned→running
 re-resolve, ctor-map HWND only, no UVS clear on overlay sweep, paint cache
-edge+size, native z-order snapshot.
+edge+size, native z-order snapshot, DataContext-first preview bind.
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).

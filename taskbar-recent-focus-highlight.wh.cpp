@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.8
+// @version         0.9.9
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -751,9 +751,9 @@ struct IconPanelLayoutWatch {
     winrt::event_token sizeChanged{};
     TaskbarEdge lastEdge = TaskbarEdge::Bottom;
     bool haveEdge = false;
-    // Child names in IconPanel before we first moved natives. Restore this
-    // on clear so Taskbar Styler (or a custom template) gets its order back.
-    std::vector<std::wstring> nativeChildNames;
+    // Native IconPanel children in visual order before we first moved them
+    // (including unnamed Styler-injected elements). Restore by identity.
+    std::vector<winrt::weak_ref<UIElement>> nativeChildren;
     bool haveNativeOrder = false;
 };
 std::mutex g_layoutWatchMutex;
@@ -1044,13 +1044,39 @@ std::wstring AlnumUpper(std::wstring_view s) {
     return out;
 }
 
+thread_local DWORD g_imagePathCachePid = 0;
+thread_local std::wstring g_imagePathCache;
+thread_local int g_imagePathCacheScope = 0;
+
+struct ProcessImagePathCacheScope {
+    ProcessImagePathCacheScope() { ++g_imagePathCacheScope; }
+    ~ProcessImagePathCacheScope() {
+        if (--g_imagePathCacheScope <= 0) {
+            g_imagePathCacheScope = 0;
+            g_imagePathCachePid = 0;
+            g_imagePathCache.clear();
+        }
+    }
+};
+
 std::wstring GetProcessImagePath(DWORD processId) {
+    if (g_imagePathCacheScope > 0 && processId != 0 &&
+        processId == g_imagePathCachePid) {
+        return g_imagePathCache;
+    }
     std::wstring path;
     HANDLE hProcess =
         OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
     if (!hProcess) {
         return path;
     }
+
+    auto remember = [&]() {
+        if (g_imagePathCacheScope > 0 && processId != 0) {
+            g_imagePathCachePid = processId;
+            g_imagePathCache = path;
+        }
+    };
 
     DWORD size = MAX_PATH;
     for (int attempt = 0; attempt < 5; ++attempt) {
@@ -1059,6 +1085,7 @@ std::wstring GetProcessImagePath(DWORD processId) {
         if (QueryFullProcessImageName(hProcess, 0, path.data(), &n)) {
             path.resize(n);
             CloseHandle(hProcess);
+            remember();
             return path;
         }
         const DWORD err = GetLastError();
@@ -1073,6 +1100,7 @@ std::wstring GetProcessImagePath(DWORD processId) {
         }
     }
     CloseHandle(hProcess);
+    remember();
     return path;
 }
 
@@ -2156,18 +2184,6 @@ int ScoreCachedIdentityForRank(const ButtonIdentity& ident,
     return 0;
 }
 
-int ScoreButtonForRank(FrameworkElement button,
-                       const AppFocusInfo& info,
-                       bool requireRunning) {
-    if (!button) {
-        return 0;
-    }
-    if (requireRunning && !ButtonCountsAsRunning(button)) {
-        return 0;
-    }
-    return ScoreCachedIdentityForRank(GetCachedButtonIdentity(button), info);
-}
-
 // Best rank for a single button (1-based), or 0.
 int FindRankForButton(FrameworkElement button,
                       const std::vector<AppFocusInfo>& ranks,
@@ -2501,21 +2517,25 @@ void RememberNativeIconPanelOrder(FrameworkElement iconPanel) {
     if (!id) {
         return;
     }
-    std::vector<std::wstring> names;
+    std::vector<winrt::weak_ref<UIElement>> saved;
     try {
         auto children = panel.Children();
         const uint32_t n = children.Size();
-        names.reserve(n);
+        saved.reserve(n);
         for (uint32_t i = 0; i < n; ++i) {
-            auto fe = children.GetAt(i).try_as<FrameworkElement>();
-            if (!fe) {
+            auto el = children.GetAt(i);
+            if (!el) {
                 continue;
             }
-            std::wstring name = fe.Name().c_str();
-            if (name.empty() || name == kGlowElementName) {
-                continue;
+            try {
+                if (auto fe = el.try_as<FrameworkElement>()) {
+                    if (fe.Name() == kGlowElementName) {
+                        continue;
+                    }
+                }
+            } catch (...) {
             }
-            names.push_back(std::move(name));
+            saved.push_back(winrt::make_weak(el));
         }
     } catch (...) {
         return;
@@ -2527,7 +2547,7 @@ void RememberNativeIconPanelOrder(FrameworkElement iconPanel) {
         it->second.haveNativeOrder) {
         return;
     }
-    it->second.nativeChildNames = std::move(names);
+    it->second.nativeChildren = std::move(saved);
     it->second.haveNativeOrder = true;
 }
 
@@ -2541,7 +2561,7 @@ void RestoreIconPanelNativeZOrder(FrameworkElement iconPanel) {
     }
     try {
         auto children = panel.Children();
-        std::vector<std::wstring> saved;
+        std::vector<winrt::weak_ref<UIElement>> saved;
         {
             void* id = InspectableIdentity(iconPanel);
             std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
@@ -2549,13 +2569,18 @@ void RestoreIconPanelNativeZOrder(FrameworkElement iconPanel) {
             if (it != g_layoutWatches.end() &&
                 WeakIsSameElement(it->second.panel, iconPanel) &&
                 it->second.haveNativeOrder) {
-                saved = it->second.nativeChildNames;
+                saved = it->second.nativeChildren;
             }
         }
         if (!saved.empty()) {
             uint32_t dest = 0;
-            for (const auto& name : saved) {
-                auto el = FindChildByName(iconPanel, name.c_str());
+            for (auto& weak : saved) {
+                UIElement el = nullptr;
+                try {
+                    el = weak.get();
+                } catch (...) {
+                    continue;
+                }
                 if (!el) {
                     continue;
                 }
@@ -2614,10 +2639,9 @@ bool ButtonHasOurChrome(FrameworkElement button) {
     }
     auto iconPanel = GetIconPanel(button);
     if (!iconPanel) {
-        return FindDescendantByName(button, kGlowElementName) != nullptr;
+        return FindChildByName(button, kGlowElementName) != nullptr;
     }
-    return FindChildByName(iconPanel, kGlowElementName) != nullptr ||
-           FindDescendantByName(iconPanel, kGlowElementName) != nullptr;
+    return FindChildByName(iconPanel, kGlowElementName) != nullptr;
 }
 
 void ClearButtonHighlight(FrameworkElement button) {
@@ -3356,8 +3380,12 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             panelH = 44.0;
         }
         const TaskbarEdge edge = CachedTaskbarEdge(iconPanel);
-        const int boxWi = static_cast<int>(panelW + 0.5);
-        const int boxHi = static_cast<int>(panelH + 0.5);
+        auto existingHost = FindChildByName(iconPanel, kGlowElementName);
+        double keyW = panelW;
+        double keyH = panelH;
+        GlowContentBoxSize(existingHost, iconPanel, panelW, panelH, keyW, keyH);
+        const int boxWi = static_cast<int>(keyW + 0.5);
+        const int boxHi = static_cast<int>(keyH + 0.5);
         {
             auto painted = GetCachedPaintState(button);
             if (painted.rank == rankOneBased &&
@@ -4928,7 +4956,7 @@ void SortThumbnailViewsVisualOrder(std::vector<FrameworkElement>& views) {
 
 // Snap-group card in the same flyout as the individual windows. Must not be
 // treated as a window thumbnail. Language-independent: the group card hosts
-// an IconsRepeater with 2+ icon children.
+// an IconsRepeater with 2+ icon children and has no window HWND.
 bool IsSnapGroupThumbnailView(FrameworkElement view) {
     if (!view) {
         return false;
@@ -4936,6 +4964,11 @@ bool IsSnapGroupThumbnailView(FrameworkElement view) {
     if (auto repeater = FindDescendantByName(view, L"IconsRepeater")) {
         try {
             if (Media::VisualTreeHelper::GetChildrenCount(repeater) >= 2) {
+                // A real window card that gained a second icon still has an
+                // HWND. A snap-group card does not.
+                if (ResolveHwndForThumbnailView(view)) {
+                    return false;
+                }
                 return true;
             }
         } catch (...) {
@@ -5264,8 +5297,9 @@ void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
         }
         winrt::weak_ref<FrameworkElement> weak =
             winrt::make_weak(dispatcherAnchor);
-        dispatcher.RunAsync(
-            winrt::Windows::UI::Core::CoreDispatcherPriority::Low, [weak]() {
+        if (!dispatcher.TryRunAsync(
+                winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
+                [weak]() {
                 g_previewFlyoutRefreshPending = false;
                 try {
                     if (g_unloading.load()) {
@@ -5302,7 +5336,9 @@ void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
                     g_thumbRelayoutDepth = 0;
                     g_previewFlyoutRefreshFollowUps = 0;
                 }
-            });
+            })) {
+            g_previewFlyoutRefreshPending = false;
+        }
     } catch (...) {
         g_previewFlyoutRefreshPending = false;
     }
@@ -5606,8 +5642,10 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     const std::vector<std::wstring> cardTitles = PickFlyoutCardTitles(siblings);
 
     // HWND pipeline (this flyout only — not a global window ladder):
-    //   1. Repeater index + Thumbnails.GetAt + ctor map (authoritative).
-    //   2. TaskItem — DataContext ↔ ctor map (COM identity).
+    //   1. TaskItem — DataContext ↔ ctor map (COM identity, per card).
+    //   2. Repeater index + Thumbnails.GetAt — only for holes, and only if
+    //      that collection agrees with a DataContext HWND (it is a global
+    //      captured on TargetItemKey and can be another app's flyout).
     //   3. Title unique — only for unresolved cards; each HWND once.
     enum class ResolveHow : int { None = 0, Repeater, TaskItem, Title };
     struct Scored {
@@ -5656,11 +5694,20 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         scored[i].view = siblings[i];
     }
 
-    // Pass 1: repeater index → GetAt → ctor map HWND.
-    // repeaterSourceIndex is the ItemsSource slot (round-3 compacted-vs-source
-    // fix). TaskGroup::Thumbnails is a different collection: a snap-group card
-    // can sit in the repeater and not in Thumbnails. Compare sizes before
-    // using source index as GetAt.
+    // Pass 1: DataContext ↔ ctor map. Exact, per card, cannot go stale.
+    for (size_t i = 0; i < siblings.size(); ++i) {
+        HWND hwnd = ResolveHwndForThumbnailView(siblings[i]);
+        if (hwnd && IsWindow(hwnd) && !usedHwnds.count(hwnd)) {
+            stampRecency(i, hwnd);
+            scored[i].how = ResolveHow::TaskItem;
+            usedHwnds.insert(hwnd);
+        }
+    }
+
+    // Pass 2: repeater index → GetAt → ctor map HWND, holes only.
+    // repeaterSourceIndex is the ItemsSource slot. g_TaskGroup_Thumbnails is
+    // a global captured on TargetItemKey — skip it if it disagrees with a
+    // DataContext HWND on the same card.
     if (usedRepeater) {
         const int thumbCount = ThumbnailsCollectionSize();
         int nSnap = 0;
@@ -5676,49 +5723,61 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
             !sizeUnknown && nSnap > 0 && thumbCount == nWindows;
         const bool sizesAgree =
             sizeUnknown || thumbCount == nRepeater || compactSnap;
+        bool indexBindTrusted = sizesAgree;
         if (!sizesAgree) {
             Wh_Log(L"Preview resolve: repeater/Thumbnails size mismatch "
                    L"(repeater=%d thumbs=%d snap=%d) — skip index bind",
                    nRepeater, thumbCount, nSnap);
-        } else {
-            if (compactSnap) {
-                Wh_Log(L"Preview resolve: snap-group extra in repeater "
-                       L"(repeater=%d thumbs=%d) — compact GetAt index",
-                       nRepeater, thumbCount);
-            }
+        } else if (compactSnap) {
+            Wh_Log(L"Preview resolve: snap-group extra in repeater "
+                   L"(repeater=%d thumbs=%d) — compact GetAt index",
+                   nRepeater, thumbCount);
+        }
+        auto getAtIndexForSibling = [&](size_t siWant) -> int {
             size_t si = 0;
-            for (size_t ri = 0; ri < allViews.size() && si < siblings.size();
-                 ++ri) {
+            for (size_t ri = 0; ri < allViews.size(); ++ri) {
                 if (IsSnapGroupThumbnailView(allViews[ri])) {
                     continue;
                 }
-                const int srcIndex =
-                    (ri < repeaterSourceIndex.size())
-                        ? repeaterSourceIndex[ri]
-                        : static_cast<int>(ri);
-                const int getAtIndex =
-                    compactSnap ? static_cast<int>(si) : srcIndex;
-                HWND hwnd = HwndFromThumbnailsGetAt(getAtIndex);
-                if (hwnd && IsWindow(hwnd) && !usedHwnds.count(hwnd)) {
-                    stampRecency(si, hwnd);
-                    scored[si].how = ResolveHow::Repeater;
-                    usedHwnds.insert(hwnd);
+                if (si == siWant) {
+                    const int srcIndex =
+                        (ri < repeaterSourceIndex.size())
+                            ? repeaterSourceIndex[ri]
+                            : static_cast<int>(ri);
+                    return compactSnap ? static_cast<int>(si) : srcIndex;
                 }
                 ++si;
             }
+            return -1;
+        };
+        if (indexBindTrusted) {
+            for (size_t i = 0; i < siblings.size(); ++i) {
+                if (scored[i].how != ResolveHow::TaskItem) {
+                    continue;
+                }
+                const int idx = getAtIndexForSibling(i);
+                HWND fromAt = HwndFromThumbnailsGetAt(idx);
+                if (fromAt && fromAt != scored[i].hwnd) {
+                    Wh_Log(L"Preview resolve: Thumbnails collection does not "
+                           L"match this flyout — skip index bind");
+                    indexBindTrusted = false;
+                    break;
+                }
+            }
         }
-    }
-
-    // Pass 2: DataContext ↔ ctor map. Never overwrite a repeater bind.
-    for (size_t i = 0; i < siblings.size(); ++i) {
-        if (scored[i].hwnd) {
-            continue;
-        }
-        HWND hwnd = ResolveHwndForThumbnailView(siblings[i]);
-        if (hwnd && IsWindow(hwnd) && !usedHwnds.count(hwnd)) {
-            stampRecency(i, hwnd);
-            scored[i].how = ResolveHow::TaskItem;
-            usedHwnds.insert(hwnd);
+        if (indexBindTrusted) {
+            for (size_t i = 0; i < siblings.size(); ++i) {
+                if (scored[i].hwnd) {
+                    continue;
+                }
+                const int getAtIndex = getAtIndexForSibling(i);
+                HWND hwnd = HwndFromThumbnailsGetAt(getAtIndex);
+                if (hwnd && IsWindow(hwnd) && !usedHwnds.count(hwnd)) {
+                    stampRecency(i, hwnd);
+                    scored[i].how = ResolveHow::Repeater;
+                    usedHwnds.insert(hwnd);
+                }
+            }
         }
     }
 
@@ -6092,9 +6151,16 @@ void RefreshButtonHighlight(FrameworkElement button) {
 // pass restores siblings whose visuals Windows reset without another UVS.
 // Per dispatcher so primary and secondary taskbars do not throttle each other.
 void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor) {
-    if (!dispatcherAnchor) {
+    if (!dispatcherAnchor || g_unloading.load()) {
         return;
     }
+    const ULONGLONG now = GetTickCount64();
+    if (now - g_lastFullRefreshTick < kFullRebindDebounceMs &&
+        g_lastFullRefreshTick != 0) {
+        PostToHookThread(WM_APP_REQUEST_APPLY_DEBOUNCED);
+        return;
+    }
+    g_lastFullRefreshTick = now;
     try {
         winrt::weak_ref<FrameworkElement> weak =
             winrt::make_weak(dispatcherAnchor);
@@ -6102,17 +6168,7 @@ void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor) {
             winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
             [weak]() {
                 try {
-                    const ULONGLONG now = GetTickCount64();
-                    if (now - g_lastFullRefreshTick < kFullRebindDebounceMs &&
-                        g_lastFullRefreshTick != 0) {
-                        // Coalesce a trailing full bind after the hover storm
-                        // so siblings Windows reset without UVS get restored.
-                        // SetTimer must run on the hook thread (window owner).
-                        PostToHookThread(WM_APP_REQUEST_APPLY_DEBOUNCED);
-                        return;
-                    }
-                    g_lastFullRefreshTick = now;
-                    if (!weak.get()) {
+                    if (g_unloading.load() || !weak.get()) {
                         return;
                     }
                     ApplyAllHighlights_UIThread();
@@ -6956,6 +7012,7 @@ void HandleForegroundChanged(HWND hWnd) {
     if (g_unloading.load()) {
         return;
     }
+    ProcessImagePathCacheScope pathCacheScope;
 
     hWnd = NormalizeFocusHwnd(hWnd);
 
@@ -7623,10 +7680,19 @@ void LoadSettings() {
 // ---------------------------------------------------------------------------
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.9.8");
+    Wh_Log(L"> Taskbar Recent Focus Highlight init v0.9.9");
 
     g_unloading = false;
     LoadSettings();
+    {
+        auto settings = SettingsSnap();
+        if (settings->highlightCount <= 0 &&
+            !settings->previewHighlightEnabled) {
+            Wh_Log(L"Nothing to paint (highlightCount=0, previews off) — "
+                   L"skipping init");
+            return FALSE;
+        }
+    }
 
     HMODULE kernelBaseModule = GetModuleHandle(L"kernelbase.dll");
     if (!kernelBaseModule) {
@@ -7724,6 +7790,7 @@ void Wh_ModUninit() {
         std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
         g_thumbnailTaskItemMapping.clear();
     }
+    g_TaskGroup_Thumbnails = {};
     {
         std::lock_guard<std::mutex> lock(g_thumbViewsMutex);
         g_trackedThumbViews.clear();
