@@ -188,11 +188,10 @@ Rules:
 
 | `previewStyle` | Implementation |
 |----------------|----------------|
-| `titleBar` | Thin rect just under title baseline (~2px gap); 6px side inset |
+| `titleBar` | Thin rect just under title baseline (~2px gap); 8px side inset |
 | `titleBg` | Soft wash; 4px corners (`CornerRadius{4,4,4,4}` — `{4}` is TopLeft only), 8px inset |
 | `plate` | Tint `BackgroundBorder`; marker Tag holds the previous Brush (Taskbar Styler / template) and is restored on clear |
 | `plateTitle` | Rank 1 = plate; ranks 2+ = titleBg |
-| `ring` | Hollow frame via transform (placeholder) |
 
 Clear (unload / unranked) removes named overlays. A ranked repaint keeps
 `WhRecentFocusThumbGlow` and only hides children + restores the plate brush.
@@ -407,7 +406,7 @@ General keys stay top-level; icon/preview keys are dotted.
 | Taskbar icons | `icons.sizeBoostRank1..3` | `sizeBoostPercent[3]` |
 | Thumbnail previews | `previews.highlightEnabled` | preview master |
 | Thumbnail previews | `previews.highlightCount` | per-flyout top N |
-| Thumbnail previews | `previews.style` | `titleBar` / `titleBg` / `plate` / `plateTitle` / `ring` |
+| Thumbnail previews | `previews.style` | `titleBar` / `titleBg` / `plate` / `plateTitle` (saved `ring` loads as hybrid) |
 | Thumbnail previews | `previews.intensityRank1..3` | `previewIntensity[3]` |
 | Thumbnail previews | `previews.fillOpacity` | plate + titleBg wash (not title bar line) |
 | Thumbnail previews | `previews.minFocusSeconds` | window confirm |
@@ -706,7 +705,9 @@ re-resolve, ctor-map HWND only, no UVS clear on overlay sweep, paint cache
 edge+size, native z-order snapshot, DataContext-first preview bind,
 unique-title same-process, Thumbnails clear-on-retarget, bounded transient
 min-focus, File Explorer folder windows, deadline-style full-rebind debounce,
-preview overlay host reuse.
+preview overlay host reuse, window recency key is path or `APPID:` (not AFH
+path), ring preview style removed (hybrid default), OverlayIcon raised after
+snapshot restore (Thunderbird/Discord badge).
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).

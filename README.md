@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.19 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.20 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -25,7 +25,7 @@ too — so “which one did I just use?” is unclear.
    multi-window thumbnail flyout opens, that flyout gets its own recency list
    and marks the top N windows with rank intensities. Default is **hybrid**
    (plate for rank 1, title tint for 2+); title bar, title wash, whole plate,
-   and ring are also available.
+   are also available.
 
 ## Features
 
@@ -86,7 +86,7 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 |---------|-------------|---------|
 | Highlight recent windows in previews | Multi-window flyout ranks | On |
 | Number of highlighted windows | Top N in **that** flyout (1–6 recommended) | 3 |
-| Preview highlight style | Title bar / Title bg / Plate / Hybrid / Ring | **Hybrid** |
+| Preview highlight style | Title bar / Title bg / Plate / Hybrid | **Hybrid** |
 | Intensity rank 1/2/3 | Strength per window rank (0–100) | 100 / 70 / 45 |
 | Preview tint opacity | Plate + title-background wash (0–100) | 40 |
 | Preview minimum focus (seconds) | Window→preview recency (separate from apps). A thumbnail / grouped-icon click confirms immediately. | 1 |
@@ -100,7 +100,6 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 | **Title bar** | Thin accent line under the window title | Sits just below the text |
 | **Title background** | Soft wash behind the title | Kept light so text stays readable; intensity scales linearly |
 | **Whole preview plate** | Tints the card chrome (`BackgroundBorder`) | Strong signal; previous brush restored on clear (Taskbar Styler) |
-| **Ring** | Hollow frame around the card | Simple placeholder |
 
 Single-window flyouts are **never** marked (nothing to disambiguate). Ranking
 is **per flyout**: Chrome’s last-used window is rank 1 in the Chrome flyout even
