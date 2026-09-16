@@ -585,8 +585,11 @@ next round’s required finding.
    Unbounded waits. **Stop the worker first**, then drain UI. Ready event
    before `Start` returns. Mod `hInstance` for the message class;
    `ERROR_CLASS_ALREADY_EXISTS` is fatal. No strong XAML in CRT-destroyed
-   globals. Cite: `taskbar-clock-customization` join, wiki “Global objects
-   and process shutdown”.
+   globals. `TryRunAsync` “queued?” is `GetResults()` / `Status()`, not
+   `static_cast<bool>(op)` (that hang uninit). Cite: `taskbar-clock-customization`
+   join, `taskbar-vertical` TryRunAsync, wiki “Global objects and process
+   shutdown”. Identity/View symbol hook failure at init is `return FALSE`
+   except Taskbar.View not loaded yet (LoadLibrary retry).
 2. **Own your threads and apartments.** `SetTimer` only on the HWND’s owner.
    COM (`IVirtualDesktopManager`, `SHGetPropertyStoreForWindow`) on one STA,
    never under a mutex the UI thread takes to paint. No

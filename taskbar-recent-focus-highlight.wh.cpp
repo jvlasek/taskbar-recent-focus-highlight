@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.20
+// @version         0.9.22
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -227,8 +227,10 @@ to clear highlights.
       $name: Highlight style
       $description: >-
         How to mark ranked windows. Hybrid (default) = whole plate for rank 1,
-        title wash for ranks 2+. Title bar = thin line under the title.
-        Title background = soft wash behind the title. Plate = tint the whole card.
+        title wash for ranks 2+. Title bar = thin line under the title
+        (thickness follows Icons → Thickness). Title background = soft wash
+        behind the title. Plate = tint the whole card (corners follow Icons →
+        Roundness).
       $options:
       - titleBar: Bar under window title
       - titleBg: Title background tint
@@ -690,6 +692,11 @@ bool RememberUiDispatcher(FrameworkElement el) {
     }
 }
 
+bool DispatcherTryRun(
+    winrt::Windows::UI::Core::CoreDispatcher const& dispatcher,
+    winrt::Windows::UI::Core::CoreDispatcherPriority prio,
+    winrt::Windows::UI::Core::DispatchedHandler const& handler);
+
 constexpr UINT WM_APP_FOREGROUND_CHANGED = WM_APP + 1;
 constexpr UINT WM_APP_DESKTOP_SWITCHED = WM_APP + 2;
 constexpr UINT WM_APP_SHUTDOWN = WM_APP + 3;
@@ -697,9 +704,6 @@ constexpr UINT WM_APP_REQUEST_APPLY_DEBOUNCED = WM_APP + 4;
 constexpr UINT WM_APP_REFRESH_ACCENT = WM_APP + 5;
 constexpr UINT WM_APP_PREVIEW_CLICK = WM_APP + 6;
 
-// Identity scores. Only exact identity may bind the same rank to many buttons
-// (secondary taskbar / Never Combine). Filename-only is not a match.
-constexpr int kScoreExactIdentity = 1000;
 constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
@@ -792,7 +796,7 @@ IVirtualDesktopManager* EnsureVdm() {
     }
     IVirtualDesktopManager* vdm = nullptr;
     HRESULT hr = CoCreateInstance(kClsidVirtualDesktopManager, nullptr,
-                                  CLSCTX_ALL, IID_PPV_ARGS(&vdm));
+                                  CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&vdm));
     if (FAILED(hr) || !vdm) {
         Wh_Log(L"IVirtualDesktopManager create failed %08X", hr);
         return nullptr;
@@ -2176,10 +2180,10 @@ int ScoreTitleToAutomationName(const std::wstring& windowTitle,
     return 0;
 }
 
-// Score a cached identity against one ranked app. Path / AUMID / HWND only.
-// 0 = no match. 1000 may bind the same rank to many buttons (secondary).
-int ScoreCachedIdentityForRank(const ButtonIdentity& ident,
-                               const AppFocusInfo& info) {
+// Path / AUMID / HWND only. Same rank may bind many buttons (secondary /
+// Never Combine). Filename-only is not a match.
+bool IdentityMatchesRank(const ButtonIdentity& ident,
+                         const AppFocusInfo& info) {
     const std::wstring& rankCls = info.classUpper;
 
     auto hwndOnButton = [&](HWND h) -> bool {
@@ -2205,16 +2209,13 @@ int ScoreCachedIdentityForRank(const ButtonIdentity& ident,
     if (info.lastHwnd && info.lastPid &&
         HwndMatchesStoredPid(info.lastHwnd, info.lastPid) &&
         hwndOnButton(info.lastHwnd)) {
-        return kScoreExactIdentity;
+        return true;
     }
 
     if (IsAppIdKey(info.key)) {
         const std::wstring want = AppIdFromAppKey(info.key);
         const std::wstring got = CanonicalAppId(ident.appIdUpper);
-        if (!want.empty() && got == want) {
-            return kScoreExactIdentity;
-        }
-        return 0;
+        return !want.empty() && got == want;
     }
 
     const bool exactPath =
@@ -2224,11 +2225,11 @@ int ScoreCachedIdentityForRank(const ButtonIdentity& ident,
             ident.classUpper != rankCls) {
             // Same exe, different window class (e.g. two icons from one
             // process).
-            return 0;
+            return false;
         }
-        return kScoreExactIdentity;
+        return true;
     }
-    return 0;
+    return false;
 }
 
 // Best rank for a single button (1-based), or 0.
@@ -2243,19 +2244,12 @@ int FindRankForButton(FrameworkElement button,
     }
 
     const ButtonIdentity ident = GetCachedButtonIdentity(button);
-    int bestRank = 0;
-    int bestScore = 0;
     for (size_t i = 0; i < ranks.size(); i++) {
-        int s = ScoreCachedIdentityForRank(ident, ranks[i]);
-        if (s > bestScore) {
-            bestScore = s;
-            bestRank = static_cast<int>(i) + 1;
+        if (IdentityMatchesRank(ident, ranks[i])) {
+            return static_cast<int>(i) + 1;
         }
     }
-    if (bestScore < kScoreExactIdentity) {
-        return 0;
-    }
-    return bestRank;
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -4366,11 +4360,11 @@ void ApplyAllHighlights_UIThread() {
 
     std::vector<FrameworkElement> live = CollectLiveButtonsOnThisDispatcher();
 
+    Wh_Log(L"ApplyAllHighlights: %zu tracked buttons, %zu ranks desktop=%s",
+           live.size(), ranks.size(), GuidToLogString(deskId).c_str());
     for (size_t i = 0; i < ranks.size(); ++i) {
         Wh_Log(L"  rank list[%zu]: %s", i + 1, ranks[i].displayName.c_str());
     }
-    Wh_Log(L"ApplyAllHighlights: %zu tracked buttons, %zu ranks desktop=%s",
-           live.size(), ranks.size(), GuidToLogString(deskId).c_str());
 
     if (g_unloading.load() || ranks.empty()) {
         for (auto& button : live) {
@@ -4383,16 +4377,6 @@ void ApplyAllHighlights_UIThread() {
                    live.size());
         }
         return;
-    }
-
-    int dumped = 0;
-    for (auto& button : live) {
-        Wh_Log(L"  button[%d]: running=%d name=\"%s\"", dumped,
-               TaskListButton_IsRunning(button) ? 1 : 0,
-               GetButtonAutomationName(button).c_str());
-        if (++dumped >= 24) {
-            break;
-        }
     }
 
     // Path / AUMID / HWND only. Exact identity may bind the same rank to many
@@ -4416,8 +4400,7 @@ void ApplyAllHighlights_UIThread() {
             if (!running[bi]) {
                 continue;
             }
-            int s = ScoreCachedIdentityForRank(idents[bi], ranks[ri]);
-            if (s >= kScoreExactIdentity) {
+            if (IdentityMatchesRank(idents[bi], ranks[ri])) {
                 cands.push_back({ri, bi});
             }
         }
@@ -5472,7 +5455,8 @@ void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
         }
         winrt::weak_ref<FrameworkElement> weak =
             winrt::make_weak(dispatcherAnchor);
-        if (!dispatcher.TryRunAsync(
+        if (!DispatcherTryRun(
+                dispatcher,
                 winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
                 [weak]() {
                 g_previewFlyoutRefreshPending = false;
@@ -6143,6 +6127,68 @@ void RequestApplyPreviewVisuals() {
 // Expected at startup before any TaskListButton is seen — log once, not per call.
 std::atomic<bool> g_loggedNoDispatcherAnchor{false};
 
+// TryRunAsync: do not static_cast the operation object to bool (always true).
+// Some SDKs return IAsyncOperation<bool> (GetResults = queued); others
+// IAsyncAction (Status Error/Canceled = not queued).
+bool DispatcherOpWasQueued(
+    winrt::Windows::Foundation::IAsyncOperation<bool> const& op) {
+    if (!op) {
+        return false;
+    }
+    if (op.Status() == winrt::Windows::Foundation::AsyncStatus::Completed) {
+        try {
+            return op.GetResults();
+        } catch (...) {
+            return false;
+        }
+    }
+    if (op.Status() == winrt::Windows::Foundation::AsyncStatus::Error ||
+        op.Status() == winrt::Windows::Foundation::AsyncStatus::Canceled) {
+        return false;
+    }
+    return true;
+}
+
+bool DispatcherOpWasQueued(winrt::Windows::Foundation::IAsyncAction const& op) {
+    if (!op) {
+        return false;
+    }
+    auto const st = op.Status();
+    return st != winrt::Windows::Foundation::AsyncStatus::Error &&
+           st != winrt::Windows::Foundation::AsyncStatus::Canceled;
+}
+
+bool DispatcherTryRun(
+    winrt::Windows::UI::Core::CoreDispatcher const& dispatcher,
+    winrt::Windows::UI::Core::CoreDispatcherPriority prio,
+    winrt::Windows::UI::Core::DispatchedHandler const& handler) {
+    try {
+        return DispatcherOpWasQueued(dispatcher.TryRunAsync(prio, handler));
+    } catch (...) {
+        return false;
+    }
+}
+
+template <typename Op>
+void SignalIfDrainNeverRan(Op const& op, HANDLE done) {
+    if (!op || !done) {
+        return;
+    }
+    try {
+        op.Completed([done](auto&& o, auto&&) {
+            try {
+                if (!DispatcherOpWasQueued(o)) {
+                    SetEvent(done);
+                }
+            } catch (...) {
+                SetEvent(done);
+            }
+        });
+    } catch (...) {
+        SetEvent(done);
+    }
+}
+
 std::vector<winrt::Windows::UI::Core::CoreDispatcher> CollectUiDispatchers() {
     std::lock_guard<std::mutex> lock(g_dispatchersMutex);
     if (!g_uiDispatchers) {
@@ -6177,12 +6223,19 @@ bool RunOnEachUiDispatcherAndWait(
             bool posted = false;
             bool drainPosted = false;
             try {
-                posted = static_cast<bool>(dispatcher.TryRunAsync(
+                posted = DispatcherTryRun(
+                    dispatcher,
                     winrt::Windows::UI::Core::CoreDispatcherPriority::High,
-                    handler));
-                drainPosted = static_cast<bool>(dispatcher.TryRunAsync(
+                    handler);
+                auto drainOp = dispatcher.TryRunAsync(
                     winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
-                    [done]() { SetEvent(done); }));
+                    [done]() { SetEvent(done); });
+                drainPosted = DispatcherOpWasQueued(drainOp);
+                if (drainPosted && drainOp &&
+                    drainOp.Status() !=
+                        winrt::Windows::Foundation::AsyncStatus::Completed) {
+                    SignalIfDrainNeverRan(drainOp, done);
+                }
             } catch (...) {
             }
             if (!posted) {
@@ -6229,7 +6282,8 @@ bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler) {
                 any = true;
                 continue;
             }
-            if (dispatcher.TryRunAsync(
+            if (DispatcherTryRun(
+                    dispatcher,
                     winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
                     handler)) {
                 any = true;
@@ -6355,22 +6409,27 @@ void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor) {
         PostToHookThread(WM_APP_REQUEST_APPLY_DEBOUNCED);
         return;
     }
-    g_lastFullRefreshTick = now;
     try {
         winrt::weak_ref<FrameworkElement> weak =
             winrt::make_weak(dispatcherAnchor);
-        dispatcherAnchor.Dispatcher().TryRunAsync(
-            winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
-            [weak]() {
-                try {
-                    if (g_unloading.load() || !weak.get()) {
-                        return;
+        if (!DispatcherTryRun(
+                dispatcherAnchor.Dispatcher(),
+                winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
+                [weak]() {
+                    try {
+                        if (g_unloading.load() || !weak.get()) {
+                            return;
+                        }
+                        ApplyAllHighlights_UIThread();
+                    } catch (...) {
                     }
-                    ApplyAllHighlights_UIThread();
-                } catch (...) {
-                }
-            });
+                })) {
+            PostToHookThread(WM_APP_REQUEST_APPLY_DEBOUNCED);
+            return;
+        }
+        g_lastFullRefreshTick = now;
     } catch (...) {
+        PostToHookThread(WM_APP_REQUEST_APPLY_DEBOUNCED);
     }
 }
 
@@ -6710,8 +6769,10 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
     // count used to bind the last app's HWNDs with no DataContext to check.
     g_TaskGroup_Thumbnails = {};
     g_inHoverFlyoutModel_TargetItemKey = true;
+    struct ResetInTargetKey {
+        ~ResetInTargetKey() { g_inHoverFlyoutModel_TargetItemKey = false; }
+    } resetInTarget;
     HoverFlyoutModel_TargetItemKey_Original(pThis, param1);
-    g_inHoverFlyoutModel_TargetItemKey = false;
     if (g_unloading.load() || !SettingsSnap()->previewHighlightEnabled) {
         return;
     }
@@ -6850,12 +6911,14 @@ HMODULE GetTaskbarViewModuleHandle() {
 }
 
 void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName) {
-    if (!g_taskbarViewDllLoaded && GetTaskbarViewModuleHandle() == module &&
-        !g_taskbarViewDllLoaded.exchange(true)) {
-        Wh_Log(L"Loaded %s", lpLibFileName);
-        if (HookTaskbarViewDllSymbols(module)) {
-            Wh_ApplyHookOperations();
-        }
+    if (g_taskbarViewDllLoaded.load() ||
+        GetTaskbarViewModuleHandle() != module) {
+        return;
+    }
+    Wh_Log(L"Loaded %s", lpLibFileName);
+    if (HookTaskbarViewDllSymbols(module)) {
+        g_taskbarViewDllLoaded = true;
+        Wh_ApplyHookOperations();
     }
 }
 
@@ -7953,16 +8016,17 @@ BOOL Wh_ModInit() {
                                    LoadLibraryExW_Hook,
                                    &LoadLibraryExW_Original);
 
-    // Identity resolve (taskband) — optional; no path cache means no icon glow.
     if (!HookTaskbarDllSymbols()) {
-        Wh_Log(L"Warning: taskbar.dll identity hooks failed — no icon path cache");
+        Wh_Log(L"taskbar.dll identity hooks failed");
+        return FALSE;
     }
 
     if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
-        g_taskbarViewDllLoaded = true;
         if (!HookTaskbarViewDllSymbols(taskbarViewModule)) {
-            Wh_Log(L"Warning: Taskbar.View hooks failed — visuals unavailable");
+            Wh_Log(L"Taskbar.View hooks failed");
+            return FALSE;
         }
+        g_taskbarViewDllLoaded = true;
     } else {
         Wh_Log(L"Taskbar view module not loaded yet");
     }
@@ -7976,11 +8040,10 @@ void Wh_ModAfterInit() {
 
     if (!g_taskbarViewDllLoaded) {
         if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
-            if (!g_taskbarViewDllLoaded.exchange(true)) {
-                Wh_Log(L"Got Taskbar.View.dll");
-                if (HookTaskbarViewDllSymbols(taskbarViewModule)) {
-                    Wh_ApplyHookOperations();
-                }
+            Wh_Log(L"Got Taskbar.View.dll");
+            if (HookTaskbarViewDllSymbols(taskbarViewModule)) {
+                g_taskbarViewDllLoaded = true;
+                Wh_ApplyHookOperations();
             }
         }
     }
