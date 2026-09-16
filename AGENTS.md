@@ -139,14 +139,19 @@ Resolve order in `RefreshThumbnailFlyout_UIThread`:
    cannot bind another flyout’s HWNDs.
 2. **Repeater index** — `ItemsRepeater.TryGetElement(i)` + `Thumbnails.GetAt(i)`
    + ctor map, **holes only**. `g_TaskGroup_Thumbnails` is a global captured
-   on `TargetItemKey` and can be stale. Skip GetAt if sizes disagree, or if a
+   on `TargetItemKey`. **Clear it on the way in** to that hook so it is
+   non-null only for the current target. Skip GetAt if sizes disagree, or if a
    DataContext HWND on the same card disagrees with GetAt. Snap-group extra
-   in the repeater: compact to window ordinal.
-3. **Title unique** — only for unresolved cards. Prefer `DisplayNameTextBlock`
-   when those texts differ across siblings. Each HWND used once. **Ambiguous**
-   when two windows share the same title. Bracketed `[EPUB]` / `[PDF]` is a
-   format tag, **not** a file path — only `[c:\…\file]` or `[name.ext]` is an
-   identity key.
+   in the repeater: compact to window ordinal. Compute `IsSnapGroupThumbnailView`
+   once per flyout (it walks the tree + ctor map).
+3. **Title unique** — only for unresolved cards, and only against windows of
+   **this flyout’s process** (`WindowFocusInfo::processKey`). Hosted UWP also
+   requires the same AppUserModelID (AFH is shared). Skip the pass when no
+   sibling resolved by TaskItem/repeater (fail closed). Prefer
+   `DisplayNameTextBlock` when those texts differ across siblings. Each HWND
+   used once. **Ambiguous** when two windows share the same title. Bracketed
+   `[EPUB]` / `[PDF]` is a format tag, **not** a file path — only `[c:\…\file]`
+   or `[name.ext]` is an identity key.
 
 Do **not** assign HWNDs by group construction order or `EnumWindows`.
 `AutomationProperties.PositionInSet` is not refreshed on thumbnail reorder;
@@ -176,22 +181,24 @@ cell (0,0) expands the title row (bar between icon and text + card grows).
 Rules:
 
 1. Overlay host **spans all rows/columns** (`SpanHostOverPanel`) + Stretch.
-2. Children positioned with **explicit size + `RenderTransform`** so measure
-   does not include visual offset.
+2. Children positioned with **explicit size + Margin** (not `RenderTransform`:
+   the layout clip is the un-transformed slot and squares the right end-cap).
 3. Own names: `WhRecentFocusThumbGlow`, `WhRecentFocusThumbTitleBar`,
    `WhRecentFocusThumbTitleBg`, marker `WhRecentFocusThumbNative` for plate.
 
 | `previewStyle` | Implementation |
 |----------------|----------------|
-| `titleBar` | Thin rect just under title baseline (~2px gap) |
-| `titleBg` | Soft wash; alpha = tint-opacity × rank intensity (linear) |
+| `titleBar` | Thin rect just under title baseline (~2px gap); 6px side inset |
+| `titleBg` | Soft wash; 4px corners (`CornerRadius{4,4,4,4}` — `{4}` is TopLeft only), 8px inset |
 | `plate` | Tint `BackgroundBorder`; marker Tag holds the previous Brush (Taskbar Styler / template) and is restored on clear |
 | `plateTitle` | Rank 1 = plate; ranks 2+ = titleBg |
 | `ring` | Hollow frame via transform (placeholder) |
 
-Clear always removes named overlays. Plate restores the saved `BackgroundBorder`
-brush (or `ClearValue` if there was no local value) so Taskbar Styler tints
-survive. If the marker cannot be created, fall back to our overlay plate.
+Clear (unload / unranked) removes named overlays. A ranked repaint keeps
+`WhRecentFocusThumbGlow` and only hides children + restores the plate brush.
+Plate restores the saved `BackgroundBorder` brush (or `ClearValue` if there
+was no local value) so Taskbar Styler tints survive. If the marker cannot be
+created, fall back to our overlay plate.
 
 ---
 
@@ -257,7 +264,7 @@ or thumbnail `OnApplyTemplate`.
 | App decay | Default 30 min | List stays “recent” |
 | Preview decay | Default 15 min | Separate |
 | Exclude list | Path / file / AppId, case-insensitive | Standard Windhawk UX |
-| Shell hosts ignored | explorer, SearchHost, StartMenu, ShellHost, TextInputHost | Don’t rank the shell. AFH/WWAHost **are** ranked via `APPID:` |
+| Shell hosts ignored | SearchHost, StartMenu, ShellHost, TextInputHost; explorer **except** `CabinetWClass` / `ExploreWClass` | Don’t rank the shell. Folder windows are a real app (same process as the taskbar). AFH/WWAHost **are** ranked via `APPID:` |
 | Highlight count | 0–16 (UI suggests 1–6) | Settings-capped |
 | Preview highlight count | 0–16 (UI suggests 1–6) | Per-flyout cap |
 | Tray-only | `requireTaskbarButton` default on | No TaskListButton ⇒ not ranked. Unmatched + exact path/AUMID gone from the cache ⇒ demote even if `seenOnTaskbar` (filename is not “still on the taskbar”). |
@@ -290,17 +297,22 @@ pending focus.
 
 Alt-Tab UI, taskbar, desktop, and IME (`IsTransientForeground`) are **not**
 a leave: do not clear `g_pendingFocus` or cancel min-focus timers. The landed
-app often does not get a second `EVENT_SYSTEM_FOREGROUND`. Same-app
-foreground events call `EnsurePendingAppTimer` so a stale `WM_TIMER` that
-`KillTimer`’d the live one-shot cannot leave a candidate with no clock.
-Transient and “ranks already exist” repaints use `RequestApplyVisualsDebounced`
-(300 ms) so Alt+Tab is one full bind, not two. Confirm, decay, and desktop
-switch stay immediate.
+app often does not get a second `EVENT_SYSTEM_FOREGROUND`. After the original
+deadline, re-arm at 200 ms only for `TransientGraceMs` (same as min-focus,
+at least 2 s), then drop the candidate — File Explorer used to poll forever
+because it is this `explorer.exe`. Folder windows (`CabinetWClass`) are a
+real leave and can be ranked. Same-app foreground events call
+`EnsurePendingAppTimer` so a stale `WM_TIMER` that `KillTimer`’d the live
+one-shot cannot leave a candidate with no clock. Transient and “ranks already
+exist” repaints use `RequestApplyVisualsDebounced` (300 ms, skip `SetTimer`
+if already armed) so Alt+Tab is one full bind, not two. Confirm, decay, and
+desktop switch stay immediate.
 
 Promotion (windows): `previewMinFocusSeconds` → `StampWindowRecencyLocked` on
 that desktop’s window map. On flyout open, siblings are sorted by **this
 desktop’s** map (tick, then confirmSeq) and the top `previewHighlightCount`
-get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
+get ranks 1…N. HWND resolve is TaskItem → repeater GetAt → unique title
+(same process / AUMID; skipped with no exact sibling).
 
 ---
 
@@ -322,9 +334,9 @@ get ranks 1…N. HWND resolve is repeater GetAt → TaskItem → unique title.
 | Virtual desktops | Nested recency maps; no taskband reordering hooks | Explorer already filters `IsRunning` |
 | Decay clear | Recompute + `g_pendingOverlaySweep` | No orphan plates |
 | Never | `ClearValue` BackgroundElement; clip null ancestors | Pale hover leftovers |
-| Preview layout | Span rows + RenderTransform | Title-row expansion bug |
+| Preview layout | Span rows + Margin (not RenderTransform) | Title-row expansion; transform clipped the right cap |
 | Preview titleBar | ~2px under baseline | Not hugging image; not strikethrough |
-| Preview titleBg | Tint-opacity ceiling × linear rank intensity | Readable; 100 vs 5 must differ |
+| Preview titleBg | Tint-opacity ceiling × linear rank intensity; 4px rounded rect, 6px inset both sides | Readable; 100 vs 5 must differ |
 | Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank; previous Brush stashed on marker Tag | Strong signal; Styler survives clear |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
 | RunningIndicator | Never set Fill/Width/Height; never reorder every paint | Edge bar draws own pill. Glow host sits *under* a native thin pill, *above* a Taskbar Styler hover plate (RunningIndicator restyled to fill the icon cell — otherwise PointerOver acrylic covers the side bar). On taskbar-edge relayout restore z-order so the native pill is not left behind BackgroundElement. |
@@ -436,7 +448,9 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 2. **Matching bugs (wrong preview):** prefer repeater GetAt + ctor maps;
    never assign the same HWND to two siblings; don’t rely on title for twins;
    don’t EnumWindows or assign by construction order. Unique-title is preview
-   fallback only.
+   fallback only, **same process** (and AUMID for UWP hosts), and only when
+   a sibling already has an exact HWND. Clear `g_TaskGroup_Thumbnails` on
+   `TargetItemKey` entry.
 3. **Visual bugs:** [UWPSpy](https://ramensoftware.com/uwpspy); names vary by build.
 4. **Layout bugs on thumbnails:** never add sized children only to grid row 0;
    use span + transform.
@@ -492,7 +506,8 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    disable/unload clears all chrome; hover two multi-window apps in sequence
    (recycled flyout cards must re-rank; one Low flyout pass, not per card);
    a flyout that contains a snap-group card plus windows must not shift HWND
-   binds; clicking a thumbnail must rank that window without stalling the
+   binds; Chrome “GitHub” must not inherit an Edge “GitHub - Profile” rank;
+   clicking a thumbnail must rank that window without stalling the
    click; accent change without a settings
    reload must update the glow colour;
    two virtual desktops: glow on D1 must not remain on pinned-not-running
@@ -516,6 +531,12 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    app (click once, do not click again after it is running) — that icon must
    glow after min-focus. A new taskbar button that appears while ranks
    already exist must pick up a glow without waiting for the next Alt+Tab.
+   File Explorer folder windows should join the recency list; focusing the
+   desktop / taskbar / Alt-Tab must not. Click File Explorer (or sit on the
+   desktop) during another app’s min-focus — that candidate must not poll
+   at 200 ms forever. Hybrid rank 2 / title-background wash is a shallow
+   rounded rect covering the icon + title (not a fat pill that starts
+   mid-icon on the left and squares off on the right).
 
 ### Useful log substrings
 
@@ -527,6 +548,8 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `Preview click confirmed:` | Thumbnail / grouped-icon click → window recency |
 | `HWND recycled` | Preview map dropped a reused handle (PID mismatch) |
 | `Preview resolve:` / `sibling[` | Per-card HWND + `how=repeater\|taskitem\|title` |
+| `skip unique-title` | Pass 3 skipped (no exact HWND on this flyout) |
+| `gave up waiting through transient` | Min-focus grace expired; candidate dropped |
 | `snap-group extra in repeater` / `size mismatch` | Pass 1 compacted or skipped because Thumbnails ≠ repeater |
 | `Decay timer armed` / `Decay timer stopped` | 30 s decay tick started or idled |
 | `ApplyAllHighlights` | Full identity rebind (`Wh_Log`; visible when Windhawk **Mod logs** is on) |
@@ -541,6 +564,80 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 ---
 
 ## Future work (ordered suggestions)
+
+## What catalog `/ai-review` looks for
+
+PR #5331 is two-stage: Claude (`/ai-review`, you run it) then a human
+(`/ready-for-reviewer`). The AI re-reads the **whole** `.wh.cpp` every round.
+Required items must be fixed or declined in the PR comment with a reason.
+Optionals/functionality notes are “your call” — it will still re-mention
+size, leftover heuristics, and English strings until you explicitly park them.
+
+It is not reviewing visual taste (4px vs 8px wash). It is reviewing whether
+Explorer can survive Disable, whether the taskbar UI thread stays cheap, and
+whether the mod is a catalog citizen (copy existing mods, fail closed, small
+surface). A “fix” that adds a new poll, global, or name-match becomes the
+next round’s required finding.
+
+### Invariants (re-checked every round)
+
+1. **Unload is total.** When `Wh_ModUninit` returns, no thread, `WndProc`,
+   `SizeChanged`, or `TryRunAsync` lambda may still live in the image.
+   Unbounded waits. **Stop the worker first**, then drain UI. Ready event
+   before `Start` returns. Mod `hInstance` for the message class;
+   `ERROR_CLASS_ALREADY_EXISTS` is fatal. No strong XAML in CRT-destroyed
+   globals. Cite: `taskbar-clock-customization` join, wiki “Global objects
+   and process shutdown”.
+2. **Own your threads and apartments.** `SetTimer` only on the HWND’s owner.
+   COM (`IVirtualDesktopManager`, `SHGetPropertyStoreForWindow`) on one STA,
+   never under a mutex the UI thread takes to paint. No
+   `weak_ref<FrameworkElement>::get()` off the UI thread. Capture agile
+   `CoreDispatcher` on the UI thread.
+3. **Do not tax the shell UI thread.** `UpdateVisualStates` is hover-hot.
+   No `ReportClicked`, `EnumWindows`, property-store, `UISettings`, or
+   registry on that path. Coalesce flyout work to one Low pass. Cache
+   accent/desktop id. Debounce with a deadline (skip re-arm), not a reset
+   that can postpone forever. Cite: `taskbar-volume-control-per-app` only
+   probes identity from real input.
+4. **Do not guess identity from UI strings.** Automation names are
+   localized. No English `" running"` / `" pinned"` as logic, no `LISTER`
+   special cases, no filename-900, no fuzzy initials. HWND / AUMID / path
+   only for icons. Preview unique-title is the one remaining name fallback
+   and they will keep asking to drop it. Wrong glow is worse than none.
+   Cite: `taskbar-thumbnail-reorder` repeater `GetAt` + ctor map.
+5. **Do not fight native template / other mods.** Own-named overlays.
+   Don’t `ClearValue` native fills/visibility. Don’t reorder `IconPanel`
+   children on buttons you never painted; restore from a snapshot, not a
+   stock order. Don’t wipe another mod’s `ScaleTransform`. Plate tints
+   save/restore the previous brush.
+6. **Catalog packaging.** The YAML README is the store page (screenshots on
+   `raw.githubusercontent.com`, no tester checklist, no “see the repo
+   README”). YAML defaults are real — a user `0` is not “unset”. No in-mod
+   enable/debug toggle (`Wh_Log` + Windhawk Advanced). Nested setting
+   groups. Keep `-loleaut32`. Thumbnail hooks `optional` so older builds
+   still load.
+7. **Surface area.** Line count is a finding. Prefer delete or copy a
+   cited catalog pattern over another helper/fallback. Don’t add a probe
+   to close a bug (that probe becomes the next required item).
+
+### How to spend fewer rounds
+
+- Close every **required** item in the same reply: patch or a short “won’t
+  — because …”. Silence is treated as unaddressed.
+- While closing a finding, do not introduce a new global, timer, or
+  string-match. The next `/ai-review` will treat that as new work.
+- Copy the mod they cited (clock uninit, volume-per-app click probe,
+  thumbnail-reorder GetAt, audio-scroll `RegisterClass`, accent-color-sync
+  YAML) instead of inventing a variant.
+- Fail closed (no glow) rather than a new heuristic.
+- One PR note for unique-title (keep vs drop) so they stop re-litigating it
+  as if it were forgotten.
+- Optionals: take the cheap ones or say skip. Size complaints: don’t add
+  a helper for a one-token bug (`CornerRadius{4,4,4,4}` not `{4}`).
+
+Incident-level rows below are the concrete hits from those invariants.
+Do not regress them; do not grow the table instead of following the
+buckets.
 
 ## Catalog review lessons (do not regress)
 
@@ -585,9 +682,14 @@ and must not guess identity from localized UI strings.
 | `ConfirmPreviewFocusNow` off the click thread | `HandleClick` + `ResolveAppIdentity` + inline `RunOnUiThread` stalled the taskbar | `WM_APP_PREVIEW_CLICK` + HWND/PID; worker resolves |
 | Flyout refresh uses a stale card | Shared pending latch + oldest `g_trackedThumbViews` weak_ref | Coalesce onto one Low pass; prefer the card that scheduled it if still in a repeater |
 | Repeater index ≠ `Thumbnails` index | Snap-group card extra in one collection shifts every later GetAt | Compare sizes; compact window ordinal or skip GetAt |
-| Stale global `Thumbnails` collection | `g_TaskGroup_Thumbnails` is from the last `TargetItemKey`; refresh also runs from OnApplyTemplate / decay | DataContext first; GetAt only if it agrees with a DataContext HWND |
+| Stale global `Thumbnails` collection | `g_TaskGroup_Thumbnails` is from the last `TargetItemKey`; refresh also runs from OnApplyTemplate / decay; no-DataContext made the agree-check vacuous | Clear the weak ref on the way **in** to `TargetItemKey`; DataContext first; GetAt only if it agrees with a DataContext HWND |
+| Unique-title across apps | Pass 3 scored every desktop window; Chrome `GitHub` bound Edge `GitHub - Profile` | Filter `recent` to this flyout’s `processKey` (+ AUMID if AFH); skip pass 3 with no exact sibling |
+| Transient min-focus poll | Remaining=0 re-armed 200 ms forever while File Explorer / desktop held FG | Grace = min-focus (min 2 s) of 200 ms polls, then drop the candidate |
+| File Explorer never ranked | `IsOwnExplorerProcess` + `EXPLORER.EXE` skipped folder windows | Allow `CabinetWClass` / `ExploreWClass`; tray/desktop stay `ShouldIgnoreHwnd` |
 | Decay timer is not a heartbeat | 30 s tick with empty maps is wasted registry/COM work | Arm on first confirm; stop when every desktop map is empty |
 | Path cache survives exe replace | Explorer reuses `TaskListButton`; cached `C:\A\foo.exe` bound any `foo.exe`; `PathAppearsOnTaskbar` filename match kept A ranked | Re-resolve when running and HWND dead or live path differs; exact path/AUMID only for “on the taskbar”; demote unmatched when that identity is gone, even if `seenOnTaskbar` |
+| Hover-storm debounce reset | Each `WM_APP_REQUEST_APPLY_DEBOUNCED` restarted the 300 ms timer | Skip `SetTimer` if the full-rebind timer is already armed |
+| Preview host re-parsed | `ApplyThumbnailHighlight` `ClearThumbnailHighlight` dropped the overlay host every paint | Reset plate + hide children; keep `WhRecentFocusThumbGlow` |
 
 ---
 
@@ -601,7 +703,10 @@ exe-replace path-cache re-resolve, `PathAppearsOnTaskbar` exact-only, unmatched 
 `lastHwnd`+pid, replica/score prune, flyout Low coalesce, snap-group GetAt
 guard, click confirm on the focus thread, idle decay timer, pinned→running
 re-resolve, ctor-map HWND only, no UVS clear on overlay sweep, paint cache
-edge+size, native z-order snapshot, DataContext-first preview bind.
+edge+size, native z-order snapshot, DataContext-first preview bind,
+unique-title same-process, Thumbnails clear-on-retarget, bounded transient
+min-focus, File Explorer folder windows, deadline-style full-rebind debounce,
+preview overlay host reuse.
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).

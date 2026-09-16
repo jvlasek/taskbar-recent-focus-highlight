@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.10 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.19 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -108,10 +108,15 @@ if you then used Notepad. Set the window count to **1** to restore the old
 “most recent only” look.
 
 Preview cards prefer the flyout’s thumbnail index. If that is unavailable, a
-unique window title is used as a last resort. Title cleanup understands
-English “N running windows” / “pinned” suffixes; on other languages that strip
-is a no-op, so two cards with the same stem may stay unmatched instead of
-guessing.
+unique window title is used as a last resort — only against windows of the
+same process (and the same AppUserModelID for hosted UWP), and only when at
+least one card in that flyout already resolved an HWND exactly. Title cleanup
+understands English “N running windows” / “pinned” suffixes; on other
+languages that strip is a no-op, so two cards with the same stem may stay
+unmatched instead of guessing.
+
+File Explorer folder windows are ranked like other apps. The taskbar, desktop,
+Start, and IME stay ignored.
 
 Button → process identity is adapted from
 [taskbar-volume-control-per-app](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-volume-control-per-app.wh.cpp).
@@ -160,6 +165,9 @@ Thumbnail HWND mapping follows
     — the icon must glow without a second click. A new taskbar button that
     appears while other apps are already ranked must pick up a glow on its
     own (not only after the next Alt+Tab).
+12. File Explorer folder windows should glow after min-focus. Focusing the
+    desktop or taskbar must not rank Explorer, and must not leave a previous
+    app’s min-focus timer polling forever.
 
 ---
 
@@ -176,8 +184,8 @@ Buttons are not HWNDs. The mod:
 
 1. Keeps a **recency list per virtual desktop**, keyed by process path
    (Win32) or `APPID:` + AUMID (ApplicationFrameHost / WWAHost).
-2. **Matches** buttons via taskband path cache (primary), AUMID for hosted
-   UWP, then name scores (1:1 — not copied across different apps).
+2. **Matches** buttons via taskband path cache (HWND / AUMID / full path
+   only). Missing identity → no glow.
 3. **Paints** only matched **running** buttons (`IsRunning`, plus a short
    Alt-Tab grace — not pinned-only icons on another desktop).
 
@@ -189,9 +197,9 @@ Buttons are not HWNDs. The mod:
 | **Flyout UI** | `TaskItemThumbnailView` | Two nearly identical cards |
 
 Preview matching prefers **TaskItem → HWND** maps from optional
-`TaskItemThumbnail` ctor hooks, then **group construction order** when
-DataContext does not line up with the map, then unique title assignment.
-Identical titles cannot be disambiguated by name alone.
+`TaskItemThumbnail` ctor hooks, then the flyout **repeater index**, then
+unique title assignment scoped to that flyout’s process. Identical titles
+cannot be disambiguated by name alone.
 
 ```
   Focus (HWND / path or APPID)
@@ -213,11 +221,11 @@ Identical titles cannot be disambiguated by name alone.
 | Icon default style | Side bar (left on bottom/top, under icon on left/right) | Stays off the native running pill on all four edges |
 | Preview default | Hybrid (plate rank 1, title tint 2+) | Rank 1 is obvious; 2+ stay a light ladder |
 | Focus hook | Dedicated WinEvent thread | Reliable timers + pump |
-| Min-focus timers | Absolute deadline; ignore Alt-Tab/tray transients | Stale `WM_TIMER` must not confirm the wrong app or drop the candidate |
+| Min-focus timers | Absolute deadline; ignore Alt-Tab/tray transients for a bounded grace | Stale `WM_TIMER` must not confirm the wrong app; do not poll 200 ms forever |
 | Settings | Immutable snapshot (`SettingsSnap`) | No data race on exclude-list reload |
 | UI updates | XAML dispatcher only | Unsafe to touch tree off UI thread |
 | Glow chrome | Own named overlays | Avoid fighting hover/active storyboards |
-| Shell hosts | explorer / SearchHost / Start / IME skipped | Don’t rank the shell. AFH is ranked by AUMID |
+| Shell hosts | SearchHost / Start / IME skipped; File Explorer folders ranked | Don’t rank the tray/desktop. AFH is ranked by AUMID |
 | Taskbar Styler | Side bar above hover plate; plate style saves/restores brush | Themes restyle `RunningIndicator` / `BackgroundBorder` |
 
 ### High-level runtime flow
