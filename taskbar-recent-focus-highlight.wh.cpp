@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.22
+// @version         0.9.25
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -68,13 +68,9 @@ to clear highlights.
 - Icon matching uses the process path / AppUserModelID from the taskband
   (not the localized button label). If that resolve is unavailable, the icon
   is left unhighlighted rather than guessed from its name.
-- Preview cards prefer the flyout’s thumbnail index. If that is unavailable,
-  a unique window title is used as a last resort — only against windows of
-  the same process (and the same AppUserModelID for hosted UWP), and only
-  when at least one card in that flyout already resolved an HWND exactly.
-  Title cleanup understands English “N running windows” / “pinned” suffixes;
-  on other languages that strip is a no-op, so two cards with the same stem
-  may stay unmatched instead of guessing.
+- Preview cards match via the flyout’s thumbnail model / index (HWND). If that
+  resolve is unavailable, the card is left unmarked rather than guessed from
+  its title.
 - File Explorer folder windows (`CabinetWClass`) are ranked like other apps.
   The taskbar, desktop, Start, and IME stay ignored.
 - Multi-monitor: the same rank is applied on every taskbar that shows that
@@ -299,7 +295,6 @@ to clear highlights.
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -1074,20 +1069,6 @@ std::wstring ToUpper(std::wstring s) {
     return s;
 }
 
-// Keep A–Z / 0–9 only, uppercased — preview unique-title compare.
-std::wstring AlnumUpper(std::wstring_view s) {
-    std::wstring out;
-    out.reserve(s.size());
-    for (wchar_t ch : s) {
-        if (ch >= L'a' && ch <= L'z') {
-            out.push_back(static_cast<wchar_t>(ch - L'a' + L'A'));
-        } else if ((ch >= L'A' && ch <= L'Z') || (ch >= L'0' && ch <= L'9')) {
-            out.push_back(ch);
-        }
-    }
-    return out;
-}
-
 thread_local DWORD g_imagePathCachePid = 0;
 thread_local std::wstring g_imagePathCache;
 thread_local int g_imagePathCacheScope = 0;
@@ -1784,25 +1765,6 @@ bool IsWindowRecentForPreviewLocked(DesktopRecencyState& desk,
     return true;
 }
 
-// Snapshot of recent windows for UI matching (copy under lock).
-std::vector<WindowFocusInfo> CopyRecentWindowsForPreview() {
-    std::lock_guard<std::mutex> lock(g_stateMutex);
-    auto& desk = CurrentDeskLocked();
-    PruneWindowFocusMapLocked(desk);
-    std::vector<WindowFocusInfo> out;
-    out.reserve(desk.windowFocusMap.size());
-    for (const auto& [hwnd, info] : desk.windowFocusMap) {
-        if (IsWindowRecentForPreviewLocked(desk, hwnd)) {
-            out.push_back(info);
-        }
-    }
-    std::sort(out.begin(), out.end(),
-              [](const WindowFocusInfo& a, const WindowFocusInfo& b) {
-                  return a.lastConfirmedTick > b.lastConfirmedTick;
-              });
-    return out;
-}
-
 // ---------------------------------------------------------------------------
 // Color / style helpers (UI thread)
 // ---------------------------------------------------------------------------
@@ -2034,150 +1996,6 @@ std::wstring GetButtonAutomationAppId(FrameworkElement button) {
     } catch (...) {
         return {};
     }
-}
-
-// Taskbar names look like "App - 2 running windows pinned" — strip that noise.
-// Do NOT cut at the first " - ": Lister titles are
-// "Lister - [C:\\path\\file.txt] - 3 running windows and 1 group".
-std::wstring NormalizeAutomationName(std::wstring name) {
-    auto isRunningCountSuffix = [](std::wstring_view tail) -> bool {
-        size_t i = 0;
-        while (i < tail.size() && tail[i] == L' ') {
-            ++i;
-        }
-        if (i >= tail.size() || tail[i] < L'0' || tail[i] > L'9') {
-            return false;
-        }
-        while (i < tail.size() && tail[i] >= L'0' && tail[i] <= L'9') {
-            ++i;
-        }
-        if (i >= tail.size() || tail[i] != L' ') {
-            return false;
-        }
-        ++i;
-        constexpr wchar_t kRun[] = L"running";
-        if (i + 7 > tail.size()) {
-            return false;
-        }
-        for (int k = 0; k < 7; ++k) {
-            wchar_t c = tail[i + static_cast<size_t>(k)];
-            if (c >= L'A' && c <= L'Z') {
-                c = static_cast<wchar_t>(c - L'A' + L'a');
-            }
-            if (c != kRun[k]) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    size_t cut = std::wstring::npos;
-    for (size_t search = 0; search + 3 < name.size();) {
-        const auto pos = name.find(L" - ", search);
-        if (pos == std::wstring::npos) {
-            break;
-        }
-        if (isRunningCountSuffix(std::wstring_view(name).substr(pos + 3))) {
-            cut = pos;
-            break;
-        }
-        search = pos + 3;
-    }
-    if (cut != std::wstring::npos) {
-        name.resize(cut);
-    }
-    // Trailing " pinned"
-    constexpr wchar_t kPinned[] = L" pinned";
-    if (name.size() > 7) {
-        auto off = name.size() - 7;
-        if (_wcsicmp(name.c_str() + off, kPinned) == 0) {
-            name.resize(off);
-        }
-    }
-    // Trim spaces
-    while (!name.empty() && name.back() == L' ') {
-        name.pop_back();
-    }
-    return name;
-}
-
-// True for Lister-style "[c:\temp\file.txt]" / "[book.epub]", not Calibre's
-// format tag "[EPUB]" (same on every book — must not be an identity key).
-bool LooksLikeFilePath(const std::wstring& s) {
-    if (s.empty()) {
-        return false;
-    }
-    if (s.find(L'\\') != std::wstring::npos ||
-        s.find(L'/') != std::wstring::npos) {
-        return true;
-    }
-    if (s.size() >= 2 && ((s[0] >= L'A' && s[0] <= L'Z') ||
-                          (s[0] >= L'a' && s[0] <= L'z')) &&
-        s[1] == L':') {
-        return true;
-    }
-    const auto dot = s.rfind(L'.');
-    return dot != std::wstring::npos && dot > 0 && dot + 1 < s.size();
-}
-
-std::wstring ExtractBracketedPath(const std::wstring& s) {
-    const auto open = s.find(L'[');
-    const auto close = s.rfind(L']');
-    if (open == std::wstring::npos || close == std::wstring::npos ||
-        close <= open + 1) {
-        return {};
-    }
-    std::wstring inner = s.substr(open + 1, close - open - 1);
-    if (!LooksLikeFilePath(inner)) {
-        return {};
-    }
-    return inner;
-}
-
-// Window title ↔ thumbnail card title (preview unique-title fallback only).
-int ScoreTitleToAutomationName(const std::wstring& windowTitle,
-                               const std::wstring& automationName) {
-    if (windowTitle.empty() || automationName.empty()) {
-        return 0;
-    }
-    std::wstring t = AlnumUpper(NormalizeAutomationName(windowTitle));
-    std::wstring a = AlnumUpper(NormalizeAutomationName(automationName));
-    if (t.empty() || a.empty()) {
-        return 0;
-    }
-    if (t == a) {
-        return 98;
-    }
-    // Button title contained in window title or vice versa (min length 4).
-    if (t.size() >= 4 && a.find(t) != std::wstring::npos) {
-        return 93;
-    }
-    if (a.size() >= 4 && t.find(a) != std::wstring::npos) {
-        return 91;
-    }
-    // Significant shared prefix (e.g. WINDHAWK…).
-    // Do not use this when both sides have distinct [bracket] paths —
-    // "Lister - [c:\tmp\a.txt]" vs "Lister - [c:\tmp\c.txt]" share LISTERCTMP.
-    const std::wstring tPath =
-        ToUpper(ExtractBracketedPath(NormalizeAutomationName(windowTitle)));
-    const std::wstring aPath =
-        ToUpper(ExtractBracketedPath(NormalizeAutomationName(automationName)));
-    if (!tPath.empty() && !aPath.empty() && tPath != aPath) {
-        return 0;
-    }
-    size_t pref = 0;
-    while (pref < t.size() && pref < a.size() && t[pref] == a[pref]) {
-        ++pref;
-    }
-    if (pref >= 6) {
-        // Shared prefix only: "HarryPotter1" vs "HarryPotter2" (or two
-        // "EbookReader…" books) must not count as a match.
-        if (t.size() > pref && a.size() > pref) {
-            return 0;
-        }
-        return 85;
-    }
-    return 0;
 }
 
 // Path / AUMID / HWND only. Same rank may bind many buttons (secondary /
@@ -4620,60 +4438,7 @@ HWND ResolveHwndForThumbnailView(FrameworkElement thumbView,
         }
     } catch (...) {
     }
-    // No title fallback here — identical titles (Calibre 2× same file) would
-    // all bind to the same HWND. Callers do unique assignment separately.
     return nullptr;
-}
-
-// Title → HWND only for unique assignment (each HWND at most once).
-HWND MatchTitleToUnusedRecent(const std::wstring& autoName,
-                              const std::vector<WindowFocusInfo>& recent,
-                              const std::unordered_set<HWND>& used) {
-    if (autoName.empty()) {
-        return nullptr;
-    }
-    const std::wstring cardPath = ToUpper(ExtractBracketedPath(autoName));
-    const std::wstring cardFile =
-        cardPath.empty() ? std::wstring{}
-                         : ToUpper(FileNameFromPath(cardPath));
-
-    int bestScore = 0;
-    HWND bestHwnd = nullptr;
-    ULONGLONG bestTick = 0;
-    for (const auto& info : recent) {
-        if (!info.hwnd || used.count(info.hwnd)) {
-            continue;
-        }
-        int s = ScoreTitleToAutomationName(info.windowTitle, autoName);
-        if (IsWindow(info.hwnd)) {
-            const std::wstring liveTitle = GetWindowTitle(info.hwnd);
-            s = (std::max)(s, ScoreTitleToAutomationName(liveTitle, autoName));
-            if (!cardPath.empty()) {
-                const std::wstring winPath =
-                    ToUpper(ExtractBracketedPath(liveTitle));
-                const std::wstring infoPath =
-                    ToUpper(ExtractBracketedPath(info.windowTitle));
-                if (winPath == cardPath || infoPath == cardPath) {
-                    s = (std::max)(s, 100);
-                } else if (!cardFile.empty()) {
-                    if (ToUpper(FileNameFromPath(winPath)) == cardFile ||
-                        ToUpper(FileNameFromPath(infoPath)) == cardFile ||
-                        ToUpper(FileNameFromPath(liveTitle)) == cardFile ||
-                        ToUpper(FileNameFromPath(info.windowTitle)) ==
-                            cardFile) {
-                        s = (std::max)(s, 96);
-                    }
-                }
-            }
-        }
-        if (s > bestScore ||
-            (s == bestScore && s >= 70 && info.lastConfirmedTick > bestTick)) {
-            bestScore = s;
-            bestHwnd = info.hwnd;
-            bestTick = info.lastConfirmedTick;
-        }
-    }
-    return bestScore >= 70 ? bestHwnd : nullptr;
 }
 
 void CollectThumbnailViewsUnder(FrameworkElement root,
@@ -4758,23 +4523,6 @@ std::vector<FrameworkElement> CollectSiblingThumbnailViews(
     return out;
 }
 
-FrameworkElement FindAncestorItemsRepeater(FrameworkElement el) {
-    FrameworkElement cur = el;
-    for (int guard = 0; guard < 32 && cur; ++guard) {
-        try {
-            if (winrt::get_class_name(cur) ==
-                L"Microsoft.UI.Xaml.Controls.ItemsRepeater") {
-                return cur;
-            }
-            cur = Media::VisualTreeHelper::GetParent(cur)
-                      .try_as<FrameworkElement>();
-        } catch (...) {
-            break;
-        }
-    }
-    return nullptr;
-}
-
 // Repeater index is the flyout visual order (unlike PositionInSet, which the
 // automation peer may not refresh after a thumbnail reorder).
 // outSourceIndex is parallel to the returned views and holds the ItemsSource
@@ -4786,7 +4534,8 @@ std::vector<FrameworkElement> CollectRepeaterThumbnailViews(
     if (outSourceIndex) {
         outSourceIndex->clear();
     }
-    auto repeaterEl = FindAncestorItemsRepeater(thumbView);
+    auto repeaterEl = FindAncestorByClassName(
+        thumbView, L"Microsoft.UI.Xaml.Controls.ItemsRepeater");
     if (!repeaterEl) {
         return out;
     }
@@ -4924,167 +4673,13 @@ FrameworkElement FindThumbnailTitleElement(FrameworkElement thumbView) {
                 el.try_as<Controls::TextBlock>()) {
                 return el;
             }
-            // Name matched a wrapper — prefer a TextBlock inside.
             if (auto tb = FindDescendantByName(el, L"DisplayNameTextBlock")) {
                 return tb;
             }
             return el;
         }
     }
-    // First TextBlock in the tree (title is usually the only one besides close).
-    try {
-        std::function<FrameworkElement(FrameworkElement)> walk;
-        walk = [&](FrameworkElement root) -> FrameworkElement {
-            if (!root) {
-                return nullptr;
-            }
-            auto cn = winrt::get_class_name(root);
-            if (cn == L"Windows.UI.Xaml.Controls.TextBlock") {
-                // Skip close-button glyphs (often single-char / Segoe icons).
-                try {
-                    if (auto tb = root.try_as<Controls::TextBlock>()) {
-                        auto text = tb.Text();
-                        if (text.size() >= 2) {
-                            return root;
-                        }
-                    }
-                } catch (...) {
-                    return root;
-                }
-            }
-            int n = Media::VisualTreeHelper::GetChildrenCount(root);
-            for (int i = 0; i < n; ++i) {
-                auto child = Media::VisualTreeHelper::GetChild(root, i)
-                                 .try_as<FrameworkElement>();
-                if (auto found = walk(child)) {
-                    return found;
-                }
-            }
-            return nullptr;
-        };
-        return walk(thumbView);
-    } catch (...) {
-    }
     return nullptr;
-}
-
-std::wstring GetThumbnailAutomationName(FrameworkElement thumbView) {
-    try {
-        return NormalizeAutomationName(
-            Automation::AutomationProperties::GetName(thumbView).c_str());
-    } catch (...) {
-        return {};
-    }
-}
-
-std::wstring GetThumbnailDisplayText(FrameworkElement thumbView) {
-    try {
-        if (auto titleEl = FindThumbnailTitleElement(thumbView)) {
-            if (auto tb = titleEl.try_as<Controls::TextBlock>()) {
-                return NormalizeAutomationName(tb.Text().c_str());
-            }
-        }
-    } catch (...) {
-    }
-    return {};
-}
-
-std::wstring TitleMatchKey(const std::wstring& raw) {
-    std::wstring n = NormalizeAutomationName(raw);
-    std::wstring path = ToUpper(ExtractBracketedPath(n));
-    if (!path.empty()) {
-        return path;
-    }
-    return AlnumUpper(n);
-}
-
-bool TitleKeysAreDistinct(const std::vector<std::wstring>& titles) {
-    if (titles.size() < 2) {
-        return false;
-    }
-    std::unordered_set<std::wstring> seen;
-    for (const auto& t : titles) {
-        std::wstring key = TitleMatchKey(t);
-        if (key.empty() || !seen.insert(key).second) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::wstring GetThumbnailMatchTitle(FrameworkElement thumbView) {
-    std::wstring autoName = GetThumbnailAutomationName(thumbView);
-    std::wstring text = GetThumbnailDisplayText(thumbView);
-
-    // Prefer the more specific string (file name vs generic "Lister").
-    if (text.size() > autoName.size()) {
-        return text;
-    }
-    if (autoName.size() > text.size()) {
-        return autoName;
-    }
-    return !text.empty() ? text : autoName;
-}
-
-// Per-flyout: pick the title source that actually distinguishes cards.
-// Ebook readers often put the book name on DisplayNameTextBlock while
-// Automation Name is the shared "App - 2 running windows" (same on every
-// sibling) — preferring the longer string then made titlesDistinct fail
-// and we assigned HWNDs by stale group-order (swap after click).
-std::vector<std::wstring> PickFlyoutCardTitles(
-    const std::vector<FrameworkElement>& siblings) {
-    std::vector<std::wstring> autos;
-    std::vector<std::wstring> texts;
-    std::vector<std::wstring> mixed;
-    autos.reserve(siblings.size());
-    texts.reserve(siblings.size());
-    mixed.reserve(siblings.size());
-    for (const auto& v : siblings) {
-        autos.push_back(GetThumbnailAutomationName(v));
-        texts.push_back(GetThumbnailDisplayText(v));
-        mixed.push_back(GetThumbnailMatchTitle(v));
-    }
-    if (TitleKeysAreDistinct(texts)) {
-        return texts;
-    }
-    if (TitleKeysAreDistinct(autos)) {
-        return autos;
-    }
-    return mixed;
-}
-
-int ThumbnailPositionInSet(FrameworkElement view) {
-    try {
-        return Automation::AutomationProperties::GetPositionInSet(view);
-    } catch (...) {
-        return -1;
-    }
-}
-
-void SortThumbnailViewsVisualOrder(std::vector<FrameworkElement>& views) {
-    bool anyPos = false;
-    for (const auto& v : views) {
-        if (ThumbnailPositionInSet(v) >= 1) {
-            anyPos = true;
-            break;
-        }
-    }
-    if (!anyPos) {
-        return;
-    }
-    std::stable_sort(
-        views.begin(), views.end(),
-        [](const FrameworkElement& a, const FrameworkElement& b) {
-            int pa = ThumbnailPositionInSet(a);
-            int pb = ThumbnailPositionInSet(b);
-            if (pa < 1) {
-                pa = 100000;
-            }
-            if (pb < 1) {
-                pb = 100000;
-            }
-            return pa < pb;
-        });
 }
 
 // Snap-group card in the same flyout as the individual windows. Must not be
@@ -5428,7 +5023,9 @@ FrameworkElement PickLiveFlyoutThumbOnThisDispatcher() {
         if (!any) {
             any = el;
         }
-        if (!withRepeater && FindAncestorItemsRepeater(el)) {
+        if (!withRepeater &&
+            FindAncestorByClassName(
+                el, L"Microsoft.UI.Xaml.Controls.ItemsRepeater")) {
             withRepeater = el;
         }
     });
@@ -5469,7 +5066,9 @@ void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
                         el = weak.get();
                     } catch (...) {
                     }
-                    if (el && !FindAncestorItemsRepeater(el)) {
+                    if (el && !FindAncestorByClassName(
+                                  el,
+                                  L"Microsoft.UI.Xaml.Controls.ItemsRepeater")) {
                         el = nullptr;
                     }
                     if (!el) {
@@ -5770,19 +5369,13 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         return;
     }
 
-    if (!usedRepeater) {
-        SortThumbnailViewsVisualOrder(siblings);
-    }
-    const std::vector<std::wstring> cardTitles = PickFlyoutCardTitles(siblings);
-
     // HWND pipeline (this flyout only — not a global window ladder):
     //   1. TaskItem — DataContext ↔ ctor map (COM identity, per card).
     //   2. Repeater index + Thumbnails.GetAt — holes only. The collection is
     //      cleared on TargetItemKey entry and recaptured for this target;
     //      still skip GetAt if it disagrees with a DataContext HWND.
-    //   3. Title unique — unresolved cards, same process / AUMID; skip if
-    //      no sibling resolved exactly.
-    enum class ResolveHow : int { None = 0, Repeater, TaskItem, Title };
+    // No unique-title fallback (stash/preview-unique-title.cpp).
+    enum class ResolveHow : int { None = 0, Repeater, TaskItem };
     struct Scored {
         FrameworkElement view{nullptr};
         HWND hwnd = nullptr;
@@ -5793,8 +5386,6 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     };
     std::vector<Scored> scored(siblings.size());
     std::unordered_set<HWND> usedHwnds;
-
-    auto recent = CopyRecentWindowsForPreview();
 
     auto tickFor = [](HWND hwnd) -> ULONGLONG {
         ULONGLONG tick = 0;
@@ -5914,109 +5505,6 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         }
     }
 
-    // Pass 3: unique-title fallback for cards still unresolved. Identical
-    // titles stay unmatched (do not steal another card's HWND). Scope to
-    // this flyout's processKey from the recency map (no OpenProcess /
-    // property-store on the UI thread). Skip when no exact sibling is in
-    // that map — fail closed, same as icons.
-    std::wstring flyoutKey;
-    for (const auto& s : scored) {
-        if (!s.hwnd || (s.how != ResolveHow::TaskItem &&
-                        s.how != ResolveHow::Repeater)) {
-            continue;
-        }
-        for (const auto& info : recent) {
-            if (info.hwnd == s.hwnd && !info.processKey.empty()) {
-                flyoutKey = info.processKey;
-                break;
-            }
-        }
-        if (!flyoutKey.empty()) {
-            break;
-        }
-    }
-
-    const bool titlesDistinct = TitleKeysAreDistinct(cardTitles);
-    if (titlesDistinct && flyoutKey.empty()) {
-        Wh_Log(L"Preview resolve: skip unique-title (no exact HWND for this "
-               L"flyout)");
-    } else if (titlesDistinct) {
-        std::vector<WindowFocusInfo> recentSameApp;
-        recentSameApp.reserve(recent.size());
-        for (const auto& info : recent) {
-            if (info.processKey == flyoutKey) {
-                recentSameApp.push_back(info);
-            }
-        }
-        for (size_t i = 0; i < siblings.size(); ++i) {
-            if (scored[i].hwnd) {
-                continue;
-            }
-            HWND h =
-                MatchTitleToUnusedRecent(cardTitles[i], recentSameApp, usedHwnds);
-            if (h) {
-                stampRecency(i, h);
-                if (scored[i].tick == 0) {
-                    for (const auto& info : recentSameApp) {
-                        if (info.hwnd == h && info.lastConfirmedTick > 0) {
-                            scored[i].tick = info.lastConfirmedTick;
-                            break;
-                        }
-                    }
-                }
-                scored[i].how = ResolveHow::Title;
-                usedHwnds.insert(h);
-            }
-        }
-    }
-
-    // Pass 4: ITaskItem HWND and EVENT_SYSTEM_FOREGROUND HWND can differ
-    // (owned Lister windows, tab proxies). Copy recency from a same-PID
-    // recent window when the card's HWND itself has tick 0.
-    for (size_t i = 0; i < scored.size(); ++i) {
-        if (!scored[i].hwnd || scored[i].tick > 0) {
-            continue;
-        }
-        DWORD cardPid = 0;
-        GetWindowThreadProcessId(scored[i].hwnd, &cardPid);
-        if (!cardPid) {
-            continue;
-        }
-
-        std::wstring autoName = cardTitles[i];
-
-        int bestScore = 0;
-        ULONGLONG bestTick = 0;
-        for (const auto& info : recent) {
-            if (!info.hwnd) {
-                continue;
-            }
-            DWORD rpid = 0;
-            GetWindowThreadProcessId(info.hwnd, &rpid);
-            if (rpid != cardPid) {
-                continue;
-            }
-            int s = 0;
-            if (!autoName.empty()) {
-                s = ScoreTitleToAutomationName(info.windowTitle, autoName);
-                if (s < 70) {
-                    s = (std::max)(
-                        s, ScoreTitleToAutomationName(GetWindowTitle(info.hwnd),
-                                                      autoName));
-                }
-            }
-            if (s > bestScore) {
-                bestScore = s;
-                bestTick = info.lastConfirmedTick;
-            }
-        }
-        // Require a unique title/path (96+). Score 85 prefix would copy the
-        // latest Lister tick onto a.txt AND c.txt, then card 0 always wins.
-        if (bestScore >= 96) {
-            scored[i].tick = bestTick;
-        }
-    }
-
     // Rank this flyout only (not a global window ladder). Sort siblings that
     // have a recency tick; ties: confirmSeq, then the live foreground HWND.
     HWND foreground = GetForegroundWindow();
@@ -6067,9 +5555,6 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
                 case ResolveHow::TaskItem:
                     how = L"taskitem";
                     break;
-                case ResolveHow::Title:
-                    how = L"title";
-                    break;
                 default:
                     break;
             }
@@ -6080,12 +5565,11 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
             } catch (...) {
             }
             Wh_Log(L"  sibling[%zu]: hwnd=%p tick=%llu how=%s rank=%d%s "
-                   L"name=\"%s\" card=\"%s\"",
+                   L"name=\"%s\"",
                    i, scored[i].hwnd,
                    static_cast<unsigned long long>(scored[i].tick), how,
                    scored[i].rank,
-                   scored[i].rank > 0 ? L" [GLOW]" : L"", name.c_str(),
-                   (i < cardTitles.size()) ? cardTitles[i].c_str() : L"");
+                   scored[i].rank > 0 ? L" [GLOW]" : L"", name.c_str());
         }
     }
 
@@ -6897,7 +6381,7 @@ bool HookTaskbarDllSymbols() {
         Wh_Log(L"Hooked taskbar.dll identity + thumbnail model symbols");
     } else {
         Wh_Log(L"Hooked taskbar.dll identity symbols (preview HWND mapping "
-               L"unavailable — title fallback only)");
+               L"unavailable)");
     }
     return true;
 }

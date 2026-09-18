@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.22 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.25 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -106,13 +106,9 @@ is **per flyout**: Chrome’s last-used window is rank 1 in the Chrome flyout ev
 if you then used Notepad. Set the window count to **1** to restore the old
 “most recent only” look.
 
-Preview cards prefer the flyout’s thumbnail index. If that is unavailable, a
-unique window title is used as a last resort — only against windows of the
-same process (and the same AppUserModelID for hosted UWP), and only when at
-least one card in that flyout already resolved an HWND exactly. Title cleanup
-understands English “N running windows” / “pinned” suffixes; on other
-languages that strip is a no-op, so two cards with the same stem may stay
-unmatched instead of guessing.
+Preview cards match via the flyout’s thumbnail model / index (HWND). If that
+resolve is unavailable, the card is left unmarked rather than guessed from
+its title.
 
 File Explorer folder windows are ranked like other apps. The taskbar, desktop,
 Start, and IME stay ignored.

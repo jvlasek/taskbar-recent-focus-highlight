@@ -144,14 +144,8 @@ Resolve order in `RefreshThumbnailFlyout_UIThread`:
    DataContext HWND on the same card disagrees with GetAt. Snap-group extra
    in the repeater: compact to window ordinal. Compute `IsSnapGroupThumbnailView`
    once per flyout (it walks the tree + ctor map).
-3. **Title unique** — only for unresolved cards, and only against windows of
-   **this flyout’s process** (`WindowFocusInfo::processKey`). Hosted UWP also
-   requires the same AppUserModelID (AFH is shared). Skip the pass when no
-   sibling resolved by TaskItem/repeater (fail closed). Prefer
-   `DisplayNameTextBlock` when those texts differ across siblings. Each HWND
-   used once. **Ambiguous** when two windows share the same title. Bracketed
-   `[EPUB]` / `[PDF]` is a format tag, **not** a file path — only `[c:\…\file]`
-   or `[name.ext]` is an identity key.
+3. **No unique-title.** Holes stay unmarked. Stash:
+   `stash/preview-unique-title.cpp`.
 
 Do **not** assign HWNDs by group construction order or `EnumWindows`.
 `AutomationProperties.PositionInSet` is not refreshed on thumbnail reorder;
@@ -310,7 +304,7 @@ desktop switch stay immediate.
 Promotion (windows): `previewMinFocusSeconds` → `StampWindowRecencyLocked` on
 that desktop’s window map. On flyout open, siblings are sorted by **this
 desktop’s** map (tick, then confirmSeq) and the top `previewHighlightCount`
-get ranks 1…N. HWND resolve is TaskItem → repeater GetAt → unique title
+get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 (same process / AUMID; skipped with no exact sibling).
 
 ---
@@ -445,10 +439,8 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    filename (deleted `C:\A\foo.exe` must not count as still on the taskbar
    because `C:\B\foo.exe` is).
 2. **Matching bugs (wrong preview):** prefer repeater GetAt + ctor maps;
-   never assign the same HWND to two siblings; don’t rely on title for twins;
-   don’t EnumWindows or assign by construction order. Unique-title is preview
-   fallback only, **same process** (and AUMID for UWP hosts), and only when
-   a sibling already has an exact HWND. Clear `g_TaskGroup_Thumbnails` on
+   never assign the same HWND to two siblings; don’t EnumWindows or assign
+   by construction order. No unique-title. Clear `g_TaskGroup_Thumbnails` on
    `TargetItemKey` entry.
 3. **Visual bugs:** [UWPSpy](https://ramensoftware.com/uwpspy); names vary by build.
 4. **Layout bugs on thumbnails:** never add sized children only to grid row 0;
@@ -501,7 +493,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    between two unranked apps then rest on one — that app must still confirm
    after min-focus (switcher/tray must not drop the candidate); three windows of one app (ranks
    1>2>3 in that flyout only); two same-title windows; debug log
-   `Preview resolve:` + `sibling[` + `rank=` + `how=repeater|taskitem|title`;
+   `Preview resolve:` + `sibling[` + `rank=` + `how=repeater|taskitem`;
    disable/unload clears all chrome; hover two multi-window apps in sequence
    (recycled flyout cards must re-rank; one Low flyout pass, not per card);
    a flyout that contains a snap-group card plus windows must not shift HWND
@@ -546,8 +538,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 | `Preview focus confirmed:` | Window recency |
 | `Preview click confirmed:` | Thumbnail / grouped-icon click → window recency |
 | `HWND recycled` | Preview map dropped a reused handle (PID mismatch) |
-| `Preview resolve:` / `sibling[` | Per-card HWND + `how=repeater\|taskitem\|title` |
-| `skip unique-title` | Pass 3 skipped (no exact HWND on this flyout) |
+| `Preview resolve:` / `sibling[` | Per-card HWND + `how=repeater\|taskitem` |
 | `gave up waiting through transient` | Min-focus grace expired; candidate dropped |
 | `snap-group extra in repeater` / `size mismatch` | Pass 1 compacted or skipped because Thumbnails ≠ repeater |
 | `Decay timer armed` / `Decay timer stopped` | 30 s decay tick started or idled |
@@ -604,8 +595,8 @@ next round’s required finding.
 4. **Do not guess identity from UI strings.** Automation names are
    localized. No English `" running"` / `" pinned"` as logic, no `LISTER`
    special cases, no filename-900, no fuzzy initials. HWND / AUMID / path
-   only for icons. Preview unique-title is the one remaining name fallback
-   and they will keep asking to drop it. Wrong glow is worse than none.
+   only. Preview unique-title is gone (`stash/preview-unique-title.cpp`).
+   Wrong glow is worse than none.
    Cite: `taskbar-thumbnail-reorder` repeater `GetAt` + ctor map.
 5. **Do not fight native template / other mods.** Own-named overlays.
    Don’t `ClearValue` native fills/visibility. Don’t reorder `IconPanel`
@@ -632,8 +623,7 @@ next round’s required finding.
   thumbnail-reorder GetAt, audio-scroll `RegisterClass`, accent-color-sync
   YAML) instead of inventing a variant.
 - Fail closed (no glow) rather than a new heuristic.
-- One PR note for unique-title (keep vs drop) so they stop re-litigating it
-  as if it were forgotten.
+- Unique-title is dropped (fail closed on preview holes).
 - Optionals: take the cheap ones or say skip. Size complaints: don’t add
   a helper for a one-token bug (`CornerRadius{4,4,4,4}` not `{4}`).
 
@@ -665,7 +655,7 @@ and must not guess identity from localized UI strings.
 | Identity-keyed maps, not linear `weak.get()` | Four COM-resolving scans per UVS per button | `unordered_map<IUnknown*, …>`; keep the map, skip paint on unranked |
 | No native reorder of untouched icons | `ClearButtonHighlight` healed z-order on every unranked UVS | Only restore `IconPanel` child order after we insert/remove our host |
 | No `SizeChanged` without a drainable dispatcher | `RememberUiDispatcher` can fail; uninit never revokes that watch | Register the watch only if the dispatcher was recorded |
-| No icon name fuzzy | English `" running"` / `" pinned"`, `LISTER`/`VSCODIUM` special cases, wrong glow | HWND / AUMID / path only. Preview unique-title is the one name fallback |
+| No icon name fuzzy | English `" running"` / `" pinned"`, `LISTER`/`VSCODIUM` special cases, wrong glow | HWND / AUMID / path only. Preview unique-title dropped |
 | No in-mod enable / debug toggles | Duplicates Windhawk’s mod on/off and Advanced logging | Drop `enabled` and `glowDebugLog`; use `Wh_Log` |
 | Keep `-loleaut32` even if we do not call `Sys*` | WinRT `hresult_error` needs `SysFreeString` / `SysStringLen` | Drop `-lpropsys` if unused; do not drop oleaut32 |
 | No `UpdateLayout` from `OnApplyTemplate` | Synchronous layout during measure is a XAML layout cycle | Return false + `SchedulePreviewFlyoutRefresh` at Low |
@@ -685,7 +675,7 @@ and must not guess identity from localized UI strings.
 | Flyout refresh uses a stale card | Shared pending latch + oldest `g_trackedThumbViews` weak_ref | Coalesce onto one Low pass; prefer the card that scheduled it if still in a repeater |
 | Repeater index ≠ `Thumbnails` index | Snap-group card extra in one collection shifts every later GetAt | Compare sizes; compact window ordinal or skip GetAt |
 | Stale global `Thumbnails` collection | `g_TaskGroup_Thumbnails` is from the last `TargetItemKey`; refresh also runs from OnApplyTemplate / decay; no-DataContext made the agree-check vacuous | Clear the weak ref on the way **in** to `TargetItemKey`; DataContext first; GetAt only if it agrees with a DataContext HWND |
-| Unique-title across apps | Pass 3 scored every desktop window; Chrome `GitHub` bound Edge `GitHub - Profile` | Filter `recent` to this flyout’s `processKey` (+ AUMID if AFH); skip pass 3 with no exact sibling |
+| Unique-title | Name-guess; untested on current Win11 (pass 1/2 fill) | Dropped. Stash: `stash/preview-unique-title.cpp` |
 | Transient min-focus poll | Remaining=0 re-armed 200 ms forever while File Explorer / desktop held FG | Grace = min-focus (min 2 s) of 200 ms polls, then drop the candidate |
 | File Explorer never ranked | `IsOwnExplorerProcess` + `EXPLORER.EXE` skipped folder windows | Allow `CabinetWClass` / `ExploreWClass`; tray/desktop stay `ShouldIgnoreHwnd` |
 | Decay timer is not a heartbeat | 30 s tick with empty maps is wasted registry/COM work | Arm on first confirm; stop when every desktop map is empty |
@@ -706,7 +696,7 @@ exe-replace path-cache re-resolve, `PathAppearsOnTaskbar` exact-only, unmatched 
 guard, click confirm on the focus thread, idle decay timer, pinned→running
 re-resolve, ctor-map HWND only, no UVS clear on overlay sweep, paint cache
 edge+size, native z-order snapshot, DataContext-first preview bind,
-unique-title same-process, Thumbnails clear-on-retarget, bounded transient
+unique-title dropped (stash), Thumbnails clear-on-retarget, bounded transient
 min-focus, File Explorer folder windows, deadline-style full-rebind debounce,
 preview overlay host reuse, window recency key is path or `APPID:` (not AFH
 path), ring preview style removed (hybrid default), OverlayIcon raised after
@@ -720,6 +710,5 @@ snapshot restore (Thunderbird/Discord badge).
 5. Per-desktop prune of deleted virtual desktop GUIDs beyond decay.
 6. Per-monitor taskbar edge if a secondary bar can sit on a different side.
 7. Test seam + `make release` concat (pure ranking/identity table tests).
-8. Optional: log when preview unique-title fires vs `how=repeater|taskitem`
-   before adding or dropping that fallback. Watch `ReportClicked` for jump-list
+8. Watch `ReportClicked` for jump-list
    / MRU side effects (once per button on full bind / press, not on hover).

@@ -2,7 +2,7 @@
 
 Source: https://github.com/ramensoftware/windhawk-mods/pull/5331#issuecomment-5701740290
 
-Verified against `taskbar-recent-focus-highlight.wh.cpp` v0.9.22.
+Verified against `taskbar-recent-focus-highlight.wh.cpp` v0.9.25.
 
 ---
 
@@ -24,11 +24,9 @@ We now read “was it queued?” from `Status()` / `GetResults()` (same pattern 
 
 We do **not** `return FALSE` when Taskbar.View is simply not loaded yet. Explorer often loads it after `Wh_ModInit`; that is the same late-load path as `taskbar-thumbnail-reorder` (`Taskbar view module not loaded yet` + `LoadLibraryExW`). Failing init there would make the mod never attach on a normal Explorer start.
 
-**3. Title-based matching — keeping pass 3, not deleting it.**
+**3. Title-based matching — dropped.**
 
-Same human call as the last several rounds. Passes 1–2 are the exact path (DataContext + repeater GetAt). Unique-title is holes-only, same rank key (path / `APPID:`), skipped when nothing resolved exactly, identical titles unmatched. English `" running"` / `" pinned"` is a no-op on other languages (fewer binds, not a wrong bind). README documents that. `how=title` is in the log if you want it dropped from evidence later.
-
-Pass 4 is still not a bind — it only copies recency onto an HWND pass 1/2 already assigned (Lister / tab-proxy vs FOREGROUND HWND).
+Pass 3 (unique-title HWND) and the title-score tick copy (old pass 4) are gone. Preview cards that miss TaskItem / repeater GetAt stay unmarked. Code is in `stash/preview-unique-title.cpp` if we need it later. On current Win11, pass 1/2 already fill every card we test.
 
 **4. Line count.**
 
