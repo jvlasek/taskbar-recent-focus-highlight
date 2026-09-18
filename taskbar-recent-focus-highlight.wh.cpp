@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.25
+// @version         0.9.27
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -299,7 +299,6 @@ to clear highlights.
 #include <mutex>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -487,6 +486,8 @@ struct PendingFocus {
     ULONGLONG previewTransientRetryStartTick = 0;
     GUID desktopId{};
     bool valid = false;
+    bool appConfirmed = false;
+    bool previewConfirmed = false;
 };
 
 // Per-window recency for multi-instance thumbnail previews (separate timers).
@@ -566,6 +567,10 @@ struct ButtonPathCacheEntry {
     // ScaleTransform we applied for size boost. Clear only this instance so
     // other mods (taskbar-dock-animation) keep their hover scale.
     winrt::weak_ref<Media::ScaleTransform> ourIconScale;
+    winrt::weak_ref<Media::Transform> priorIconTransform;
+    bool priorIconTfLocal = false;
+    winrt::Windows::Foundation::Point priorIconOrigin{0.5f, 0.5f};
+    bool priorIconOriginLocal = false;
 };
 std::mutex g_buttonPathMutex;
 std::unordered_map<void*, ButtonPathCacheEntry> g_buttonPathCache;
@@ -579,6 +584,7 @@ struct ThumbnailTaskItemMapping {
     void* taskGroup = nullptr;
     void* taskItem = nullptr;
     HWND hwnd = nullptr;  // resolved at map time (stable for same-title windows)
+    DWORD pid = 0;        // reject HWND recycle (IsWindow is not enough)
 };
 std::mutex g_thumbnailMapMutex;
 std::vector<ThumbnailTaskItemMapping> g_thumbnailTaskItemMapping;
@@ -698,6 +704,7 @@ constexpr UINT WM_APP_SHUTDOWN = WM_APP + 3;
 constexpr UINT WM_APP_REQUEST_APPLY_DEBOUNCED = WM_APP + 4;
 constexpr UINT WM_APP_REFRESH_ACCENT = WM_APP + 5;
 constexpr UINT WM_APP_PREVIEW_CLICK = WM_APP + 6;
+constexpr UINT WM_APP_SETTINGS_CHANGED = WM_APP + 7;
 
 constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
@@ -1104,7 +1111,7 @@ std::wstring GetProcessImagePath(DWORD processId) {
     };
 
     DWORD size = MAX_PATH;
-    for (int attempt = 0; attempt < 5; ++attempt) {
+    for (int attempt = 0; attempt < 8; ++attempt) {
         path.assign(size, L'\0');
         DWORD n = size;
         if (QueryFullProcessImageName(hProcess, 0, path.data(), &n)) {
@@ -1113,16 +1120,16 @@ std::wstring GetProcessImagePath(DWORD processId) {
             remember();
             return path;
         }
-        const DWORD err = GetLastError();
-        if (err != ERROR_INSUFFICIENT_BUFFER || n <= size) {
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
             path.clear();
             break;
         }
-        size = n;
-        if (size > 32768) {
+        // Failure does not report the required size — double until the cap.
+        if (size >= 32768) {
             path.clear();
             break;
         }
+        size = (size > 16384) ? 32768 : size * 2;
     }
     CloseHandle(hProcess);
     remember();
@@ -1549,11 +1556,10 @@ FrameworkElement FindDescendantByName(FrameworkElement element, PCWSTR name) {
 // Ranking
 // ---------------------------------------------------------------------------
 
-// True if any cached TaskListButton resolved to this exact process path or
-// AppUserModelID. Filename-only is not a match (two folders of python.exe).
-// Call from UI thread after EnsureButtonPathCached, or any thread if only
-// reading the path cache. Do not weak.get() here — RecomputeRanks can run
-// on the focus thread.
+// True if a *running* TaskListButton currently resolves to this exact path
+// or AppUserModelID. Pinned-only (closed) buttons keep a path in the cache
+// but must not occupy a top-N slot. Filename-only is not a match.
+// lastRunningTick is written on the UI thread; no weak.get() here.
 bool PathAppearsOnTaskbar(const std::wstring& keyOrPath) {
     const std::wstring pathUpper = PathFromAppKey(keyOrPath);
     const std::wstring wantAppId = CanonicalAppId(AppIdFromAppKey(keyOrPath));
@@ -1561,9 +1567,14 @@ bool PathAppearsOnTaskbar(const std::wstring& keyOrPath) {
         return false;
     }
 
+    const ULONGLONG now = GetTickCount64();
     std::lock_guard<std::mutex> lock(g_buttonPathMutex);
     for (const auto& [cacheKey, e] : g_buttonPathCache) {
         (void)cacheKey;
+        if (e.lastRunningTick == 0 ||
+            now - e.lastRunningTick >= kIsRunningGraceMs) {
+            continue;
+        }
         if (!wantAppId.empty()) {
             if (CanonicalAppId(e.appIdUpper) == wantAppId) {
                 return true;
@@ -1606,9 +1617,10 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
             it = desk.appFocusMap.erase(it);
             continue;
         }
-        // Tray-only / no taskbar button: keep optional history but never rank.
-        if (settings->requireTaskbarButton && !info.seenOnTaskbar) {
-            // Refresh from path cache if buttons resolved since last time.
+        // Tray-only / pinned-not-running: keep history but do not occupy a
+        // visible slot. seenOnTaskbar is not enough — a closed pinned app
+        // still has a path in the cache.
+        if (settings->requireTaskbarButton) {
             if (PathAppearsOnTaskbar(info.key)) {
                 info.seenOnTaskbar = true;
             } else {
@@ -2836,10 +2848,16 @@ TaskbarEdge DetectTaskbarEdge(FrameworkElement iconPanel) {
                                                            : TaskbarEdge::Bottom;
     };
 
-    if (verticalState || panelLooksVertical || tallPill) {
+    if (verticalState) {
         return pickVertical();
     }
-    if (horizontalState || panelLooksHorizontal) {
+    if (horizontalState) {
+        return pickHorizontal();
+    }
+    if (panelLooksVertical || tallPill) {
+        return pickVertical();
+    }
+    if (panelLooksHorizontal) {
         return pickHorizontal();
     }
     if (ha == HorizontalAlignment::Right) {
@@ -3096,6 +3114,24 @@ TaskbarEdge CachedTaskbarEdge(FrameworkElement iconPanel) {
     return edge;
 }
 
+void RefreshCachedTaskbarEdge(FrameworkElement iconPanel) {
+    if (!iconPanel) {
+        return;
+    }
+    const TaskbarEdge edge = DetectTaskbarEdge(iconPanel);
+    void* id = InspectableIdentity(iconPanel);
+    if (!id) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
+    auto it = g_layoutWatches.find(id);
+    if (it != g_layoutWatches.end() &&
+        WeakIsSameElement(it->second.panel, iconPanel)) {
+        it->second.lastEdge = edge;
+        it->second.haveEdge = true;
+    }
+}
+
 void EnsureIconPanelLayoutWatch(FrameworkElement button) {
     if (!button || g_unloading.load()) {
         return;
@@ -3308,6 +3344,12 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
 
         HideAllGlowLayers(host);
 
+        if (t <= 0.0 && sizeBoost <= 0) {
+            SetCachedPaintState(button, rankOneBased, settings->generation,
+                                edge, boxWi, boxHi);
+            return;
+        }
+
         if (style == GlowStyle::Frame || style == GlowStyle::Full) {
             const double baseInset =
                 (std::min)(boxW, boxH) * (1.0 - sizeFrac) * 0.5;
@@ -3332,14 +3374,14 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                 const double layerT = t * (1.0 - 0.15 * i);
                 const double th =
                     (std::max)(1.0, thickness * (1.0 - 0.1 * i));
-                const int strokeA =
-                    static_cast<int>((100 + 130 * layerT) * (1.0 - 0.12 * i));
-                const double opacity = 0.70 + 0.30 * layerT;
+                const int strokeA = static_cast<int>(
+                    230.0 * layerT * (1.0 - 0.12 * i) + 0.5);
+                const double opacity = layerT;
 
                 winrt::Windows::UI::Color fill{0, 0, 0, 0};
                 if (!isFrame && i == 0) {
                     int fillA = static_cast<int>(fillOpacitySetting * 2.55 *
-                                                 (0.45 + 0.55 * layerT));
+                                                 layerT + 0.5);
                     fill = withAlpha(base, fillA);
                 }
 
@@ -3353,7 +3395,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             const double barLen =
                 BarLengthForSide(boxW, boxH, barSide, sizeFrac);
             const int fillBase =
-                static_cast<int>(fillOpacitySetting * 2.55 * (0.55 + 0.45 * t));
+                static_cast<int>(fillOpacitySetting * 2.55 * t + 0.5);
             const int nLeft = (std::max)(1, (std::min)(layers, 2));
 
             for (int i = 0; i < nLeft; ++i) {
@@ -3364,7 +3406,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                 }
                 const int fillA =
                     i == 0 ? fillBase : static_cast<int>(fillBase * 0.35);
-                const double opacity = i == 0 ? (0.85 + 0.15 * t) : 0.45;
+                const double opacity = i == 0 ? t : (0.45 * t);
                 StyleGlowBarOnSide(rect, withAlpha(base, fillA), barT, barLen,
                                    barSide, i, opacity);
             }
@@ -3378,7 +3420,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             }
 
             const int fillA =
-                static_cast<int>(fillOpacitySetting * 2.55 * (0.6 + 0.4 * t));
+                static_cast<int>(fillOpacitySetting * 2.55 * t + 0.5);
             const double barT =
                 (std::max)(2.0, (std::min)(6.0, thickness));
             const double barLen =
@@ -3387,7 +3429,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             if (auto rect = FindChildByName(host, kGlowLayerNames[0])
                                 .try_as<Shapes::Rectangle>()) {
                 StyleGlowBarOnSide(rect, withAlpha(base, fillA), barT, barLen,
-                                   barSide, 0, 0.9 + 0.1 * t);
+                                   barSide, 0, t);
             }
 
         }
@@ -3398,6 +3440,61 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                 Media::ScaleTransform scale;
                 scale.ScaleX(s);
                 scale.ScaleY(s);
+                Media::ScaleTransform ours;
+                {
+                    void* id = InspectableIdentity(button);
+                    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+                    auto it = id ? g_buttonPathCache.find(id)
+                                 : g_buttonPathCache.end();
+                    if (it != g_buttonPathCache.end() &&
+                        WeakIsSameElement(it->second.button, button)) {
+                        try {
+                            ours = it->second.ourIconScale.get();
+                        } catch (...) {
+                        }
+                    }
+                }
+                bool alreadyOurs = false;
+                try {
+                    alreadyOurs = ours && icon.RenderTransform() == ours;
+                } catch (...) {
+                }
+                if (!alreadyOurs) {
+                    try {
+                        auto localTf = icon.ReadLocalValue(
+                            UIElement::RenderTransformProperty());
+                        auto localOrigin = icon.ReadLocalValue(
+                            UIElement::RenderTransformOriginProperty());
+                        void* id = InspectableIdentity(button);
+                        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+                        auto it = id ? g_buttonPathCache.find(id)
+                                     : g_buttonPathCache.end();
+                        if (it == g_buttonPathCache.end()) {
+                            ButtonPathCacheEntry stub;
+                            stub.button = winrt::make_weak(button);
+                            it = g_buttonPathCache.emplace(id, std::move(stub))
+                                     .first;
+                        }
+                        it->second.priorIconTfLocal =
+                            localTf != DependencyProperty::UnsetValue();
+                        it->second.priorIconOriginLocal =
+                            localOrigin != DependencyProperty::UnsetValue();
+                        if (it->second.priorIconTfLocal) {
+                            if (auto tf = icon.RenderTransform()
+                                              .try_as<Media::Transform>()) {
+                                it->second.priorIconTransform =
+                                    winrt::make_weak(tf);
+                            }
+                        } else {
+                            it->second.priorIconTransform = {};
+                        }
+                        if (it->second.priorIconOriginLocal) {
+                            it->second.priorIconOrigin =
+                                icon.RenderTransformOrigin();
+                        }
+                    } catch (...) {
+                    }
+                }
                 icon.RenderTransformOrigin(
                     winrt::Windows::Foundation::Point{0.5f, 0.5f});
                 icon.RenderTransform(scale);
@@ -4115,8 +4212,39 @@ void ClearIconScaleIfOurs(FrameworkElement icon, FrameworkElement button) {
             }
         }
         if (ours && current == ours) {
-            icon.ClearValue(UIElement::RenderTransformProperty());
-            icon.ClearValue(UIElement::RenderTransformOriginProperty());
+            Media::Transform prior = nullptr;
+            bool restoreTf = false;
+            bool restoreOrigin = false;
+            winrt::Windows::Foundation::Point origin{0.5f, 0.5f};
+            {
+                void* id = InspectableIdentity(button);
+                std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+                auto it = id ? g_buttonPathCache.find(id)
+                             : g_buttonPathCache.end();
+                if (it != g_buttonPathCache.end() &&
+                    WeakIsSameElement(it->second.button, button)) {
+                    restoreTf = it->second.priorIconTfLocal;
+                    restoreOrigin = it->second.priorIconOriginLocal;
+                    origin = it->second.priorIconOrigin;
+                    try {
+                        prior = it->second.priorIconTransform.get();
+                    } catch (...) {
+                    }
+                    it->second.priorIconTransform = {};
+                    it->second.priorIconTfLocal = false;
+                    it->second.priorIconOriginLocal = false;
+                }
+            }
+            if (restoreTf && prior) {
+                icon.RenderTransform(prior);
+            } else {
+                icon.ClearValue(UIElement::RenderTransformProperty());
+            }
+            if (restoreOrigin) {
+                icon.RenderTransformOrigin(origin);
+            } else {
+                icon.ClearValue(UIElement::RenderTransformOriginProperty());
+            }
         }
     } catch (...) {
     }
@@ -4209,6 +4337,9 @@ void ApplyAllHighlights_UIThread() {
     std::vector<ButtonIdentity> idents(live.size());
     std::vector<char> running(live.size(), 0);
     for (size_t bi = 0; bi < live.size(); ++bi) {
+        if (auto ip = GetIconPanel(live[bi])) {
+            RefreshCachedTaskbarEdge(ip);
+        }
         buttonPaths[bi] = EnsureButtonPathCached(live[bi], /*force=*/false);
         running[bi] = ButtonCountsAsRunning(live[bi]) ? 1 : 0;
         if (running[bi]) {
@@ -4346,6 +4477,7 @@ void AddThumbnailTaskItemMapping(
     entry.taskGroup = taskGroup;
     entry.taskItem = taskItem;
     entry.hwnd = hwnd;
+    entry.pid = hwnd ? PidFromHwnd(hwnd) : 0;
     g_thumbnailTaskItemMapping.push_back(std::move(entry));
     // Soft cap
     if (g_thumbnailTaskItemMapping.size() > 128) {
@@ -4363,7 +4495,13 @@ HWND HwndFromMappingEntry(const ThumbnailTaskItemMapping& item) {
     // HWND was read in the ctor hook while taskItem was live. Do not
     // dereference the raw ITaskItem* later — thumbnail-reorder only compares
     // that pointer, and the native object is gone when IsWindow fails.
-    return (item.hwnd && IsWindow(item.hwnd)) ? item.hwnd : nullptr;
+    if (!item.hwnd || !IsWindow(item.hwnd)) {
+        return nullptr;
+    }
+    if (item.pid && PidFromHwnd(item.hwnd) != item.pid) {
+        return nullptr;
+    }
+    return item.hwnd;
 }
 
 // True if two WinRT objects are the same COM identity (different projections
@@ -5139,6 +5277,10 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         const int fillOpacitySetting =
             (std::max)(0, (std::min)(100, settings->previewFillOpacity));
         const PreviewStyle style = settings->previewStyle;
+        if (t <= 0.0) {
+            ClearThumbnailHighlight(thumbView);
+            return;
+        }
         // Hybrid: plate is the rank-1 “this one” signal; title wash is enough
         // for 2+ (whole-plate 50/5 looks like leftover hover, not a ladder).
         PreviewStyle paintStyle = style;
@@ -5205,8 +5347,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                         auto marker = MakeThumbNativeMarker(savedBg);
                         if (marker) {
                             const int fillA = static_cast<int>(
-                                fillOpacitySetting * 2.55 *
-                                (0.45 + 0.55 * t));
+                                fillOpacitySetting * 2.55 * t + 0.5);
                             border.Background(Media::SolidColorBrush{
                                 withAlpha(base, fillA)});
                             panel.Children().Append(marker);
@@ -5222,13 +5363,13 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 if (auto plate = FindChildByName(host, kThumbGlowLayerNames[0])
                                      .try_as<Shapes::Rectangle>()) {
                     const int fillA = static_cast<int>(
-                        fillOpacitySetting * 2.55 * (0.45 + 0.55 * t));
+                        fillOpacitySetting * 2.55 * t + 0.5);
                     plate.Fill(Media::SolidColorBrush{withAlpha(base, fillA)});
                     plate.Stroke(nullptr);
                     plate.StrokeThickness(0);
                     plate.RadiusX(cardW * roundnessFrac * 0.12);
                     plate.RadiusY(cardH * roundnessFrac * 0.12);
-                    plate.Opacity(0.85 + 0.15 * t);
+                    plate.Opacity(t);
                     PlaceOverlayChild(plate, 0, 0, cardW, cardH);
                 }
             }
@@ -5261,10 +5402,8 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             auto chip =
                 FindChildByName(host, kThumbTitleBgName).try_as<Controls::Border>();
             if (chip) {
-                const int maxA = (std::max)(
-                    16, (std::min)(140, static_cast<int>(
-                                            14 + fillOpacitySetting * 1.15)));
-                const int chipA = (std::max)(8, static_cast<int>(maxA * t));
+                const int chipA = static_cast<int>(
+                    fillOpacitySetting * 2.55 * t + 0.5);
                 chip.Background(Media::SolidColorBrush{withAlpha(base, chipA)});
                 // Brace-init {4} only fills TopLeft (C++ struct). All four.
                 chip.CornerRadius(CornerRadius{4, 4, 4, 4});
@@ -5297,14 +5436,14 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             if (bar) {
                 // Wider alpha range than the old rank-1-only bar so flyout
                 // ranks read as a ladder; t=1 stays fully opaque accent.
-                const int fillA = static_cast<int>(90 + 165 * t);
+                const int fillA = static_cast<int>(255 * t + 0.5);
                 const double pad = 8.0;
                 bar.Fill(Media::SolidColorBrush{withAlpha(base, fillA)});
                 bar.Stroke(nullptr);
                 bar.StrokeThickness(0);
                 bar.RadiusX(barH * 0.5);
                 bar.RadiusY(barH * 0.5);
-                bar.Opacity(0.50 + 0.50 * t);
+                bar.Opacity(t);
                 PlaceOverlayChild(bar, pad, top,
                                   (std::max)(24.0, cardW - 2.0 * pad), barH);
             }
@@ -5715,9 +5854,10 @@ bool RunOnEachUiDispatcherAndWait(
                     winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
                     [done]() { SetEvent(done); });
                 drainPosted = DispatcherOpWasQueued(drainOp);
-                if (drainPosted && drainOp &&
-                    drainOp.Status() !=
-                        winrt::Windows::Foundation::AsyncStatus::Completed) {
+                // Always subscribe: Status can flip Started → Completed(false)
+                // between the check and this line. Completed still fires if
+                // already finished.
+                if (drainOp) {
                     SignalIfDrainNeverRan(drainOp, done);
                 }
             } catch (...) {
@@ -6446,6 +6586,11 @@ bool StillPendingForeground(const PendingFocus& pending,
         if (!foreground || fgPid != pending.processId) {
             return false;
         }
+        // Desktop/tray share explorer.exe with folder windows. Same PID is
+        // not enough — those HWNDs must take the transient-wait path.
+        if (IsTransientForeground(foreground)) {
+            return false;
+        }
         // ApplicationFrameHost: same PID is not the same app.
         if (IsAppIdKey(pending.key)) {
             std::wstring fgId =
@@ -6485,6 +6630,14 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
             return;
         }
         pending = g_pendingFocus;
+    }
+
+    if (IsExcludedKey(pending.key, ToUpper(pending.displayName))) {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        if (g_pendingFocus.hwnd == pending.hwnd) {
+            g_pendingFocus = {};
+        }
+        return;
     }
 
     if (mode == MinFocusConfirmMode::FromTimer) {
@@ -6539,13 +6692,11 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
                 ? CurrentDeskLocked()
                 : DeskStateLocked(pending.desktopId);
         StampWindowRecencyLocked(desk, confirmHwnd, pending.key, title, now);
-        auto appIt = desk.appFocusMap.find(pending.key);
-        const bool appAlreadyConfirmed =
-            appIt != desk.appFocusMap.end() &&
-            appIt->second.lastConfirmedFocusTick > 0;
-        if (appAlreadyConfirmed && g_pendingFocus.valid &&
-            g_pendingFocus.hwnd == pending.hwnd) {
-            g_pendingFocus = {};
+        if (g_pendingFocus.valid && g_pendingFocus.hwnd == pending.hwnd) {
+            g_pendingFocus.previewConfirmed = true;
+            if (g_pendingFocus.appConfirmed) {
+                g_pendingFocus = {};
+            }
         }
         Wh_Log(L"Preview focus confirmed: hwnd=%p %s title=\"%s\" (map=%zu "
                L"desktop=%s)",
@@ -6571,6 +6722,14 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
             return;
         }
         pending = g_pendingFocus;
+    }
+
+    if (IsExcludedKey(pending.key, ToUpper(pending.displayName))) {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        if (g_pendingFocus.hwnd == pending.hwnd) {
+            g_pendingFocus = {};
+        }
+        return;
     }
 
     if (mode == MinFocusConfirmMode::FromTimer) {
@@ -6641,10 +6800,6 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     const std::wstring classUpper = ToUpper(GetWindowClassName(pending.hwnd));
     const std::wstring appIdUpper =
         ToUpper(GetWindowAppUserModelId(pending.hwnd));
-    const bool alsoConfirmPreviewWindow =
-        settings->previewHighlightEnabled &&
-        settings->previewMinFocusSeconds <=
-            (std::max)(0, settings->minFocusSeconds);
 
     const ULONGLONG now = GetTickCount64();
     {
@@ -6666,25 +6821,17 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         info.appIdUpper = appIdUpper;
         info.lastConfirmedFocusTick = now;
 
-        // If preview min-focus is not longer than app min-focus, promote the
-        // window here too (covers minFocus=0 / already-tracked immediate path
-        // without waiting for a separate preview timer). When preview min is
-        // longer, leave pending so the preview timer can still fire.
-        if (alsoConfirmPreviewWindow && pending.hwnd &&
-            IsWindow(pending.hwnd)) {
-            StampWindowRecencyLocked(desk, pending.hwnd, pending.key,
-                                     pending.windowTitle, now);
-        }
-
-        // Keep pending alive while a longer preview timer may still need it.
-        const bool previewTimerMayRemain =
-            settings->previewHighlightEnabled &&
-            settings->previewMinFocusSeconds >
-                (std::max)(0, settings->minFocusSeconds);
-        if (!previewTimerMayRemain &&
+        // Preview min-focus is independent: do not stamp the current HWND
+        // here. A window switch just before the app deadline must wait out
+        // previewStartTick. Clicks still confirm immediately.
+        if (g_pendingFocus.valid &&
             (g_pendingFocus.hwnd == pending.hwnd ||
              g_pendingFocus.processId == pending.processId)) {
-            g_pendingFocus = {};
+            g_pendingFocus.appConfirmed = true;
+            if (!settings->previewHighlightEnabled ||
+                g_pendingFocus.previewConfirmed) {
+                g_pendingFocus = {};
+            }
         }
 
         RecomputeRanksForDesktopLocked(desk);
@@ -6698,10 +6845,6 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
 
     EnsureDecayTimerArmed();
 
-    if (alsoConfirmPreviewWindow) {
-        RequestApplyPreviewVisuals();
-    }
-
     // Resolve button paths on the UI thread, then apply. Drop tray-only apps
     // that never show a TaskListButton.
     RunOnUiThread([key = pending.key, displayName = pending.displayName,
@@ -6710,6 +6853,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         auto live = CollectLiveButtonsOnThisDispatcher();
         for (auto& b : live) {
             EnsureButtonPathCached(b, /*force=*/false);
+            ButtonCountsAsRunning(b);
         }
 
         const bool appears = PathAppearsOnTaskbar(key);
@@ -6900,6 +7044,7 @@ void HandleForegroundChanged(HWND hWnd) {
             }
             if (hwndChanged) {
                 g_pendingFocus.previewStartTick = now;
+                g_pendingFocus.previewConfirmed = false;
             }
             sameAppPending = true;
         } else {
@@ -7052,6 +7197,17 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             ConfirmPreviewFocusNow(reinterpret_cast<HWND>(wParam),
                                    static_cast<DWORD>(lParam));
             return 0;
+        case WM_APP_SETTINGS_CHANGED: {
+            CancelMinFocusTimer();
+            CancelPreviewMinFocusTimer();
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            if (g_pendingFocus.valid &&
+                IsExcludedKey(g_pendingFocus.key,
+                              ToUpper(g_pendingFocus.displayName))) {
+                g_pendingFocus = {};
+            }
+            return 0;
+        }
         case WM_TIMER:
             if (wParam == kMinFocusTimerId) {
                 KillTimer(hWnd, kMinFocusTimerId);
@@ -7121,7 +7277,6 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
         return 1;
     }
     g_hookThreadHwnd.store(hwnd, std::memory_order_release);
-    SignalHookThreadReady();
 
     HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(coHr) && coHr != RPC_E_CHANGED_MODE) {
@@ -7135,9 +7290,20 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
                         nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
     if (!hook) {
         Wh_Log(L"SetWinEventHook failed: %u", GetLastError());
-    } else {
-        Wh_Log(L"EVENT_SYSTEM_FOREGROUND hook installed");
+        UnsubscribeAccentChanges();
+        ReleaseVdm();
+        g_hookThreadHwnd.store(nullptr, std::memory_order_release);
+        DestroyWindow(hwnd);
+        UnregisterClassW(wc.lpszClassName, wc.hInstance);
+        g_hookThreadId.store(0, std::memory_order_release);
+        if (SUCCEEDED(coHr)) {
+            CoUninitialize();
+        }
+        SignalHookThreadReady();
+        return 1;
     }
+    Wh_Log(L"EVENT_SYSTEM_FOREGROUND hook installed");
+    SignalHookThreadReady();
 
     HWINEVENTHOOK deskHook =
         SetWinEventHook(EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH,
@@ -7192,10 +7358,10 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
     return 0;
 }
 
-void StartWinEventHookThread() {
+bool StartWinEventHookThread() {
     std::lock_guard<std::mutex> lock(g_winEventHookThreadMutex);
-    if (g_winEventHookThread) {
-        return;
+    if (g_winEventHookThread && HookThreadWindow()) {
+        return true;
     }
     if (!g_hookThreadReadyEvent) {
         g_hookThreadReadyEvent =
@@ -7203,24 +7369,36 @@ void StartWinEventHookThread() {
         if (!g_hookThreadReadyEvent) {
             Wh_Log(L"CreateEventW failed for hook-thread ready: %u",
                    GetLastError());
-            return;
+            return false;
         }
     } else {
         ResetEvent(g_hookThreadReadyEvent);
     }
     HANDLE hThread =
         CreateThread(nullptr, 0, WinEventHookThread, nullptr, 0, nullptr);
-    if (hThread) {
-        g_winEventHookThread = hThread;
-        WaitForSingleObject(g_hookThreadReadyEvent, INFINITE);
-        Wh_Log(L"WinEvent hook thread started");
-    } else {
+    if (!hThread) {
         Wh_Log(L"CreateThread failed: %u", GetLastError());
         if (g_hookThreadReadyEvent) {
             CloseHandle(g_hookThreadReadyEvent);
             g_hookThreadReadyEvent = nullptr;
         }
+        return false;
     }
+    g_winEventHookThread = hThread;
+    WaitForSingleObject(g_hookThreadReadyEvent, INFINITE);
+    if (!HookThreadWindow()) {
+        Wh_Log(L"Focus thread failed to create the message window");
+        WaitForSingleObject(hThread, INFINITE);
+        CloseHandle(hThread);
+        g_winEventHookThread = nullptr;
+        if (g_hookThreadReadyEvent) {
+            CloseHandle(g_hookThreadReadyEvent);
+            g_hookThreadReadyEvent = nullptr;
+        }
+        return false;
+    }
+    Wh_Log(L"WinEvent hook thread started");
+    return true;
 }
 
 void StopWinEventHookThread() {
@@ -7515,7 +7693,10 @@ BOOL Wh_ModInit() {
         Wh_Log(L"Taskbar view module not loaded yet");
     }
 
-    StartWinEventHookThread();
+    if (!StartWinEventHookThread()) {
+        Wh_Log(L"Focus thread failed to start");
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -7608,7 +7789,10 @@ void Wh_ModSettingsChanged() {
             for (auto it = desk.appFocusMap.begin();
                  it != desk.appFocusMap.end();) {
                 std::wstring displayUpper = ToUpper(it->second.displayName);
-                if (IsExcludedKey(it->first, displayUpper)) {
+                if (IsExcludedKey(it->first, displayUpper) ||
+                    (!it->second.appIdUpper.empty() &&
+                     SettingsSnap()->excludedPrograms.contains(
+                         it->second.appIdUpper))) {
                     it = desk.appFocusMap.erase(it);
                 } else {
                     ++it;
@@ -7629,6 +7813,7 @@ void Wh_ModSettingsChanged() {
         }
     }
 
+    PostToHookThread(WM_APP_SETTINGS_CHANGED);
     RequestApplyVisuals();
     RequestApplyPreviewVisuals();
 }
