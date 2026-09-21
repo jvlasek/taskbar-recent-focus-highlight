@@ -4268,7 +4268,7 @@ void ClearIconScaleIfOurs(FrameworkElement icon, FrameworkElement button) {
             bool restoreTf = false;
             bool restoreOrigin = false;
             winrt::Windows::Foundation::Point origin{0.5f, 0.5f};
-            FrameworkElement host;
+            FrameworkElement host{nullptr};
             try {
                 if (auto panel = GetIconPanel(button)) {
                     host = FindChildByName(panel, kGlowElementName);
