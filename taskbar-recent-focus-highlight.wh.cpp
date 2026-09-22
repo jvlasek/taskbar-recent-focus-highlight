@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.29
+// @version         0.9.30
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -37,8 +37,10 @@ buttons on the current desktop get a highlight:
 
 Rank 1 is strongest; ranks 2 and 3 (and 4+) use the intensities you set.
 Pinned icons that are not running on this desktop are never highlighted.
-A short Alt+Tab that does not meet the minimum focus time does not change
-ranks. Each virtual desktop keeps its own list.
+A new app is added only after the minimum focus time. Re-focus of an app
+already in the list follows “When to skip min-focus” (default: it becomes
+rank 1 immediately). A short Alt+Tab that never settles does not add a new
+app. Each virtual desktop keeps its own list.
 
 When you hover a combined icon and the flyout shows **two or more** windows,
 that flyout gets its own recency ladder (independent of icon ranks). The
@@ -179,7 +181,7 @@ to clear highlights.
       $name: Roundness (%)
       $description: >-
         Corner radius for Frame/Full (0 = square, ~25–35 = Win11, 50 ≈ pill).
-        Side bar uses this for pill rounding; edge bar ignores it.
+        Side and edge bars stay capsules and ignore this.
     - glowSize: 92
       $name: Size (%)
       $description: >-
@@ -225,8 +227,8 @@ to clear highlights.
         How to mark ranked windows. Hybrid (default) = whole plate for rank 1,
         title wash for ranks 2+. Title bar = thin line under the title
         (thickness follows Icons → Thickness). Title background = soft wash
-        behind the title. Plate = tint the whole card (corners follow Icons →
-        Roundness).
+        behind the title. Plate = tint the whole card (native corners stay;
+        the overlay fallback uses Icons → Roundness).
       $options:
       - titleBar: Bar under window title
       - titleBg: Title background tint
@@ -1588,7 +1590,8 @@ FrameworkElement FindDescendantByName(FrameworkElement element, PCWSTR name) {
 // but must not occupy a top-N slot. Filename-only is not a match.
 // observedRunning is the last UI IsRunning snapshot (sticky until the UI
 // sees not-running). Grace covers Alt-Tab flicker after that observation,
-// not a heartbeat that idle apps must renew. No weak.get() here.
+// not a heartbeat that idle apps must renew. No weak.get() here. UI
+// passes drop dead rows first (PruneDeadButtonPathCache_UIThread).
 bool PathAppearsOnTaskbar(const std::wstring& keyOrPath) {
     const std::wstring pathUpper = PathFromAppKey(keyOrPath);
     const std::wstring wantAppId = CanonicalAppId(AppIdFromAppKey(keyOrPath));
@@ -3515,16 +3518,22 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                             UIElement::RenderTransformOriginProperty());
                         const bool hadLocalTf =
                             localTf != DependencyProperty::UnsetValue();
-                        // Keep the displaced transform alive on our host Tag
-                        // (Icon may have been the last strong owner).
-                        if (hadLocalTf && host) {
-                            auto tagVal = host.ReadLocalValue(
-                                FrameworkElement::TagProperty());
-                            if (tagVal == DependencyProperty::UnsetValue()) {
+                        const bool hadLocalOrigin =
+                            localOrigin != DependencyProperty::UnsetValue();
+                        // Overwrite the saved transform on every takeover.
+                        // The first Tag must not win over a later owner.
+                        bool savedTf = false;
+                        if (host) {
+                            if (hadLocalTf) {
                                 if (auto tf = icon.RenderTransform()
                                                   .try_as<Media::Transform>()) {
                                     host.Tag(tf);
+                                    savedTf = true;
                                 }
+                            }
+                            if (!savedTf) {
+                                host.ClearValue(
+                                    FrameworkElement::TagProperty());
                             }
                         }
                         void* id = InspectableIdentity(button);
@@ -3537,10 +3546,9 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                             it = g_buttonPathCache.emplace(id, std::move(stub))
                                      .first;
                         }
-                        it->second.priorIconTfLocal = hadLocalTf;
-                        it->second.priorIconOriginLocal =
-                            localOrigin != DependencyProperty::UnsetValue();
-                        if (it->second.priorIconOriginLocal) {
+                        it->second.priorIconTfLocal = savedTf;
+                        it->second.priorIconOriginLocal = hadLocalOrigin;
+                        if (hadLocalOrigin) {
                             it->second.priorIconOrigin =
                                 icon.RenderTransformOrigin();
                         }
@@ -3582,6 +3590,23 @@ void PruneTrackedButtons_UIThread() {
             }
         } catch (...) {
             it = g_trackedButtons.erase(it);
+        }
+    }
+}
+
+// A destroyed TaskListButton often never reports IsRunning=false.
+// PathAppearsOnTaskbar runs off this thread and must not weak.get().
+void PruneDeadButtonPathCache_UIThread() {
+    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+    for (auto it = g_buttonPathCache.begin(); it != g_buttonPathCache.end();) {
+        try {
+            if (!it->second.button.get()) {
+                it = g_buttonPathCache.erase(it);
+            } else {
+                ++it;
+            }
+        } catch (...) {
+            it = g_buttonPathCache.erase(it);
         }
     }
 }
@@ -4339,6 +4364,7 @@ void ForEachLiveElementOnThisDispatcher(
 
 std::vector<FrameworkElement> CollectLiveButtonsOnThisDispatcher() {
     PruneTrackedButtons_UIThread();
+    PruneDeadButtonPathCache_UIThread();
     std::vector<winrt::weak_ref<FrameworkElement>> buttons;
     {
         std::lock_guard<std::mutex> lock(g_buttonsMutex);
@@ -6049,12 +6075,13 @@ void RefreshButtonHighlight(FrameworkElement button) {
     }
 
     // Closed / pinned-not-running: drop chrome here and rebind so the slot
-    // frees. Grace inside ButtonCountsAsRunning still covers Alt-Tab flicker.
+    // frees. Read the rank first — clear stores 0. Grace inside
+    // ButtonCountsAsRunning still covers Alt-Tab flicker.
     if (!ButtonCountsAsRunning(button)) {
+        const int cached = GetCachedPaintState(button).rank;
         if (ButtonHasOurChrome(button)) {
             ClearButtonHighlight(button);
         }
-        const int cached = GetCachedPaintState(button).rank;
         if (cached > 0) {
             SetCachedPaintState(button, 0, SettingsSnap()->generation);
             ScheduleRefreshAllHighlights(button);
@@ -7031,7 +7058,9 @@ void EnsurePendingAppTimer() {
     const ULONGLONG remaining = RemainingDeadlineMs(
         pending.focusStartTick, settings->minFocusSeconds, GetTickCount64());
     if (remaining == 0) {
-        OnMinFocusTimerElapsed(MinFocusConfirmMode::Immediate);
+        // Already due. FromTimer still honors Alt-Tab grace; Immediate
+        // would drop the candidate while the switcher holds foreground.
+        OnMinFocusTimerElapsed(MinFocusConfirmMode::FromTimer);
         return;
     }
     ArmHookTimer(kMinFocusTimerId, remaining);
@@ -7070,7 +7099,8 @@ void EnsurePendingPreviewTimer() {
     const ULONGLONG remaining =
         RemainingDeadlineMs(start, previewMin, GetTickCount64());
     if (remaining == 0) {
-        OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode::Immediate);
+        // Same as the app timer: a due deadline resumes grace handling.
+        OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode::FromTimer);
         return;
     }
     ArmHookTimer(kPreviewMinFocusTimerId, remaining);
@@ -7262,14 +7292,18 @@ void OnDecayTimer() {
     if (g_unloading.load()) {
         return;
     }
-    size_t before = 0;
-    size_t after = 0;
+    std::vector<std::wstring> keysBefore;
+    std::vector<std::wstring> keysAfter;
     size_t windowsBefore = 0;
     size_t windowsAfter = 0;
     RefreshCurrentDesktopId();
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
-        before = CurrentDeskLocked().rankedApps.size();
+        const auto& beforeApps = CurrentDeskLocked().rankedApps;
+        keysBefore.reserve(beforeApps.size());
+        for (const auto& app : beforeApps) {
+            keysBefore.push_back(app.key);
+        }
         windowsBefore = CurrentDeskLocked().windowFocusMap.size();
         for (auto it = g_desktopMaps.begin(); it != g_desktopMaps.end();) {
             RecomputeRanksForDesktopLocked(it->second);
@@ -7282,11 +7316,20 @@ void OnDecayTimer() {
                 ++it;
             }
         }
-        after = CurrentDeskLocked().rankedApps.size();
+        const auto& afterApps = CurrentDeskLocked().rankedApps;
+        keysAfter.reserve(afterApps.size());
+        for (const auto& app : afterApps) {
+            keysAfter.push_back(app.key);
+        }
         windowsAfter = CurrentDeskLocked().windowFocusMap.size();
     }
-    if (after != before || after == 0) {
-        Wh_Log(L"Decay recompute: ranks %zu -> %zu", before, after);
+    // Same length can still be a different ladder ([A,B,C] -> [A,C,D]).
+    // An empty list keeps requesting a sweep so a missed clear can retry.
+    if (keysBefore != keysAfter || keysAfter.empty()) {
+        if (keysBefore != keysAfter) {
+            Wh_Log(L"Decay recompute: ranks %zu -> %zu", keysBefore.size(),
+                   keysAfter.size());
+        }
         // Ensure overlays are stripped even if some weak refs are stale after
         // sleep — every live button will clear on next UpdateVisualStates too.
         g_pendingOverlaySweep = true;
@@ -7392,9 +7435,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                 CancelPreviewMinFocusTimer();
             } else if (keepPending) {
                 // Color/thickness/intensity must not disarm an allowed
-                // candidate. Re-arm remaining deadlines (min-focus changes
-                // included). KillTimer does not flush a queued WM_TIMER;
-                // the elapsed handlers still re-check start ticks.
+                // candidate. Re-arm the time still left. A deadline that
+                // has already elapsed resumes the timer path, including
+                // Alt-Tab grace. KillTimer does not flush a queued WM_TIMER.
                 EnsurePendingAppTimer();
                 EnsurePendingPreviewTimer();
             }

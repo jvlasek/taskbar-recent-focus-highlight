@@ -6,7 +6,7 @@ thumbnail previews with the same kind of intensity ladder.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.29 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.30 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -65,7 +65,7 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Number of highlighted apps | How many recent apps to boost (1–6 recommended) | 3 |
-| Minimum focus time (seconds) | App must stay focused this long to enter ranks | 8 |
+| Minimum focus time (seconds) | How long a new app must stay focused to enter ranks. Re-focus follows “When to skip min-focus” | 8 |
 | When to skip min-focus | Immediate if in map / only if already top-N / always wait | Immediate if in map |
 | Decay time (minutes) | Drop app from ranks after idle | 30 |
 | Only apps on the taskbar | Skip tray-only / popup focus targets | On |
@@ -207,7 +207,7 @@ without an HWND stay unmarked.
 
 | Topic | Decision | Why |
 |-------|----------|-----|
-| App min focus | Default 8s | Alt+Tab should not reshuffle ranks |
+| App min focus | Default 8s | A new app waits this long. Default re-focus of an app already in the list is immediate |
 | Preview min focus | Default 1s (separate) | Snappier for multi-window |
 | Rank key | Full process path (UPPER); `APPID:…` for AFH/WWAHost | Distinct installs; UWP apps share a host exe |
 | Window key | HWND + PID | Recycled handles don’t inherit recency |

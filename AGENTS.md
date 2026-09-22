@@ -286,9 +286,11 @@ Shared confirm helpers (do not fork another copy):
 min-focus handlers (`FromTimer`) re-check the *current* candidate’s start tick
 (`focusStartTick` / `previewStartTick`) and re-arm for the remainder instead
 of confirming a newer pending focus early. `Immediate` (min=0 / promoteMode /
-already-tracked window) skips that wait. Settings changes cancel timers only
-for a newly excluded candidate; an allowed pending episode is re-armed with
-`EnsurePendingAppTimer` / `EnsurePendingPreviewTimer`. The 30 s decay timer is **not**
+already-tracked window / preview click) skips that wait. A positive minimum
+whose deadline has already elapsed resumes through `FromTimer`, so Alt-Tab
+grace still applies. Settings changes cancel timers only for a newly excluded
+candidate; an allowed pending episode is re-armed with `EnsurePendingAppTimer`
+/ `EnsurePendingPreviewTimer`. The 30 s decay timer is **not**
 started with the focus thread; first confirmed app or window recency arms it,
 and `OnDecayTimer` stops it when every desktop map is empty and there is no
 pending focus.
@@ -326,7 +328,7 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Re-resolve once on not-running → running (`resolvedWhileRunning`); `kUnresolvedRetryMs` otherwise. Running + dead sample HWND or live image-path mismatch also re-resolves. Empty re-resolve does not wipe a known path. `observedRunning` is the last UI `IsRunning` snapshot (sticky until the UI sees false). | UVS must not `ReportClicked`. Explorer reuses the same `TaskListButton` on launch **and** when the exe is replaced by another folder’s copy. |
 | UVS vs rebind | Cached paint: **-1** unknown, **0** unranked, **>0** paint if `(rank, generation, accent, edge, panel size)` changed. | `{rank, gen, accent}` alone left the bar on the old side after a taskbar-edge / icon-size relayout. |
 | Native z-order | `RestoreIconPanelNativeZOrder` only after we insert or remove `WhRecentFocusGlow`. Snapshot child names **before** the first move; restore that list, not an assumed stock order. | Healing unranked buttons fights Taskbar Styler. Stock restore rewrote Styler themes on disable. |
-| Rank match | Exact path / HWND / AUMID only. `PathAppearsOnTaskbar` is exact path / AUMID **and** a button last observed running (`observedRunning`, or 400 ms grace after a not-running snapshot). Pinned-only / closed must not occupy a top-N slot. | Two folders of `python.exe` stay distinct; closing a pinned app (or moving the exe on update) frees the slot. Idle apps must not drop because no hover refreshed a tick. |
+| Rank match | Exact path / HWND / AUMID only. `PathAppearsOnTaskbar` is exact path / AUMID **and** a button last observed running (`observedRunning`, or 400 ms grace after a not-running snapshot). Pinned-only / closed must not occupy a top-N slot. A path-cache row whose button is already dead is erased on the UI thread (`PruneDeadButtonPathCache_UIThread`, from `CollectLiveButtons`) before eligibility; this function does not `weak.get()`. | Two folders of `python.exe` stay distinct; closing a pinned app (or moving the exe on update) frees the slot. Idle apps must not drop because no hover refreshed a tick. A destroyed button must not keep the slot. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
 | Virtual desktops | Nested recency maps; no taskband reordering hooks | Explorer already filters `IsRunning` |
@@ -342,7 +344,7 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | RunningIndicator on style switch | Cover Edge bar via z-order only. Never ClearValue Visibility/Width/Height, never GoToState | VSM stores InactiveRunningIndicator `Visible` as a local value. ClearValue → template Collapsed. GoToState of the *current* state is a no-op, so the short unfocused pill stays gone. |
 | Bar auto-rotate | `leftBar` = side (perpendicular); `bottomBar` = edge (screen edge) | Settings keys stay `leftBar`/`bottomBar`. Detect: `VerticalOrientation` / panel 48×32 (wider than tall ⇒ **vertical** bar) first. Do not treat leftover RunningIndicator `VA=Bottom` as a bottom taskbar. |
 | OverlayIcon | Keep after Icon / DefaultIcon | Discord/Thunderbird/WhatsApp badge; our host insert can leave it behind the glyph |
-| Size boost | Icon `ScaleTransform` only; remember our instance and clear only that object. Previous local transform lives on the glow host Tag (not a cache `weak_ref`). Zero intensity/boost still calls `ClearIconScaleIfOurs` (do not skip on the empty-visual return). | Other mods (taskbar-dock-animation) scale the same `Icon` |
+| Size boost | Icon `ScaleTransform` only; remember our instance and clear only that object. Previous local transform lives on the glow host Tag (not a cache `weak_ref`) and is replaced on every new takeover. Zero intensity/boost still calls `ClearIconScaleIfOurs` (do not skip on the empty-visual return). | Other mods (taskbar-dock-animation) scale the same `Icon` |
 | Rank intensity | Element Opacity (bars/frames) or brush alpha (native plate / titleBg) **once** | Do not also multiply fill/stroke alpha by `t`. 100/80/60 must read as 100/80/60, not ~100/64/36. |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
 | Coexistence | Own names; plate save/restore `BackgroundBorder`; side bar above Styler hover plate | Taskbar Styler (themes restyle `RunningIndicator` into a full-cell acrylic on PointerOver) |
@@ -537,10 +539,14 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    open without hovering through a 30 s decay tick — glows stay. Change an
    unrelated setting (color / intensity) while they are ranked — glows stay
    (and 100/80/60 intensity is linear, not squared). Change a setting during
-   pending min-focus without leaving the app — it still confirms. Exclude a
+   pending min-focus without leaving the app — it still confirms, including
+   after the deadline while Alt-Tab still holds foreground. Exclude a
    Win32 window AUMID while pending and after confirm — icon and preview
    recency both drop. Close a pinned ranked
-   app: its slot frees for a still-running lower rank. Re-focus A after B
+   app: its slot frees for a still-running lower rank, including when the
+   visible count stays at highlightCount. A full bind after an unpinned
+   button disappears without a final not-running observation must drop that
+   app from the top N. Re-focus A after B
    (default promote): A returns to rank 1. A new Lister window needs its own
    preview min-focus; the app timer must not stamp it early. Hybrid rank 2 / title-background wash is a shallow
    rounded rect covering the icon + title (not a fat pill that starts
@@ -704,9 +710,13 @@ and must not guess identity from localized UI strings.
 | `lastRunningTick` is not a heartbeat | 400 ms freshness dropped idle ranks on decay / settings / desktop switch; empty-rank apply skipped the UI snapshot | `observedRunning` until the UI sees not-running; grace only after that; `ApplyAllHighlights` snapshots `IsRunning` then recomputes, even with no ranks |
 | Settings change cancelled min-focus | `WM_APP_SETTINGS_CHANGED` `KillTimer` left a valid pending candidate with no clock | Drop only an excluded candidate; re-arm remaining app/preview deadlines for an allowed one |
 | Intensity × fill × opacity | Brush alpha and element Opacity both multiplied by rank `t` made 60% look ~36% | Rank intensity is Opacity (or native-plate brush alpha) once; fill/stroke setting is the other |
-| Drain Low callback is not completion | Low `SetEvent` let unload proceed while `Completed` still ran mod code | Empty Low sentinel; `Completed` always signals; keep the op until after wait; detach the handler |
+| Drain Low callback is not completion | Low `SetEvent` let unload proceed while `Completed` still ran mod code | Empty Low sentinel; `Completed` always signals; keep the op until after wait. `Completed` is set only once |
 | Weak prior transform | Displacing `Icon.RenderTransform` dropped the last strong ref; restore used `ClearValue` | Glow host Tag holds the previous transform for the takeover |
 | Win32 AUMID exclusion | Pending/timer/preview history used path+filename only; window AUMID exclusions did not drop them | Same `IsExcludedKey(..., appId)` for admission, pending, confirm, and history; resolve AUMID outside `g_stateMutex` |
+| Dead path-cache row stays eligible | `observedRunning` survived after the button was destroyed; full bind never saw `IsRunning=false` | Erase null button weaks on the UI thread before eligibility. Do not `weak.get()` in `PathAppearsOnTaskbar` |
+| Clear stores rank 0 before the rerank test | Closing a glowing button skipped `ScheduleRefreshAllHighlights`; decay compared only the rank count | Read the paint rank before `ClearButtonHighlight`. Decay compares the ordered rank keys |
+| Second transform takeover restores the first | Host Tag was written only while unset, so a later owner was overwritten and the first snapshot came back | On each takeover, replace the Tag and the origin flags together. Restore only while the current transform is still ours |
+| Due deadline re-arm skips grace | `remaining == 0` used `Immediate`, which drops a candidate while Alt-Tab still holds foreground | Resume a positive elapsed minimum with `FromTimer`. Keep `Immediate` for a zero minimum, promote skip, and preview click |
 
 ---
 
