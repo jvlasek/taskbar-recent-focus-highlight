@@ -255,7 +255,7 @@ or thumbnail `OnApplyTemplate`.
 | App last HWND | `lastHwnd` + `lastPid` | Same recycle guard as preview; HWND-only would bind the rank to whichever button now owns the handle |
 | Display name | Win32: file name; UWP host: window title (else AUMID stem) | Logs / exclude UX |
 | App min focus | Default 8s | Alt+Tab noise |
-| Promote mode | immediateTracked / immediateTopN / alwaysWait | When re-focus skips app min-focus |
+| Promote mode | immediateTracked / immediateTopN / alwaysWait | When re-focus skips app min-focus. A confirm past `decayMinutes` does not qualify, even if the 30 s prune has not removed the map entry yet |
 | Preview min focus | Default 1s; independent of app min-focus | Snappier window mark. App confirm does not stamp the current HWND. |
 | Same-PID during app timer | Still same candidate (Win32). `APPID:` also needs same AUMID | New window of app; AFH is shared |
 | App decay | Default 30 min | List stays “recent” |
@@ -461,10 +461,12 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
 5. **Crashes / unload:** try/catch around XAML; don’t block focus hooks.
    Bound `QueryViaVtable` / task-item array offsets; fail closed on miss.
    `Wh_ModUninit`: set `g_unloading`, **stop the focus thread first**, then
-   drain each dispatcher (High cleanup + Low drain, INFINITE). The Low
-   sentinel is the barrier, not High completion. `Completed` signals the
-   waiter; if it cannot be set, poll `Status()`. A failed subscription is
-   not an empty queue. Keep the operation until that wait finishes. Never time out
+   drain each dispatcher (High cleanup, then a Low sentinel, INFINITE).
+   Return only after the sentinel's callback has run (`GetResults()==true`)
+   or a dispatcher call fails because that dispatcher is gone. High
+   completion, a false `TryRunAsync` result, a timeout, and a failed
+   `Status()` read are not a drain. `Completed` signals the waiter when it
+   can be set; otherwise poll. Never unload on a best-effort failure.
    a drain — leftover `SizeChanged` lambdas crash Explorer. Ready event before
    `StartWinEventHookThread` returns so shutdown `PostMessage` cannot miss the
    queue. Register the message-window class with the **mod** module handle
@@ -720,7 +722,7 @@ and must not guess identity from localized UI strings.
 | `lastRunningTick` is not a heartbeat | 400 ms freshness dropped idle ranks on decay / settings / desktop switch; empty-rank apply skipped the UI snapshot | `observedRunning` until the UI sees not-running; grace only after that; `ApplyAllHighlights` snapshots `IsRunning` then recomputes, even with no ranks |
 | Settings change cancelled min-focus | `WM_APP_SETTINGS_CHANGED` `KillTimer` left a valid pending candidate with no clock | Drop only an excluded candidate; re-arm remaining app/preview deadlines for an allowed one |
 | Intensity × fill × opacity | Brush alpha and element Opacity both multiplied by rank `t` made 60% look ~36% | Rank intensity is Opacity (or native-plate brush alpha) once; fill/stroke setting is the other |
-| Drain Low callback is not completion | Low `SetEvent` let unload proceed while `Completed` still ran mod code | Empty Low sentinel is the barrier (it runs after High and after already-queued Normal work). `Completed` is set once and signals; if it cannot be set, poll `Status()`. A failed subscription is not an empty queue. Retry Low when High was queued and Low was not. Signal immediately only when both posts failed |
+| Drain Low callback is not completion | Low `SetEvent` let unload proceed while `Completed` still ran mod code | Unload returns only after the Low sentinel callback ran, or the dispatcher is gone. A terminal Low op with `GetResults()==false`, High completion, a timeout, or a failed status read is not that proof |
 | Weak prior transform | Displacing `Icon.RenderTransform` dropped the last strong ref; restore used `ClearValue` | Glow host Tag holds the previous transform for the takeover |
 | Win32 AUMID exclusion | Pending/timer/preview history used path+filename only; window AUMID exclusions did not drop them | Same `IsExcludedKey(..., appId)` for admission, pending, confirm, and history; resolve AUMID outside `g_stateMutex` |
 | Dead path-cache row stays eligible | `observedRunning` survived after the button was destroyed; full bind never saw `IsRunning=false` | Erase null button weaks on the UI thread before eligibility. Do not `weak.get()` in `PathAppearsOnTaskbar` |

@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.32
+// @version         0.9.33
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -104,8 +104,9 @@ to clear highlights.
     Controls instant promotion when you re-focus an app (confirmed apps still
     become rank 1 once promoted — this only skips the wait timer).
 
-    Immediate if in recency map (default): any app still in the map (even if
-    not currently highlighted) promotes immediately.
+    Immediate if in recency map (default): an app whose last confirm is still
+    inside the decay window promotes immediately, even if it is not currently
+    highlighted. A confirm past that window waits again.
 
     Immediate only if highlighted: instant only when the app is already in the
     top-N glow set; rank 4+ and new apps wait the full min-focus time.
@@ -6006,31 +6007,68 @@ bool SubscribeDrainCompleted(Op const& op, HANDLE done) {
     }
 }
 
-// Prefer Completed. If it cannot be attached, poll Status so a queued
-// callback is still waited out. Do not treat that failure as an empty queue.
-template <typename Op>
-void WaitUntilDispatcherOpFinished(Op const& op, HANDLE done) {
+// What a TryRunAsync operation actually did. Started is not a result.
+// Completed + GetResults()==false means the callback was not run.
+enum class DispatcherOpEnd {
+    Absent,
+    Ran,
+    NotRun,
+    Unknown,
+};
+
+// Dispatcher method calls that mean this object will not invoke us again.
+bool HresultMeansDispatcherGone(HRESULT hr) {
+    return hr == static_cast<HRESULT>(0x80010108) ||  // RPC_E_DISCONNECTED
+           hr == static_cast<HRESULT>(0x80010007) ||  // RPC_E_SERVER_DIED
+           hr == static_cast<HRESULT>(0x80010012) ||  // RPC_E_SERVER_DIED_DNE
+           hr == static_cast<HRESULT>(0x800401FD) ||  // CO_E_OBJNOTCONNECTED
+           hr == static_cast<HRESULT>(0x80000013);    // RO_E_CLOSED
+}
+
+// Wait until the operation is terminal, then report whether its callback ran.
+// A status read that throws is Unknown, not completion. done may be null.
+// pump runs while polling so a sentinel posted on the UI thread can execute.
+template <typename Op, typename Pump>
+DispatcherOpEnd ObserveDispatcherOp(Op const& op, HANDLE done, Pump pump) {
     if (!op) {
-        return;
+        return DispatcherOpEnd::Absent;
     }
     if (done) {
         ResetEvent(done);
     }
-    if (done && SubscribeDrainCompleted(op, done)) {
-        WaitForSingleObject(done, INFINITE);
-        return;
-    }
-    while (true) {
-        try {
-            if (op.Status() !=
-                winrt::Windows::Foundation::AsyncStatus::Started) {
-                break;
+    if (!done || !SubscribeDrainCompleted(op, done)) {
+        while (true) {
+            try {
+                if (op.Status() !=
+                    winrt::Windows::Foundation::AsyncStatus::Started) {
+                    break;
+                }
+            } catch (...) {
+                return DispatcherOpEnd::Unknown;
             }
-        } catch (...) {
-            break;
+            pump();
         }
-        Sleep(1);
+    } else {
+        WaitForSingleObject(done, INFINITE);
     }
+    try {
+        const auto st = op.Status();
+        if (st == winrt::Windows::Foundation::AsyncStatus::Completed) {
+            try {
+                return op.GetResults() ? DispatcherOpEnd::Ran
+                                       : DispatcherOpEnd::NotRun;
+            } catch (...) {
+                return DispatcherOpEnd::Unknown;
+            }
+        }
+        if (st == winrt::Windows::Foundation::AsyncStatus::Error ||
+            st == winrt::Windows::Foundation::AsyncStatus::Canceled) {
+            return DispatcherOpEnd::NotRun;
+        }
+    } catch (...) {
+        return DispatcherOpEnd::Unknown;
+    }
+    return DispatcherOpEnd::Unknown;
 }
 
 std::vector<winrt::Windows::UI::Core::CoreDispatcher> CollectUiDispatchers() {
@@ -6041,9 +6079,103 @@ std::vector<winrt::Windows::UI::Core::CoreDispatcher> CollectUiDispatchers() {
     return *g_uiDispatchers;
 }
 
-// Uninit: post cleanup at High, then a Low sentinel. Low runs after that
-// cleanup and after Normal work already in the queue. High finishing is
-// not that drain. Wait only when something was actually queued.
+// Proof the dispatcher will not call this mod again: the Low sentinel ran,
+// or a call failed because the dispatcher is gone. High completion is not
+// that proof. A timeout, a false TryRunAsync result, and a thrown status
+// read are not that proof either.
+enum class DrainProof { SentinelRan, DispatcherGone };
+
+bool ExceptionMeansDispatcherGone() {
+    try {
+        throw;
+    } catch (winrt::hresult_error const& ex) {
+        return HresultMeansDispatcherGone(ex.code());
+    } catch (...) {
+        return false;
+    }
+}
+
+void PauseDispatcherAttempt(
+    winrt::Windows::UI::Core::CoreDispatcher const& dispatcher) {
+    // On the UI thread a posted sentinel cannot finish until the queue is
+    // pumped. Off that thread, backoff only — do not pretend time is a drain.
+    if (dispatcher.HasThreadAccess()) {
+        try {
+            dispatcher.ProcessEvents(
+                winrt::Windows::UI::Core::CoreProcessEventsOption::
+                    ProcessOneIfPresent);
+        } catch (...) {
+        }
+    }
+    Sleep(20);
+}
+
+DrainProof DrainOneUiDispatcher(
+    winrt::Windows::UI::Core::CoreDispatcher const& dispatcher,
+    winrt::Windows::UI::Core::DispatchedHandler const& handler,
+    HANDLE done) {
+    using AsyncOp = winrt::Windows::Foundation::IAsyncOperation<bool>;
+    using Pri = winrt::Windows::UI::Core::CoreDispatcherPriority;
+    // Completed is delivered on the dispatcher thread. Waiting for it here
+    // would deadlock. Poll and pump instead.
+    if (dispatcher.HasThreadAccess()) {
+        done = nullptr;
+    }
+    AsyncOp highOp{nullptr};
+    bool highRan = false;
+    auto pump = [&]() { PauseDispatcherAttempt(dispatcher); };
+    for (;;) {
+        if (!highRan) {
+            if (!highOp) {
+                try {
+                    highOp = dispatcher.TryRunAsync(Pri::High, handler);
+                } catch (...) {
+                    if (ExceptionMeansDispatcherGone()) {
+                        return DrainProof::DispatcherGone;
+                    }
+                    highOp = nullptr;
+                    pump();
+                    continue;
+                }
+            }
+            const DispatcherOpEnd highEnd =
+                ObserveDispatcherOp(highOp, done, pump);
+            if (highEnd == DispatcherOpEnd::Ran) {
+                highRan = true;
+            } else if (highEnd == DispatcherOpEnd::Unknown) {
+                // Same operation may still be running. Do not post another
+                // cleanup, and do not treat the read failure as finished.
+                pump();
+                continue;
+            } else {
+                // Rejected, canceled, or error: the cleanup callback did not
+                // run. That is not a drain. Try again.
+                highOp = nullptr;
+                pump();
+                continue;
+            }
+        }
+        AsyncOp lowOp{nullptr};
+        try {
+            lowOp = dispatcher.TryRunAsync(Pri::Low, []() {});
+        } catch (...) {
+            if (ExceptionMeansDispatcherGone()) {
+                return DrainProof::DispatcherGone;
+            }
+            pump();
+            continue;
+        }
+        const DispatcherOpEnd lowEnd = ObserveDispatcherOp(lowOp, done, pump);
+        // Only a sentinel that actually ran has drained earlier callbacks.
+        // A false/canceled/error completion is not that sentinel.
+        if (lowEnd == DispatcherOpEnd::Ran) {
+            return DrainProof::SentinelRan;
+        }
+        pump();
+    }
+}
+
+// Returns only after every dispatcher is proven idle or gone.
 bool RunOnEachUiDispatcherAndWait(
     const winrt::Windows::UI::Core::DispatchedHandler& handler) {
     auto dispatchers = CollectUiDispatchers();
@@ -6053,109 +6185,19 @@ bool RunOnEachUiDispatcherAndWait(
     }
     bool allOk = true;
     for (auto& dispatcher : dispatchers) {
-        try {
-            if (dispatcher.HasThreadAccess()) {
-                handler();
-                continue;
-            }
-            HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-            if (!done) {
-                allOk = false;
-                continue;
-            }
-            struct CloseDone {
-                HANDLE h;
-                ~CloseDone() {
-                    if (h) {
-                        CloseHandle(h);
-                    }
-                }
-            } closeDone{done};
-            using AsyncOp = winrt::Windows::Foundation::IAsyncOperation<bool>;
-            AsyncOp highOp{nullptr};
-            AsyncOp lowOp{nullptr};
-            try {
-                highOp = dispatcher.TryRunAsync(
-                    winrt::Windows::UI::Core::CoreDispatcherPriority::High,
-                    handler);
-            } catch (...) {
-                highOp = nullptr;
-            }
-            auto postLow = [&]() {
-                try {
-                    lowOp = dispatcher.TryRunAsync(
-                        winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
-                        []() {});
-                } catch (...) {
-                    lowOp = nullptr;
-                }
-            };
-            postLow();
-            // High can run ahead of Normal items already queued. Those
-            // still need this image. Retry the Low sentinel instead of
-            // treating High completion as the drain.
-            if (DispatcherOpWasQueued(highOp)) {
-                const ULONGLONG started = GetTickCount64();
-                while (!DispatcherOpWasQueued(lowOp)) {
-                    winrt::Windows::Foundation::AsyncStatus st =
-                        winrt::Windows::Foundation::AsyncStatus::Error;
-                    try {
-                        st = highOp.Status();
-                    } catch (...) {
-                        break;
-                    }
-                    if (st == winrt::Windows::Foundation::AsyncStatus::Error ||
-                        st ==
-                            winrt::Windows::Foundation::AsyncStatus::Canceled) {
-                        break;
-                    }
-                    const ULONGLONG elapsed = GetTickCount64() - started;
-                    if (st != winrt::Windows::Foundation::AsyncStatus::Started &&
-                        elapsed > 2000) {
-                        break;
-                    }
-                    if (st == winrt::Windows::Foundation::AsyncStatus::Started &&
-                        elapsed > 30000) {
-                        break;
-                    }
-                    Sleep(20);
-                    postLow();
+        HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        struct CloseDone {
+            HANDLE h;
+            ~CloseDone() {
+                if (h) {
+                    CloseHandle(h);
                 }
             }
-            const bool highQueued = DispatcherOpWasQueued(highOp);
-            const bool lowQueued = DispatcherOpWasQueued(lowOp);
-            if (lowQueued) {
-                WaitUntilDispatcherOpFinished(lowOp, done);
-                if (highQueued) {
-                    try {
-                        if (highOp.Status() ==
-                            winrt::Windows::Foundation::AsyncStatus::Started) {
-                            WaitUntilDispatcherOpFinished(highOp, done);
-                        }
-                    } catch (...) {
-                    }
-                    if (!DispatcherOpWasQueued(highOp)) {
-                        allOk = false;
-                    }
-                } else {
-                    allOk = false;
-                }
-            } else if (highQueued) {
-                Wh_Log(L"ERROR: UI drain sentinel was not queued");
-                try {
-                    if (highOp.Status() ==
-                        winrt::Windows::Foundation::AsyncStatus::Started) {
-                        WaitUntilDispatcherOpFinished(highOp, done);
-                    }
-                } catch (...) {
-                }
-                allOk = false;
-            } else {
-                allOk = false;
-            }
-        } catch (...) {
+        } closeDone{done};
+        const DrainProof proof = DrainOneUiDispatcher(dispatcher, handler, done);
+        if (proof == DrainProof::DispatcherGone) {
+            Wh_Log(L"UI drain: dispatcher can no longer invoke callbacks");
             allOk = false;
-            Wh_Log(L"ERROR: UI dispatcher cleanup failed");
         }
     }
     return allOk;
@@ -7381,8 +7423,15 @@ void HandleForegroundChanged(HWND hWnd) {
         auto& desk = CurrentDeskLocked();
         ranksNonEmpty = !desk.rankedApps.empty();
         auto it = desk.appFocusMap.find(key);
-        alreadyTracked =
-            it != desk.appFocusMap.end() && it->second.lastConfirmedFocusTick > 0;
+        // Decay, not the 30 s prune, ends immediate re-focus. A tick that is
+        // already past decayMinutes waits the minimum again.
+        if (it != desk.appFocusMap.end() &&
+            it->second.lastConfirmedFocusTick != 0) {
+            const ULONGLONG decayMs =
+                DecayMsFromMinutes(SettingsSnap()->decayMinutes);
+            alreadyTracked = !IsTickDecayed(it->second.lastConfirmedFocusTick,
+                                            decayMs, now);
+        }
         // Log title only. Identity is path / AUMID, not the window title.
         if (it != desk.appFocusMap.end() && !windowTitle.empty()) {
             it->second.lastWindowTitle = windowTitle;
