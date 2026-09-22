@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.31
+// @version         0.9.32
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -5712,7 +5712,7 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     //   2. Repeater index + Thumbnails.GetAt — holes only. The collection is
     //      cleared on TargetItemKey entry and recaptured for this target;
     //      still skip GetAt if it disagrees with a DataContext HWND.
-    // No unique-title fallback (stash/preview-unique-title.cpp).
+    // No unique-title fallback. A card that misses both stays unmarked.
     enum class ResolveHow : int { None = 0, Repeater, TaskItem };
     struct Scored {
         FrameworkElement view{nullptr};
@@ -5991,24 +5991,45 @@ bool DispatcherTryRun(
     }
 }
 
-// Unload handshake: the waiter must not proceed until this Completed
-// handler has run. The Low dispatcher callback must not SetEvent.
+// Unload handshake: Completed signals the waiter. The Low callback must not.
+// Completed can be set only once; a failure here does not mean the op is idle.
 template <typename Op>
 bool SubscribeDrainCompleted(Op const& op, HANDLE done) {
     if (!op || !done) {
         return false;
     }
     try {
-        op.Completed([done](auto&& o, auto&&) {
-            try {
-                (void)DispatcherOpWasQueued(o);
-            } catch (...) {
-            }
-            SetEvent(done);
-        });
+        op.Completed([done](auto&&, auto&&) { SetEvent(done); });
         return true;
     } catch (...) {
         return false;
+    }
+}
+
+// Prefer Completed. If it cannot be attached, poll Status so a queued
+// callback is still waited out. Do not treat that failure as an empty queue.
+template <typename Op>
+void WaitUntilDispatcherOpFinished(Op const& op, HANDLE done) {
+    if (!op) {
+        return;
+    }
+    if (done) {
+        ResetEvent(done);
+    }
+    if (done && SubscribeDrainCompleted(op, done)) {
+        WaitForSingleObject(done, INFINITE);
+        return;
+    }
+    while (true) {
+        try {
+            if (op.Status() !=
+                winrt::Windows::Foundation::AsyncStatus::Started) {
+                break;
+            }
+        } catch (...) {
+            break;
+        }
+        Sleep(1);
     }
 }
 
@@ -6020,10 +6041,9 @@ std::vector<winrt::Windows::UI::Core::CoreDispatcher> CollectUiDispatchers() {
     return *g_uiDispatchers;
 }
 
-// Uninit: run handler at High, then wait for a Low sentinel so earlier
-// Normal TryRunAsync work (which no-ops on g_unloading) has drained.
-// Must not return until every dispatcher has run — SizeChanged tokens live
-// in this image.
+// Uninit: post cleanup at High, then a Low sentinel. Low runs after that
+// cleanup and after Normal work already in the queue. High finishing is
+// not that drain. Wait only when something was actually queued.
 bool RunOnEachUiDispatcherAndWait(
     const winrt::Windows::UI::Core::DispatchedHandler& handler) {
     auto dispatchers = CollectUiDispatchers();
@@ -6043,34 +6063,94 @@ bool RunOnEachUiDispatcherAndWait(
                 allOk = false;
                 continue;
             }
-            bool posted = false;
-            winrt::Windows::Foundation::IAsyncOperation<bool> drainOp{nullptr};
+            struct CloseDone {
+                HANDLE h;
+                ~CloseDone() {
+                    if (h) {
+                        CloseHandle(h);
+                    }
+                }
+            } closeDone{done};
+            using AsyncOp = winrt::Windows::Foundation::IAsyncOperation<bool>;
+            AsyncOp highOp{nullptr};
+            AsyncOp lowOp{nullptr};
             try {
-                posted = DispatcherTryRun(
-                    dispatcher,
+                highOp = dispatcher.TryRunAsync(
                     winrt::Windows::UI::Core::CoreDispatcherPriority::High,
                     handler);
-                // Empty Low sentinel: queued after High / leftover Normal.
-                // Do not SetEvent here — Completed is the unload barrier.
-                drainOp = dispatcher.TryRunAsync(
-                    winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
-                    []() {});
             } catch (...) {
+                highOp = nullptr;
             }
-            if (!posted) {
-                allOk = false;
+            auto postLow = [&]() {
+                try {
+                    lowOp = dispatcher.TryRunAsync(
+                        winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
+                        []() {});
+                } catch (...) {
+                    lowOp = nullptr;
+                }
+            };
+            postLow();
+            // High can run ahead of Normal items already queued. Those
+            // still need this image. Retry the Low sentinel instead of
+            // treating High completion as the drain.
+            if (DispatcherOpWasQueued(highOp)) {
+                const ULONGLONG started = GetTickCount64();
+                while (!DispatcherOpWasQueued(lowOp)) {
+                    winrt::Windows::Foundation::AsyncStatus st =
+                        winrt::Windows::Foundation::AsyncStatus::Error;
+                    try {
+                        st = highOp.Status();
+                    } catch (...) {
+                        break;
+                    }
+                    if (st == winrt::Windows::Foundation::AsyncStatus::Error ||
+                        st ==
+                            winrt::Windows::Foundation::AsyncStatus::Canceled) {
+                        break;
+                    }
+                    const ULONGLONG elapsed = GetTickCount64() - started;
+                    if (st != winrt::Windows::Foundation::AsyncStatus::Started &&
+                        elapsed > 2000) {
+                        break;
+                    }
+                    if (st == winrt::Windows::Foundation::AsyncStatus::Started &&
+                        elapsed > 30000) {
+                        break;
+                    }
+                    Sleep(20);
+                    postLow();
+                }
             }
-            bool subscribed = SubscribeDrainCompleted(drainOp, done);
-            if (!drainOp || !subscribed) {
-                SetEvent(done);
+            const bool highQueued = DispatcherOpWasQueued(highOp);
+            const bool lowQueued = DispatcherOpWasQueued(lowOp);
+            if (lowQueued) {
+                WaitUntilDispatcherOpFinished(lowOp, done);
+                if (highQueued) {
+                    try {
+                        if (highOp.Status() ==
+                            winrt::Windows::Foundation::AsyncStatus::Started) {
+                            WaitUntilDispatcherOpFinished(highOp, done);
+                        }
+                    } catch (...) {
+                    }
+                    if (!DispatcherOpWasQueued(highOp)) {
+                        allOk = false;
+                    }
+                } else {
+                    allOk = false;
+                }
+            } else if (highQueued) {
+                Wh_Log(L"ERROR: UI drain sentinel was not queued");
+                try {
+                    if (highOp.Status() ==
+                        winrt::Windows::Foundation::AsyncStatus::Started) {
+                        WaitUntilDispatcherOpFinished(highOp, done);
+                    }
+                } catch (...) {
+                }
                 allOk = false;
-            }
-            const DWORD w = WaitForSingleObject(done, INFINITE);
-            CloseHandle(done);
-            if (w != WAIT_OBJECT_0) {
-                Wh_Log(L"ERROR: UI dispatcher cleanup wait failed (%u)", w);
-                allOk = false;
-            } else if (drainOp && !DispatcherOpWasQueued(drainOp)) {
+            } else {
                 allOk = false;
             }
         } catch (...) {
@@ -7991,6 +8071,16 @@ void LoadSettings() {
 // Windhawk entry points
 // ---------------------------------------------------------------------------
 
+// Wh_ModUninit does not run when Wh_ModInit returns FALSE. Drop a
+// taskbar.dll this mod loaded or the extra reference stays in Explorer.
+void ReleaseTaskbarDllIfWeLoadedIt() {
+    if (g_taskbarDllLoadedByUs && g_taskbarDll) {
+        FreeLibrary(g_taskbarDll);
+    }
+    g_taskbarDll = nullptr;
+    g_taskbarDllLoadedByUs = false;
+}
+
 BOOL Wh_ModInit() {
     Wh_Log(L"> init " WH_MOD_VERSION);
 
@@ -8023,12 +8113,14 @@ BOOL Wh_ModInit() {
 
     if (!HookTaskbarDllSymbols()) {
         Wh_Log(L"taskbar.dll identity hooks failed");
+        ReleaseTaskbarDllIfWeLoadedIt();
         return FALSE;
     }
 
     if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
         if (!HookTaskbarViewDllSymbols(taskbarViewModule)) {
             Wh_Log(L"Taskbar.View hooks failed");
+            ReleaseTaskbarDllIfWeLoadedIt();
             return FALSE;
         }
         g_taskbarViewDllLoaded = true;
@@ -8038,6 +8130,7 @@ BOOL Wh_ModInit() {
 
     if (!StartWinEventHookThread()) {
         Wh_Log(L"Focus thread failed to start");
+        ReleaseTaskbarDllIfWeLoadedIt();
         return FALSE;
     }
     return TRUE;
@@ -8114,11 +8207,7 @@ void Wh_ModUninit() {
         std::lock_guard<std::mutex> lock(g_dispatchersMutex);
         g_uiDispatchers.reset();
     }
-    if (g_taskbarDllLoadedByUs && g_taskbarDll) {
-        FreeLibrary(g_taskbarDll);
-    }
-    g_taskbarDll = nullptr;
-    g_taskbarDllLoadedByUs = false;
+    ReleaseTaskbarDllIfWeLoadedIt();
 }
 
 void Wh_ModSettingsChanged() {

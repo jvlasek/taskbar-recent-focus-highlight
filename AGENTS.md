@@ -462,8 +462,9 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    Bound `QueryViaVtable` / task-item array offsets; fail closed on miss.
    `Wh_ModUninit`: set `g_unloading`, **stop the focus thread first**, then
    drain each dispatcher (High cleanup + Low drain, INFINITE). The Low
-   callback must not release the waiter; `IAsyncOperation.Completed` does.
-   Keep the operation until after that wait. Never time out
+   sentinel is the barrier, not High completion. `Completed` signals the
+   waiter; if it cannot be set, poll `Status()`. A failed subscription is
+   not an empty queue. Keep the operation until that wait finishes. Never time out
    a drain — leftover `SizeChanged` lambdas crash Explorer. Ready event before
    `StartWinEventHookThread` returns so shutdown `PostMessage` cannot miss the
    queue. Register the message-window class with the **mod** module handle
@@ -719,7 +720,7 @@ and must not guess identity from localized UI strings.
 | `lastRunningTick` is not a heartbeat | 400 ms freshness dropped idle ranks on decay / settings / desktop switch; empty-rank apply skipped the UI snapshot | `observedRunning` until the UI sees not-running; grace only after that; `ApplyAllHighlights` snapshots `IsRunning` then recomputes, even with no ranks |
 | Settings change cancelled min-focus | `WM_APP_SETTINGS_CHANGED` `KillTimer` left a valid pending candidate with no clock | Drop only an excluded candidate; re-arm remaining app/preview deadlines for an allowed one |
 | Intensity × fill × opacity | Brush alpha and element Opacity both multiplied by rank `t` made 60% look ~36% | Rank intensity is Opacity (or native-plate brush alpha) once; fill/stroke setting is the other |
-| Drain Low callback is not completion | Low `SetEvent` let unload proceed while `Completed` still ran mod code | Empty Low sentinel; `Completed` always signals; keep the op until after wait. `Completed` is set only once |
+| Drain Low callback is not completion | Low `SetEvent` let unload proceed while `Completed` still ran mod code | Empty Low sentinel is the barrier (it runs after High and after already-queued Normal work). `Completed` is set once and signals; if it cannot be set, poll `Status()`. A failed subscription is not an empty queue. Retry Low when High was queued and Low was not. Signal immediately only when both posts failed |
 | Weak prior transform | Displacing `Icon.RenderTransform` dropped the last strong ref; restore used `ClearValue` | Glow host Tag holds the previous transform for the takeover |
 | Win32 AUMID exclusion | Pending/timer/preview history used path+filename only; window AUMID exclusions did not drop them | Same `IsExcludedKey(..., appId)` for admission, pending, confirm, and history; resolve AUMID outside `g_stateMutex` |
 | Dead path-cache row stays eligible | `observedRunning` survived after the button was destroyed; full bind never saw `IsRunning=false` | Erase null button weaks on the UI thread before eligibility. Do not `weak.get()` in `PathAppearsOnTaskbar` |
