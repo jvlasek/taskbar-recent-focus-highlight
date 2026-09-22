@@ -77,8 +77,10 @@ Order of preference (icons — **no name fuzzy**):
    Same path but **different window class** → 0 (two icons from one process).
    No filename-only score. An empty resolve is **not** permanent. A pinned
    AutomationId is **not** a finished Win32 resolve (rank key is the image
-   path). Re-resolve once when the same `TaskListButton` flips to running
-   (`resolvedWhileRunning`); otherwise `lastResolveTick` throttles retries.
+   path). Re-resolve on each not-running → running episode
+   (`resolvedWhileRunning` and the empty-resolve cap clear when a button
+   that was not running is observed running again). Otherwise
+   `lastResolveTick` throttles retries.
    A successful path is not forever: if the button is running and the cached
    HWND is dead (or `GetProcessImagePath` of that HWND no longer equals
    `pathUpper`), re-resolve. Explorer reuses a `TaskListButton` when the exe
@@ -184,13 +186,15 @@ Rules:
 |----------------|----------------|
 | `titleBar` | Thin rect just under title baseline (~2px gap); 8px side inset |
 | `titleBg` | Soft wash; 4px corners (`CornerRadius{4,4,4,4}` — `{4}` is TopLeft only), 8px inset |
-| `plate` | Tint `BackgroundBorder`; marker Tag holds the previous Brush (Taskbar Styler / template) and is restored on clear |
+| `plate` | Tint `BackgroundBorder`. The marker remembers the displaced brush and the brush this mod installed. Restore only while the border still has our brush; a later owner is saved on the next takeover. Zero fill does not replace the native background. Unset and explicit null stay distinct |
 | `plateTitle` | Rank 1 = plate; ranks 2+ = titleBg |
 
 Clear (unload / unranked) removes named overlays. A ranked repaint keeps
 `WhRecentFocusThumbGlow` and only hides children + restores the plate brush.
-Plate restores the saved `BackgroundBorder` brush (or `ClearValue` if there
-was no local value) so Taskbar Styler tints survive. If the marker cannot be
+Plate restores the saved `BackgroundBorder` only while that border still has
+the brush this mod installed, so a newer Styler tint survives. Unset local
+value uses `ClearValue`; an explicit null is written back as null. Zero fill
+opacity does not install a transparent brush. If the marker cannot be
 created, fall back to our overlay plate.
 
 ---
@@ -325,10 +329,10 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | Frame Z-order | Overlay last (above icon) | Stroke not covered |
 | Full Z-order | Overlay first (behind icon) | Plate under glyph |
 | Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
-| Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Re-resolve once on not-running → running (`resolvedWhileRunning`); `kUnresolvedRetryMs` otherwise. Running + dead sample HWND or live image-path mismatch also re-resolves. Empty re-resolve does not wipe a known path. `observedRunning` is the last UI `IsRunning` snapshot (sticky until the UI sees false). | UVS must not `ReportClicked`. Explorer reuses the same `TaskListButton` on launch **and** when the exe is replaced by another folder’s copy. |
+| Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Each not-running → running episode clears `resolvedWhileRunning` and the empty-resolve cap, then resolves again; `kUnresolvedRetryMs` throttles other retries. Running + dead sample HWND, PID mismatch, or live image-path mismatch also re-resolves. Empty re-resolve does not wipe a known path. `observedRunning` is the last UI `IsRunning` snapshot (sticky until the UI sees false). | UVS must not `ReportClicked`. Explorer reuses the same `TaskListButton` on launch **and** when the exe is replaced by another folder’s copy. A capped empty resolve must not stick across close and relaunch. |
 | UVS vs rebind | Cached paint: **-1** unknown, **0** unranked, **>0** paint if `(rank, generation, accent, edge, panel size)` changed. | `{rank, gen, accent}` alone left the bar on the old side after a taskbar-edge / icon-size relayout. |
 | Native z-order | `RestoreIconPanelNativeZOrder` only after we insert or remove `WhRecentFocusGlow`. Snapshot child names **before** the first move; restore that list, not an assumed stock order. | Healing unranked buttons fights Taskbar Styler. Stock restore rewrote Styler themes on disable. |
-| Rank match | Exact path / HWND / AUMID only. `PathAppearsOnTaskbar` is exact path / AUMID **and** a button last observed running (`observedRunning`, or 400 ms grace after a not-running snapshot). Pinned-only / closed must not occupy a top-N slot. A path-cache row whose button is already dead is erased on the UI thread (`PruneDeadButtonPathCache_UIThread`, from `CollectLiveButtons`) before eligibility; this function does not `weak.get()`. | Two folders of `python.exe` stay distinct; closing a pinned app (or moving the exe on update) frees the slot. Idle apps must not drop because no hover refreshed a tick. A destroyed button must not keep the slot. |
+| Rank match | Exact path / HWND / AUMID only. Cached group windows and the sample HWND store the PID captured with the handle; `IdentityMatchesRank` accepts that HWND only while `HwndMatchesStoredPid` still holds. `PathAppearsOnTaskbar` is exact path / AUMID **and** a button last observed running (`observedRunning`, or 400 ms grace after a not-running snapshot). Pinned-only / closed must not occupy a top-N slot. A path-cache row whose button is already dead is erased on the UI thread (`PruneDeadButtonPathCache_UIThread`, from `CollectLiveButtons`) before eligibility; this function does not `weak.get()`. | Two folders of `python.exe` stay distinct; closing a pinned app (or moving the exe on update) frees the slot. Idle apps must not drop because no hover refreshed a tick. A destroyed button must not keep the slot. A recycled group HWND must not light the old button. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
 | Virtual desktops | Nested recency maps; no taskband reordering hooks | Explorer already filters `IsRunning` |
@@ -337,7 +341,7 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | Preview layout | Span rows + Margin (not RenderTransform) | Title-row expansion; transform clipped the right cap |
 | Preview titleBar | ~2px under baseline | Not hugging image; not strikethrough |
 | Preview titleBg | Tint-opacity ceiling × linear rank intensity; 4px rounded rect, 6px inset both sides | Readable; 100 vs 5 must differ |
-| Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank; previous Brush stashed on marker Tag | Strong signal; Styler survives clear |
+| Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank. Marker stores the displaced brush and our installed brush. Restore only while the border’s current brush is still ours; the next takeover saves whoever owns it now. Zero fill does not replace the background | Strong signal; a Styler change during the flyout survives repaint and clear |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
 | RunningIndicator | Never set Fill/Width/Height; never reorder every paint | Edge bar draws own pill. Glow host sits *under* a native thin pill, *above* a Taskbar Styler hover plate (RunningIndicator restyled to fill the icon cell — otherwise PointerOver acrylic covers the side bar). On taskbar-edge relayout restore z-order so the native pill is not left behind BackgroundElement. |
 | Bar geometry | Size vs glow **host** (padded inner box), `Center` alignment | IconPanel is 48×32 on a left taskbar but the host is 40×28 (padding 4,2). Length is `size%` of that cell, **same for every rank** (rank is opacity). Icon-width underlines on a left taskbar are too short to scan. |
@@ -374,7 +378,7 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | `g_unloading` | atomic | Any |
 | Focus thread shutdown | `g_unloading` then **stop worker first** (ready event + `WM_APP_SHUTDOWN` + `PostThreadMessage`); wait **INFINITE**; then UI drain | Worker must not `TryRunAsync` after the drain sentinel. Do not time out — leftover `SizeChanged` crashes Explorer |
 | UI uninit | `RunOnEachUiDispatcherAndWait` (High cleanup + Low drain, **INFINITE**) **after** the worker has joined | Revoke `SizeChanged` per dispatcher |
-| Native probing | `QueryViaVtable` max 32 slots; task-items array offset under 64; fail closed | Explorer-safe |
+| Native probing | `QueryViaVtable` max 32 slots; task-items array offset under 64; fail closed | Private taskbar ABI. A miss fails closed. Not a proof the probe is safe on every Windows build |
 
 Do **not** hold `g_stateMutex` or `g_layoutWatchMutex` across XAML, COM
 (`SHGetPropertyStoreForWindow`, `GetProcessImagePath`), or `Dispatcher` calls.
@@ -446,10 +450,11 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    Missing identity → no glow. `PathAppearsOnTaskbar` must not match by
    filename (deleted `C:\A\foo.exe` must not count as still on the taskbar
    because `C:\B\foo.exe` is).
-2. **Matching bugs (wrong preview):** prefer repeater GetAt + ctor maps;
-   never assign the same HWND to two siblings; don’t EnumWindows or assign
-   by construction order. No unique-title. Clear `g_TaskGroup_Thumbnails` on
-   `TargetItemKey` entry.
+2. **Matching bugs (wrong preview):** TaskItem/DataContext first, then
+   repeater GetAt for holes only. Never assign the same HWND to two siblings;
+   don’t EnumWindows or assign by construction order. No unique-title. Clear
+   `g_TaskGroup_Thumbnails` on `TargetItemKey` entry. A preview skip uses
+   `IsWindowRecentForPreviewLocked` (live HWND, PID, and decay).
 3. **Visual bugs:** [UWPSpy](https://ramensoftware.com/uwpspy); names vary by build.
 4. **Layout bugs on thumbnails:** never add sized children only to grid row 0;
    span the overlay host; position children with Margin (not RenderTransform).
@@ -546,7 +551,11 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    app: its slot frees for a still-running lower rank, including when the
    visible count stays at highlightCount. A full bind after an unpinned
    button disappears without a final not-running observation must drop that
-   app from the top N. Re-focus A after B
+   app from the top N, including when that button queued the bind and was
+   destroyed before it ran. A recycled group HWND must not light the old
+   icon. A pinned button that exhausted empty resolves must resolve again
+   on the next launch. A Styler brush applied while a preview plate is
+   showing must still be there after repaint and clear. Re-focus A after B
    (default promote): A returns to rank 1. A new Lister window needs its own
    preview min-focus; the app timer must not stamp it early. Hybrid rank 2 / title-background wash is a shallow
    rounded rect covering the icon + title (not a fat pill that starts
@@ -717,12 +726,17 @@ and must not guess identity from localized UI strings.
 | Clear stores rank 0 before the rerank test | Closing a glowing button skipped `ScheduleRefreshAllHighlights`; decay compared only the rank count | Read the paint rank before `ClearButtonHighlight`. Decay compares the ordered rank keys |
 | Second transform takeover restores the first | Host Tag was written only while unset, so a later owner was overwritten and the first snapshot came back | On each takeover, replace the Tag and the origin flags together. Restore only while the current transform is still ours |
 | Due deadline re-arm skips grace | `remaining == 0` used `Immediate`, which drops a candidate while Alt-Tab still holds foreground | Resume a positive elapsed minimum with `FromTimer`. Keep `Immediate` for a zero minimum, promote skip, and preview click |
+| Group HWND has no PID | A cached group handle matched a rank before path/AUMID, so a recycled HWND lit the old button | Store the PID captured with each group window and the sample. Match only while `HwndMatchesStoredPid` holds |
+| Preview skip used any nonzero tick | A reused or decayed HWND skipped preview min-focus | `windowAlreadyTracked` is `IsWindowRecentForPreviewLocked` (live, PID, not decayed) |
+| Plate restore wrote the first brush | Repaint put the saved brush back even after Styler replaced it. Zero fill installed a transparent brush | Restore only while the border still has our brush. Save the current owner on the next takeover. Zero fill leaves the native background |
+| Full bind required the scheduling button | The Low callback returned when that button was already destroyed, so the dead-row prune never ran | The anchor only picks the dispatcher. The queued bind runs until unload |
+| Empty-resolve cap stuck across launches | `resolvedWhileRunning` was set true and never cleared, so eight misses blocked later launches | Clear that flag and the attempt count on each new running episode |
 
 ---
 
 Done in 0.9.x and not listed: UWP `APPID:` keys, preview plate brush restore,
 Styler hover-plate z-order, settings snapshots, timer deadlines, transient
-foreground, bounded vtable probe, deterministic unload, icon fuzzy removal,
+foreground, bounded vtable probe (fail closed, not a per-build proof), worker-first unload (a failed SizeChanged revoke is logged, not a certification that every subscription is gone), icon fuzzy removal,
 identity-keyed UVS maps, no native reorder of untouched icons, nested settings
 groups, `Wh_Log` instead of an in-mod debug toggle, `UISettings::ColorValuesChanged`,
 filename-900 dropped, `ReportClicked` off UVS, empty-resolve retry, rank -1 vs 0,
@@ -742,7 +756,7 @@ exclusion on pending/preview history.
 
 1. Composition shadow / true GPU outer glow if XAML halo stays clipped
    (optional polish; current bar/frame/plate is the product).
-2. Stronger DataContext ↔ TaskItemThumbnail identity (repeater GetAt is primary).
+2. Stronger DataContext ↔ TaskItemThumbnail identity (TaskItem/DataContext is first; repeater GetAt fills holes).
 3. Classic / non-XAML thumbnail path if still needed on some builds.
 4. Multi-monitor secondary taskbars if weak refs only cover primary.
 5. Per-desktop prune of deleted virtual desktop GUIDs beyond decay.

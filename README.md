@@ -1,12 +1,13 @@
 # Taskbar Recent Focus Highlight
 
 A Windhawk mod that visually highlights the most recently used **apps** on the
-Windows 11 taskbar, and (optionally) ranks **windows** inside multi-instance
-thumbnail previews with the same kind of intensity ladder.
+Windows 11 taskbar, and ranks **windows** inside multi-instance thumbnail
+previews with the same kind of intensity ladder. The preview ladder has its
+own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.30 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.31 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -188,7 +189,7 @@ Buttons are not HWNDs. The mod:
 
 | Side | What we get | Example |
 |------|-------------|---------|
-| **Focus** | `HWND` + title | Calibre window A vs B |
+| **Focus** | `HWND` + PID | Calibre window A vs B, including two windows with the same title |
 | **Flyout UI** | `TaskItemThumbnailView` | Two nearly identical cards |
 
 Preview matching prefers **TaskItem → HWND** maps from optional
