@@ -365,7 +365,7 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | `g_desktopMaps`, `g_currentDesktopId`, `g_pendingFocus` | `g_stateMutex` | Focus write; UI read under lock |
 | `g_vdm` | `g_vdmMutex` | Created/used/released **only on the focus thread**. UI reads cached `g_currentDesktopId`. |
 | `g_trackedButtons` | `g_buttonsMutex` | UI. `unordered_map<IUnknown*, weak_ref>`. Do not `weak.get()` off the UI thread. |
-| `g_uiDispatchers` | `g_dispatchersMutex` | `[[clang::no_destroy]] optional<vector<CoreDispatcher>>`. Capture on UI thread. `reset()` in Uninit. Never `weak.get()` XAML off-thread. |
+| `g_uiDispatchers` | `g_dispatchersMutex` | `[[clang::no_destroy]] optional<vector<shared_ptr<UiDispatcher>>>`. Capture dispatcher and real SYNCHRONIZE thread handle on UI thread. `reset()` in Uninit. Never `weak.get()` XAML off-thread. |
 | `g_hookThreadHwnd` | `std::atomic<HWND>` | Focus thread writes; others `PostMessage` / `HookThreadWindow()`. `SetTimer` only on the owner thread. Ready event before `Start` returns. Decay timer armed on first confirm, stopped when maps are empty. |
 | `g_buttonPathCache` (includes `lastPaintRank`, `lastPaintSettingsGen`, `lastPaintAccent`, `ourIconScale`, `observedRunning`) | `g_buttonPathMutex` | UI. `unordered_map<IUnknown*, entry>`. Resolve on full bind / press; UVS paints cached rank. Drop entry if weak_ref is not this button. `observedRunning` is written on the UI thread; focus-thread `PathAppearsOnTaskbar` reads it. |
 | `g_thumbnailTaskItemMapping` | `g_thumbnailMapMutex` | Taskband / UI |
@@ -462,16 +462,16 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    Bound `QueryViaVtable` / task-item array offsets; fail closed on miss.
    `Wh_ModUninit`: set `g_unloading`, **stop the focus thread first**, then
    drain each dispatcher (High cleanup, then a Low sentinel, INFINITE).
-   Return only after the sentinel's callback has run (`GetResults()==true`)
-   or the dispatcher object is disconnected or closed, so another post cannot
-   be observed. A disconnected HRESULT is not the same proof as a sentinel.
-   High completion, a false `TryRunAsync` result, a timeout, and any other
-   exception are not a drain. A false result means this post was rejected
-   (the documented shutdown return); unload keeps waiting because work
-   already queued may still run. `HasThreadAccess`, `ProcessEvents`, and
-   `Status()` use that same split, so a throw cannot escape `Wh_ModUninit`.
-   `Completed` signals the waiter when it can be set; otherwise poll. Never
-   unload on a best-effort failure. Ready event before
+   Return only after the Low operation completed successfully or the original
+   UI thread's retained handle is signaled. Capture a real thread handle in
+   `RememberUiDispatcher`; a later OpenThread failure or reused thread ID is
+   not termination evidence. Dispatcher exceptions and false/canceled/error
+   results do not authorize unload. If posts remain rejected while that thread
+   is alive, unload intentionally keeps waiting and logs once. Do not add a
+   timeout. Wait for either Completed or thread termination; if event creation
+   or subscription fails, observe the same operation while checking the thread.
+   Never drop an operation merely because its status cannot be read. Ready
+   event before
    `StartWinEventHookThread` returns so shutdown `PostMessage` cannot miss the
    queue. Register the message-window class with the **mod** module handle
    (`UNCHANGED_REFCOUNT`); `ERROR_CLASS_ALREADY_EXISTS` is a **hard fail**
@@ -726,7 +726,7 @@ and must not guess identity from localized UI strings.
 | `lastRunningTick` is not a heartbeat | 400 ms freshness dropped idle ranks on decay / settings / desktop switch; empty-rank apply skipped the UI snapshot | `observedRunning` until the UI sees not-running; grace only after that; `ApplyAllHighlights` snapshots `IsRunning` then recomputes, even with no ranks |
 | Settings change cancelled min-focus | `WM_APP_SETTINGS_CHANGED` `KillTimer` left a valid pending candidate with no clock | Drop only an excluded candidate; re-arm remaining app/preview deadlines for an allowed one |
 | Intensity × fill × opacity | Brush alpha and element Opacity both multiplied by rank `t` made 60% look ~36% | Rank intensity is Opacity (or native-plate brush alpha) once; fill/stroke setting is the other |
-| Drain Low callback is not completion | Low `SetEvent` let unload proceed while `Completed` still ran mod code | Unload returns only after the Low sentinel callback ran, or the dispatcher is gone. A terminal Low op with `GetResults()==false`, High completion, a timeout, or a failed status read is not that proof |
+| Drain Low callback is not completion | Low `SetEvent` let unload proceed while `Completed` still ran mod code | Unload returns only after the Low sentinel callback ran, or the original UI thread's retained handle is signaled. A terminal Low op with `GetResults()==false`, High completion, a timeout, or a failed status read is not that proof |
 | Weak prior transform | Displacing `Icon.RenderTransform` dropped the last strong ref; restore used `ClearValue` | Glow host Tag holds the previous transform for the takeover |
 | Win32 AUMID exclusion | Pending/timer/preview history used path+filename only; window AUMID exclusions did not drop them | Same `IsExcludedKey(..., appId)` for admission, pending, confirm, and history; resolve AUMID outside `g_stateMutex` |
 | Dead path-cache row stays eligible | `observedRunning` survived after the button was destroyed; full bind never saw `IsRunning=false` | Erase null button weaks on the UI thread before eligibility. Do not `weak.get()` in `PathAppearsOnTaskbar` |

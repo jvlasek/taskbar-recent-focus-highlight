@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.34 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.35 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -282,3 +282,13 @@ whawk-lru/
   taskbar-recent-focus-highlight.wh.cpp  ← the Windhawk mod (single file)
   example/                               ← reference mods (read-only)
 ```
+
+### Unload failure policy
+
+Unload waits for completed UI cleanup and a Low-priority drain, or for the
+original owning UI thread to terminate. A retained thread handle prevents
+thread-ID reuse from affecting this check. A rejected post or disconnected
+dispatcher does not prove old callbacks are gone. If the dispatcher keeps
+rejecting work while its thread stays alive, disabling may remain blocked;
+the mod logs this condition once and stays loaded rather than risk executing
+unloaded code.
