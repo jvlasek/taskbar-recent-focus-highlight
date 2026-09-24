@@ -463,11 +463,15 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    `Wh_ModUninit`: set `g_unloading`, **stop the focus thread first**, then
    drain each dispatcher (High cleanup, then a Low sentinel, INFINITE).
    Return only after the sentinel's callback has run (`GetResults()==true`)
-   or a dispatcher call fails because that dispatcher is gone. High
-   completion, a false `TryRunAsync` result, a timeout, and a failed
-   `Status()` read are not a drain. `Completed` signals the waiter when it
-   can be set; otherwise poll. Never unload on a best-effort failure.
-   a drain — leftover `SizeChanged` lambdas crash Explorer. Ready event before
+   or the dispatcher object is disconnected or closed, so another post cannot
+   be observed. A disconnected HRESULT is not the same proof as a sentinel.
+   High completion, a false `TryRunAsync` result, a timeout, and any other
+   exception are not a drain. A false result means this post was rejected
+   (the documented shutdown return); unload keeps waiting because work
+   already queued may still run. `HasThreadAccess`, `ProcessEvents`, and
+   `Status()` use that same split, so a throw cannot escape `Wh_ModUninit`.
+   `Completed` signals the waiter when it can be set; otherwise poll. Never
+   unload on a best-effort failure. Ready event before
    `StartWinEventHookThread` returns so shutdown `PostMessage` cannot miss the
    queue. Register the message-window class with the **mod** module handle
    (`UNCHANGED_REFCOUNT`); `ERROR_CLASS_ALREADY_EXISTS` is a **hard fail**

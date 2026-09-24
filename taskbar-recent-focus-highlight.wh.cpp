@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.33
+// @version         0.9.34
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -113,7 +113,7 @@ to clear highlights.
 
     Always wait: every app focus (including re-focus) waits min-focus seconds.
   $options:
-  - immediateTracked: Immediate if still in recency map (default)
+  - immediateTracked: Immediate if confirm is still inside decay (default)
   - immediateTopN: Immediate only if already highlighted (top N)
   - alwaysWait: Always wait min-focus time
 - decayMinutes: 30
@@ -6014,15 +6014,30 @@ enum class DispatcherOpEnd {
     Ran,
     NotRun,
     Unknown,
+    Gone,
 };
 
 // Dispatcher method calls that mean this object will not invoke us again.
 bool HresultMeansDispatcherGone(HRESULT hr) {
+    // The object rejected the call as disconnected or closed. Further posts
+    // cannot be observed. This is not a sentinel, and it is not proof about
+    // every earlier subscription; waiting can no longer succeed.
     return hr == static_cast<HRESULT>(0x80010108) ||  // RPC_E_DISCONNECTED
            hr == static_cast<HRESULT>(0x80010007) ||  // RPC_E_SERVER_DIED
            hr == static_cast<HRESULT>(0x80010012) ||  // RPC_E_SERVER_DIED_DNE
            hr == static_cast<HRESULT>(0x800401FD) ||  // CO_E_OBJNOTCONNECTED
            hr == static_cast<HRESULT>(0x80000013);    // RO_E_CLOSED
+}
+
+// Must be called from a catch clause. The exception stays active there.
+bool ExceptionMeansDispatcherGone() {
+    try {
+        throw;
+    } catch (winrt::hresult_error const& ex) {
+        return HresultMeansDispatcherGone(ex.code());
+    } catch (...) {
+        return false;
+    }
 }
 
 // Wait until the operation is terminal, then report whether its callback ran.
@@ -6044,9 +6059,14 @@ DispatcherOpEnd ObserveDispatcherOp(Op const& op, HANDLE done, Pump pump) {
                     break;
                 }
             } catch (...) {
+                if (ExceptionMeansDispatcherGone()) {
+                    return DispatcherOpEnd::Gone;
+                }
                 return DispatcherOpEnd::Unknown;
             }
-            pump();
+            if (pump()) {
+                return DispatcherOpEnd::Gone;
+            }
         }
     } else {
         WaitForSingleObject(done, INFINITE);
@@ -6058,6 +6078,9 @@ DispatcherOpEnd ObserveDispatcherOp(Op const& op, HANDLE done, Pump pump) {
                 return op.GetResults() ? DispatcherOpEnd::Ran
                                        : DispatcherOpEnd::NotRun;
             } catch (...) {
+                if (ExceptionMeansDispatcherGone()) {
+                    return DispatcherOpEnd::Gone;
+                }
                 return DispatcherOpEnd::Unknown;
             }
         }
@@ -6066,6 +6089,9 @@ DispatcherOpEnd ObserveDispatcherOp(Op const& op, HANDLE done, Pump pump) {
             return DispatcherOpEnd::NotRun;
         }
     } catch (...) {
+        if (ExceptionMeansDispatcherGone()) {
+            return DispatcherOpEnd::Gone;
+        }
         return DispatcherOpEnd::Unknown;
     }
     return DispatcherOpEnd::Unknown;
@@ -6085,29 +6111,31 @@ std::vector<winrt::Windows::UI::Core::CoreDispatcher> CollectUiDispatchers() {
 // read are not that proof either.
 enum class DrainProof { SentinelRan, DispatcherGone };
 
-bool ExceptionMeansDispatcherGone() {
-    try {
-        throw;
-    } catch (winrt::hresult_error const& ex) {
-        return HresultMeansDispatcherGone(ex.code());
-    } catch (...) {
-        return false;
-    }
-}
-
-void PauseDispatcherAttempt(
+// Returns true when the dispatcher object is disconnected or closed.
+// Any other failure is not a drain and must not escape unload.
+bool PauseDispatcherAttempt(
     winrt::Windows::UI::Core::CoreDispatcher const& dispatcher) {
     // On the UI thread a posted sentinel cannot finish until the queue is
     // pumped. Off that thread, backoff only — do not pretend time is a drain.
-    if (dispatcher.HasThreadAccess()) {
-        try {
-            dispatcher.ProcessEvents(
-                winrt::Windows::UI::Core::CoreProcessEventsOption::
-                    ProcessOneIfPresent);
-        } catch (...) {
+    try {
+        if (dispatcher.HasThreadAccess()) {
+            try {
+                dispatcher.ProcessEvents(
+                    winrt::Windows::UI::Core::CoreProcessEventsOption::
+                        ProcessOneIfPresent);
+            } catch (...) {
+                if (ExceptionMeansDispatcherGone()) {
+                    return true;
+                }
+            }
+        }
+    } catch (...) {
+        if (ExceptionMeansDispatcherGone()) {
+            return true;
         }
     }
     Sleep(20);
+    return false;
 }
 
 DrainProof DrainOneUiDispatcher(
@@ -6117,13 +6145,21 @@ DrainProof DrainOneUiDispatcher(
     using AsyncOp = winrt::Windows::Foundation::IAsyncOperation<bool>;
     using Pri = winrt::Windows::UI::Core::CoreDispatcherPriority;
     // Completed is delivered on the dispatcher thread. Waiting for it here
-    // would deadlock. Poll and pump instead.
-    if (dispatcher.HasThreadAccess()) {
+    // would deadlock. Poll and pump instead. A throw from the property is
+    // the same gone-or-retry policy as TryRunAsync, not an escape from unload.
+    try {
+        if (dispatcher.HasThreadAccess()) {
+            done = nullptr;
+        }
+    } catch (...) {
+        if (ExceptionMeansDispatcherGone()) {
+            return DrainProof::DispatcherGone;
+        }
         done = nullptr;
     }
     AsyncOp highOp{nullptr};
     bool highRan = false;
-    auto pump = [&]() { PauseDispatcherAttempt(dispatcher); };
+    auto pump = [&]() { return PauseDispatcherAttempt(dispatcher); };
     for (;;) {
         if (!highRan) {
             if (!highOp) {
@@ -6134,24 +6170,36 @@ DrainProof DrainOneUiDispatcher(
                         return DrainProof::DispatcherGone;
                     }
                     highOp = nullptr;
-                    pump();
+                    if (pump()) {
+                        return DrainProof::DispatcherGone;
+                    }
                     continue;
                 }
             }
             const DispatcherOpEnd highEnd =
                 ObserveDispatcherOp(highOp, done, pump);
+            if (highEnd == DispatcherOpEnd::Gone) {
+                return DrainProof::DispatcherGone;
+            }
             if (highEnd == DispatcherOpEnd::Ran) {
                 highRan = true;
             } else if (highEnd == DispatcherOpEnd::Unknown) {
                 // Same operation may still be running. Do not post another
                 // cleanup, and do not treat the read failure as finished.
-                pump();
+                if (pump()) {
+                    return DrainProof::DispatcherGone;
+                }
                 continue;
             } else {
-                // Rejected, canceled, or error: the cleanup callback did not
-                // run. That is not a drain. Try again.
+                // Completed-false, canceled, or error: the callback did not
+                // run. Microsoft documents false during dispatcher shutdown.
+                // That rejects this post only. It does not show that work
+                // already queued will not run, so it is not a drain and not
+                // "dispatcher gone". Keep waiting.
                 highOp = nullptr;
-                pump();
+                if (pump()) {
+                    return DrainProof::DispatcherGone;
+                }
                 continue;
             }
         }
@@ -6162,16 +6210,23 @@ DrainProof DrainOneUiDispatcher(
             if (ExceptionMeansDispatcherGone()) {
                 return DrainProof::DispatcherGone;
             }
-            pump();
+            if (pump()) {
+                return DrainProof::DispatcherGone;
+            }
             continue;
         }
         const DispatcherOpEnd lowEnd = ObserveDispatcherOp(lowOp, done, pump);
+        if (lowEnd == DispatcherOpEnd::Gone) {
+            return DrainProof::DispatcherGone;
+        }
         // Only a sentinel that actually ran has drained earlier callbacks.
         // A false/canceled/error completion is not that sentinel.
         if (lowEnd == DispatcherOpEnd::Ran) {
             return DrainProof::SentinelRan;
         }
-        pump();
+        if (pump()) {
+            return DrainProof::DispatcherGone;
+        }
     }
 }
 
