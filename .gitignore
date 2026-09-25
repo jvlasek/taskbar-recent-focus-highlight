@@ -72,3 +72,4 @@ example/
 *.png
 !screenshots/*
 data/
+*.wer
