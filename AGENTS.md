@@ -331,7 +331,7 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
 | Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Each not-running → running episode clears `resolvedWhileRunning` and the empty-resolve cap, then resolves again; `kUnresolvedRetryMs` throttles other retries. Running + dead sample HWND, PID mismatch, or live image-path mismatch also re-resolves. Empty re-resolve does not wipe a known path. `observedRunning` is the last UI `IsRunning` snapshot (sticky until the UI sees false). | UVS must not `ReportClicked`. Explorer reuses the same `TaskListButton` on launch **and** when the exe is replaced by another folder’s copy. A capped empty resolve must not stick across close and relaunch. |
 | UVS vs rebind | Cached paint: **-1** unknown, **0** unranked, **>0** paint if `(rank, generation, accent, edge, panel size)` changed. | `{rank, gen, accent}` alone left the bar on the old side after a taskbar-edge / icon-size relayout. |
-| Native z-order | `RestoreIconPanelNativeZOrder` only after we insert or remove `WhRecentFocusGlow`. Snapshot child names **before** the first move; restore that list, not an assumed stock order. | Healing unranked buttons fights Taskbar Styler. Stock restore rewrote Styler themes on disable. |
+| Native z-order | Append WhRecentFocusGlow once; never reposition it or native IconPanel children. PlanIconZOrder preserves native (baseline ZIndex, child index) draw order and allocates gaps for the glow. | 0.9.36 host-only moves still broke badge recreation. 0.9.37 uses temporary native ZIndex values saved inside the owned host, restoring only while our integer value remains installed; no native collection repair. |
 | Rank match | Exact path / HWND / AUMID only. Cached group windows and the sample HWND store the PID captured with the handle; `IdentityMatchesRank` accepts that HWND only while `HwndMatchesStoredPid` still holds. `PathAppearsOnTaskbar` is exact path / AUMID **and** a button last observed running (`observedRunning`, or 400 ms grace after a not-running snapshot). Pinned-only / closed must not occupy a top-N slot. A path-cache row whose button is already dead is erased on the UI thread (`PruneDeadButtonPathCache_UIThread`, from `CollectLiveButtons`) before eligibility; this function does not `weak.get()`. | Two folders of `python.exe` stay distinct; closing a pinned app (or moving the exe on update) frees the slot. Idle apps must not drop because no hover refreshed a tick. A destroyed button must not keep the slot. A recycled group HWND must not light the old button. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
@@ -343,11 +343,11 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | Preview titleBg | Tint-opacity ceiling × linear rank intensity; 4px rounded rect, 6px inset both sides | Readable; 100 vs 5 must differ |
 | Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank. Marker stores the displaced brush and our installed brush. Restore only while the border’s current brush is still ours; the next takeover saves whoever owns it now. Zero fill does not replace the background | Strong signal; a Styler change during the flyout survives repaint and clear |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
-| RunningIndicator | Never set Fill/Width/Height; never reorder every paint | Edge bar draws own pill. Glow host sits *under* a native thin pill, *above* a Taskbar Styler hover plate (RunningIndicator restyled to fill the icon cell — otherwise PointerOver acrylic covers the side bar). On taskbar-edge relayout restore z-order so the native pill is not left behind BackgroundElement. |
+| RunningIndicator | Never set Fill/Width/Height; never reorder every paint | Edge bar draws own pill. Glow host sits *under* a native thin pill, *above* a Taskbar Styler hover plate (RunningIndicator restyled to fill the icon cell — otherwise PointerOver acrylic covers the side bar). On taskbar-edge relayout recompute the ZIndex plan without moving children. |
 | Bar geometry | Size vs glow **host** (padded inner box), `Center` alignment | IconPanel is 48×32 on a left taskbar but the host is 40×28 (padding 4,2). Length is `size%` of that cell, **same for every rank** (rank is opacity). Icon-width underlines on a left taskbar are too short to scan. |
 | RunningIndicator on style switch | Cover Edge bar via z-order only. Never ClearValue Visibility/Width/Height, never GoToState | VSM stores InactiveRunningIndicator `Visible` as a local value. ClearValue → template Collapsed. GoToState of the *current* state is a no-op, so the short unfocused pill stays gone. |
 | Bar auto-rotate | `leftBar` = side (perpendicular); `bottomBar` = edge (screen edge) | Settings keys stay `leftBar`/`bottomBar`. Detect: `VerticalOrientation` / panel 48×32 (wider than tall ⇒ **vertical** bar) first. Do not treat leftover RunningIndicator `VA=Bottom` as a bottom taskbar. |
-| OverlayIcon | Keep after Icon / DefaultIcon | Discord/Thunderbird/WhatsApp badge; our host insert can leave it behind the glyph |
+| OverlayIcon | Leave its collection index to Windows; include newly realized badges in the ZIndex plan even on cached paints. | The appended host must never shift native slots. Detached entries are restored/released; cleanup restores native local ZIndex (including unset). |
 | Size boost | Icon `ScaleTransform` only; remember our instance and clear only that object. Previous local transform lives on the glow host Tag (not a cache `weak_ref`) and is replaced on every new takeover. Zero intensity/boost still calls `ClearIconScaleIfOurs` (do not skip on the empty-visual return). | Other mods (taskbar-dock-animation) scale the same `Icon` |
 | Rank intensity | Element Opacity (bars/frames) or brush alpha (native plate / titleBg) **once** | Do not also multiply fill/stroke alpha by `t`. 100/80/60 must read as 100/80/60, not ~100/64/36. |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
@@ -641,8 +641,8 @@ next round’s required finding.
    Cite: `taskbar-thumbnail-reorder` repeater `GetAt` + ctor map.
 5. **Do not fight native template / other mods.** Own-named overlays.
    Don’t `ClearValue` native fills/visibility. Don’t reorder `IconPanel`
-   children on buttons you never painted; restore from a snapshot, not a
-   stock order. Don’t wipe another mod’s `ScaleTransform`. Plate tints
+   native children or reposition our host. Use the drawing-order plan and
+   ownership-aware ZIndex restoration. Don’t wipe another mod’s `ScaleTransform`. Plate tints
    save/restore the previous brush.
 6. **Catalog packaging.** The YAML README is the store page (screenshots on
    `raw.githubusercontent.com`, no tester checklist, no “see the repo
@@ -694,7 +694,7 @@ and must not guess identity from localized UI strings.
 | Path cache is not a poll | `EnsureButtonPathCached` from UVS = `ReportClicked` into `HandleClick` | Resolve on full bind + `OnPointerPressed` only; never from UVS |
 | Identity-map keys need a live weak_ref | Raw `IUnknown*` is reused when Explorer reallocates a button | Erase the entry unless `weak.get() == this button` |
 | Identity-keyed maps, not linear `weak.get()` | Four COM-resolving scans per UVS per button | `unordered_map<IUnknown*, …>`; keep the map, skip paint on unranked |
-| No native reorder of untouched icons | `ClearButtonHighlight` healed z-order on every unranked UVS | Only restore `IconPanel` child order after we insert/remove our host |
+| No collection reordering | Historical clears/paints healed native z-order | No native moves and no glow repositioning. Append owned glow at creation, restore owned ZIndex changes and remove only that glow at cleanup. |
 | No `SizeChanged` without a drainable dispatcher | `RememberUiDispatcher` can fail; uninit never revokes that watch | Register the watch only if the dispatcher was recorded |
 | No icon name fuzzy | English `" running"` / `" pinned"`, `LISTER`/`VSCODIUM` special cases, wrong glow | HWND / AUMID / path only. Preview unique-title dropped |
 | No in-mod enable / debug toggles | Duplicates Windhawk’s mod on/off and Advanced logging | Drop `enabled` and `glowDebugLog`; use `Wh_Log` |
@@ -706,7 +706,7 @@ and must not guess identity from localized UI strings.
 | Do not deref ctor-map `taskItem` | HWND gone ⇒ native `ITaskItem` likely freed; `GetWindowFromTaskItem` UAF | Store HWND at ctor; raw pointer is compare-only (thumbnail-reorder) |
 | UVS must not clear on overlay sweep | Desktop switch / decay set the flag then UVS blanked ranked icons until `ApplyAllHighlights` | Paint cached rank; the full bind is the sweep |
 | Paint cache includes edge + size | SizeChanged updated `lastEdge` then `ApplyButtonHighlight` early-out | Key is rank + settings + accent + edge + panel size |
-| Restore native z-order from a snapshot | Assumed `BackgroundElement` first / OverlayIcon above Icon | Save `weak_ref<UIElement>` in visual order (unnamed Styler children too) |
+| Native order snapshots removed | 0.9.35 moved native children; 0.9.36 moved only the glow but still failed cycle two | 0.9.37 appends the glow once, uses Canvas.ZIndex for drawing order, and restores owned property changes before removing the glow. |
 | Paint rank **-1** ≠ **0** | First UVS scored an unresolved button as 0 and skipped the full bind | Unknown identity stays -1 and schedules rebind; 0 only after a real resolve said “no rank” |
 | Own `ScaleTransform` instance | `ClearValue` wiped `taskbar-dock-animation`. A `weak_ref` to the displaced transform goes null if Icon held the last strong ref. | Remember the object we set; keep the previous transform on the glow host Tag (tree-owned, like the preview plate brush); restore only while current == ours |
 | YAML defaults are real | All-zero preview intensities must not be “unset” | Do not override user 0s after an in-place recompile |
@@ -751,12 +751,12 @@ exe-replace path-cache re-resolve, `PathAppearsOnTaskbar` exact-only, unmatched 
 `lastHwnd`+pid, replica/score prune, flyout Low coalesce, snap-group GetAt
 guard, click confirm on the focus thread, idle decay timer, pinned→running
 re-resolve, ctor-map HWND only, no UVS clear on overlay sweep, paint cache
-edge+size, native z-order snapshot, DataContext-first preview bind,
+edge+size, append-only glow with owned ZIndex planning (0.9.37), DataContext-first preview bind,
 unique-title dropped (stash), Thumbnails clear-on-retarget, bounded transient
 min-focus, File Explorer folder windows, deadline-style full-rebind debounce,
 preview overlay host reuse, window recency key is path or `APPID:` (not AFH
-path), ring preview style removed (hybrid default), OverlayIcon raised after
-snapshot restore (Thunderbird/Discord badge), `observedRunning` vs 400 ms
+path), ring preview style removed (hybrid default), native badge-order repair
+removed in 0.9.36 after the repeated badge recreation regression, `observedRunning` vs 400 ms
 heartbeat, settings-change timer re-arm, linear rank intensity, drain
 `Completed` barrier, glow-host Tag for prior icon transform, Win32 AUMID
 exclusion on pending/preview history.

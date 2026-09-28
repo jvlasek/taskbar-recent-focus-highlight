@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.35 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.37 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -128,6 +128,27 @@ Thumbnail HWND mapping follows
 4. Optional: set the mod’s Advanced tab **Debug logging** to **Mod logs** while testing.
 5. After updating the `.cpp`, recompile in Windhawk; a full **explorer restart**
    is the cleanest way to pick up new hooks.
+
+## Badge recreation candidate fix (0.9.37)
+
+The icon glow is appended to IconPanel once and is never moved within that
+child collection. Drawing order uses `Canvas.ZIndex` instead. Native children
+receive temporary spaced ZIndex values that preserve their existing draw order;
+the glow occupies the appropriate gap for its style. Cleanup restores prior
+local values (or clears previously unset values) only while the installed value
+is still present. Another owner's different value survives. A same-value write
+by another owner cannot be distinguished from ours for an integer property.
+
+The previous host-only-movement patch (0.9.36) still failed on the second badge
+cycle. Restart Explorer after loading 0.9.37, then run the
+[four-app harness](tests/uwspy/README.md) enabled for ten cycles. Also verify
+side/edge/frame/full styles and any Taskbar Styler hover theme. Live confirmation
+of this candidate is pending; existing altered XAML state is not repaired.
+
+`python tests/run-icon-order-tests.py` checks the extracted production drawing
+planner (14,400 cases), native draw-order preservation, repeated badge cycles,
+and ownership-aware restoration. It does not simulate Windows' private XAML
+realization machinery.
 
 ## How to test
 

@@ -3,6 +3,7 @@ import argparse
 import ctypes as C
 from ctypes import wintypes as W
 import json
+import re
 from pathlib import Path
 import subprocess
 import threading
@@ -62,6 +63,48 @@ def badge_state(nodes):
     except (ValueError,KeyError) as error: raise Inconclusive('missing ordering data') from error
 
 
+def test_app_identity(nodes):
+    if not nodes: return None
+    identity=property_value(nodes[0], 'AutomationProperties.AutomationId', '')
+    for name in 'ABCD':
+        if identity.casefold()==f'Appid: UWPSpy.TestHarness.{name}'.casefold(): return name
+    return None
+
+
+def button_layout_eligible(nodes):
+    """Exported rectangles are relative to the XAML root, not desktop coordinates."""
+    if not nodes: return False
+    node=nodes[0]
+    if property_value(node,'Visibility','0')!='0': return False
+    rect=node.get('rectangle','')
+    match=re.match(r'\((-?\d+),(-?\d+)\) - \((-?\d+),(-?\d+)\)',rect)
+    if not match: return False
+    left,top,right,bottom=map(int,match.groups())
+    # Recycled repeater elements can retain their old AppId at (-10000,-10000).
+    # Negative desktop monitor coordinates are irrelevant: these are root-relative.
+    return right>left and bottom>top and right>0 and bottom>0
+
+
+def discover_test_buttons(client, tree=None):
+    matches={name:[] for name in 'ABCD'}
+    inventory=[]
+    for candidate in client.find():
+        if tree and candidate['tree']!=tree: continue
+        entry=dict(candidate)
+        try:
+            result=client.call('get', **{k:candidate[k] for k in ('tree','handle','generation')})
+            nodes=result['nodes']
+            entry['automation_id']=property_value(nodes[0], 'AutomationProperties.AutomationId', '') if nodes else ''
+            name=test_app_identity(nodes)
+            entry['rectangle']=nodes[0].get('rectangle') if nodes else None
+            entry['layout_eligible']=button_layout_eligible(nodes)
+            if name and entry['layout_eligible']: matches[name].append(candidate)
+        except (RuntimeError, OSError) as error:
+            entry['inspection_error']=str(error)
+        inventory.append(entry)
+    return matches,inventory
+
+
 class ForegroundMonitor:
     def __init__(self):
         self.events=[];self.lock=threading.Lock();self.stop=threading.Event();self.ready=threading.Event();self.ok=False
@@ -113,6 +156,7 @@ class Run:
             raise Inconclusive('watch stopped during scenario')
     def step(self,label):
         self.check();self.label=label;self.log('step')
+        print(f'Step: {label}',flush=True)
         for tree in {e['tree'] for e in self.elements.values()}:
             self.client.call('label',tree=tree,label=label)
     def get(self,name):
@@ -188,10 +232,18 @@ class Run:
                 time.sleep(.1)
         print('Keep the IPC UWPSpy inspectors open. Press Enter here when ready to find the four buttons.')
         input()
+        deadline=time.monotonic()+5
+        while True:
+            discovered,inventory=discover_test_buttons(self.client,self.args.tree)
+            self.log('button_discovery',buttons=inventory)
+            if all(discovered.values()) or time.monotonic()>=deadline: break
+            time.sleep(.25)
         for name in 'ABCD':
-            matches=self.client.find(automation_contains=f'UWPSpy Test {name}')
-            if self.args.tree:matches=[m for m in matches if m['tree']==self.args.tree]
-            if len(matches)!=1:raise Inconclusive(f'{name}: found {len(matches)} buttons; use --tree for multiple taskbars')
+            matches=discovered[name]
+            if not matches:
+                raise Inconclusive(f'{name}: no laid-out button with Appid: UWPSpy.TestHarness.{name}; keep the taskbar visible; see button_discovery in run.jsonl')
+            if len(matches)!=1:
+                raise Inconclusive(f'{name}: found {len(matches)} matching buttons; close older test apps or use --tree for separate taskbar trees; see button_discovery in run.jsonl')
             self.elements[name]=matches[0]
         self.log('elements',elements=self.elements,windows=self.windows)
         self.watch_tree=self.elements['A']['tree']
@@ -205,6 +257,7 @@ class Run:
             if time.monotonic()>deadline:raise Disrupted('A was not activated')
             time.sleep(.05)
         time.sleep(.1)
+        print(f'Starting run... A has focus. Waiting {self.args.focus_seconds:g} seconds for the focus threshold; no further input needed.',flush=True)
         self.expected_hwnd=self.windows['A'];self.focus_mark=time.monotonic();self.wait(self.args.focus_seconds)
     def execute(self):
         outcome='inconclusive';reason='not started'

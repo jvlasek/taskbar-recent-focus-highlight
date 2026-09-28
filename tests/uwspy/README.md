@@ -50,7 +50,7 @@ python .\harness.py --endpoint $endpoint --mode enabled --top 3 --focus-seconds 
 ```
 
 The harness launches A/B/C/D and asks for Enter after preparation. It then finds
-the buttons and starts a watch on A. Click A when prompted. All later focus
+the buttons by exact AppUserModelID (not window title) and starts a watch on A. Click A when prompted. All later focus
 changes are requested through the currently foreground test child, and actual
 foreground HWNDs/events are checked. Leave input alone until the result prints.
 If multiple taskbars yield multiple matches, `--tree` may disambiguate them;
@@ -102,3 +102,12 @@ are reduced ordering/property excerpts from recordings 1, 8, and 9 of the
 
 `bin/`, native intermediate directories, Python caches, and `test-runs/` are
 ignored. Run outputs can also be placed outside this repository with `--output`.
+
+Discovery failures include a `button_discovery` entry in `run.jsonl` with the
+observed names and IDs. Close older A/B/C/D test apps before starting a new run.
+
+Button discovery excludes collapsed/empty elements and rectangles wholly above
+or left of the XAML root (including parked repeater elements retaining old IDs).
+It retries missing buttons for five seconds. Exported coordinates here are
+root-relative, so this does not exclude monitors with negative desktop origins.
+`button_discovery` records rectangles and `layout_eligible` for every candidate.

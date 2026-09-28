@@ -7,7 +7,7 @@ import subprocess
 import time
 import unittest
 from uwspy_client import Client, K, endpoints, parse_dump
-from harness import badge_state, Inconclusive
+from harness import badge_state, Inconclusive, test_app_identity, discover_test_buttons, button_layout_eligible
 
 class DumpTests(unittest.TestCase):
     def test_real_badge_regression(self):
@@ -16,6 +16,34 @@ class DumpTests(unittest.TestCase):
             with self.subTest(state=state):
                 nodes=parse_dump((root/f'badge-{state}.txt').read_text(encoding='utf-8'))
                 self.assertEqual(badge_state(nodes),state)
+    def test_app_identity_uses_appid_not_title(self):
+        nodes=parse_dump('Path: Button\nName: TaskListButton\nLocal properties:\n- AutomationProperties.AutomationId: Appid: UWPSpy.TestHarness.A\n- AutomationProperties.Name: A - 1 running window\n')
+        self.assertEqual(test_app_identity(nodes),'A')
+        nodes[0]['local']['AutomationProperties.AutomationId']=['Appid: OtherApp.A']
+        self.assertIsNone(test_app_identity(nodes))
+
+    def test_discovery_preserves_duplicates(self):
+        class FakeClient:
+            def find(self): return [{'tree':'1','handle':str(i),'generation':'1','automation_name':'A - 1 running window'} for i in range(2)]
+            def call(self,op,**fields): return {'nodes':[{'rectangle':'(100,0) - (144,48)  -  44x48','local':{'AutomationProperties.AutomationId':['Appid: UWPSpy.TestHarness.A']},'other':{}}]}
+        matches,inventory=discover_test_buttons(FakeClient())
+        self.assertEqual(len(matches['A']),2)
+        self.assertEqual(len(inventory),2)
+
+    def test_parked_button_is_not_a_visible_duplicate(self):
+        class FakeClient:
+            def find(self): return [{'tree':'1','handle':str(i),'generation':'1'} for i in range(2)]
+            def call(self,op,**fields):
+                rect='(-10044,-10032) - (-10000,-10000)' if fields['handle']=='0' else '(100,0) - (144,48)'
+                return {'nodes':[{'rectangle':rect,'local':{'AutomationProperties.AutomationId':['Appid: UWPSpy.TestHarness.B']},'other':{}}]}
+        matches,inventory=discover_test_buttons(FakeClient())
+        self.assertEqual(len(matches['B']),1)
+        self.assertEqual(matches['B'][0]['handle'],'1')
+        self.assertFalse(inventory[0]['layout_eligible'])
+
+    def test_partial_root_overlap_is_eligible(self):
+        self.assertTrue(button_layout_eligible([{'rectangle':'(-10,0) - (34,48)','local':{},'other':{}}]))
+
     def test_local_visibility_wins(self):
         nodes=parse_dump('Path: Panel > Icon\nName: Icon\nChild index: 1\nOther Properties:\n- Canvas.ZIndex: 0\n\nPath: Panel > Badge\nName: OverlayIcon\nChild index: 2\nLocal properties:\n- Visibility: 1\nOther Properties:\n- Visibility: 0\n- Canvas.ZIndex: 0\n')
         self.assertEqual(badge_state(nodes),'absent')

@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.35
+// @version         0.9.37
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -807,10 +807,6 @@ struct IconPanelLayoutWatch {
     winrt::event_token sizeChanged{};
     TaskbarEdge lastEdge = TaskbarEdge::Bottom;
     bool haveEdge = false;
-    // Native IconPanel children in visual order before we first moved them
-    // (including unnamed Styler-injected elements). Restore by identity.
-    std::vector<winrt::weak_ref<UIElement>> nativeChildren;
-    bool haveNativeOrder = false;
 };
 std::mutex g_layoutWatchMutex;
 std::unordered_map<void*, IconPanelLayoutWatch> g_layoutWatches;
@@ -2180,11 +2176,14 @@ FrameworkElement GetIconPanel(FrameworkElement button) {
     return iconPanel;
 }
 
+void RestoreGlowZOrder(FrameworkElement host);
+
 void RemoveNamedChild(Controls::Panel panel, PCWSTR name) {
     if (!panel) {
         return;
     }
     if (auto child = FindChildByName(panel, name)) {
+        if (std::wstring_view(name) == kGlowElementName) RestoreGlowZOrder(child);
         uint32_t idx = 0;
         if (panel.Children().IndexOf(child, idx)) {
             panel.Children().RemoveAt(idx);
@@ -2281,316 +2280,153 @@ bool RunningIndicatorLooksLikeHoverPlate(FrameworkElement ri,
     }
 }
 
-void EnsureOverlayIconAboveGlyph(FrameworkElement iconPanel);
-
-// Place glow host in the IconPanel child list without thrashing native chrome.
-//
-// Moving RunningIndicator every paint (mouse-over UpdateVisualStates) causes
-// the short/long underline to flicker. Instead, put our host *under* native
-// RunningIndicator / MultiWindowElement / ProgressIndicator so they always
-// paint on top — only reorder when the host is in the wrong place.
-void EnsureGlowHostZOrder(Controls::Panel panel,
-                          UIElement host,
-                          GlowStyle style) {
-    if (!panel || !host) {
-        return;
-    }
-    try {
-        auto children = panel.Children();
-        uint32_t hostIdx = 0;
-        if (!children.IndexOf(host, hostIdx)) {
-            return;
-        }
-
-        if (style == GlowStyle::Full) {
-            // Plate behind icon and indicators.
-            if (hostIdx != 0) {
-                children.RemoveAt(hostIdx);
-                children.InsertAt(0, host);
-            }
-            return;
-        }
-
+// Pure drawing-order plan: preserve native (ZIndex, child-index) ordering,
+// leaving integer gaps for our appended host. Never mutate Children here.
+struct IconZOrderInput {
+    int z;
+    bool aboveHost;
+    bool runningIndicator;
+};
+struct IconZOrderPlan {
+    std::vector<int> nativeZ;
+    int hostZ = -1;
+};
+IconZOrderPlan PlanIconZOrder(const std::vector<IconZOrderInput>& input,
+                            GlowStyle style) {
+    IconZOrderPlan plan;
+    plan.nativeZ.resize(input.size());
+    std::vector<size_t> order;
+    for (size_t i = 0; i < input.size(); ++i) order.push_back(i);
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return input[a].z < input[b].z;
+    });
+    size_t position = style == GlowStyle::Full ? 0 : order.size();
+    for (size_t i = 0; i < order.size(); ++i) {
+        auto index = order[i];
+        plan.nativeZ[index] = static_cast<int>(2 * i);
         if (style == GlowStyle::BottomBar) {
-            // Cover the native pill without Visibility=Collapsed: host after
-            // RunningIndicator. OverlayIcon stays last (badges).
-            uint32_t riIdx = UINT32_MAX;
-            if (auto ri = FindChildByName(panel.as<FrameworkElement>(),
-                                          L"RunningIndicator")) {
-                uint32_t i = 0;
-                if (children.IndexOf(ri, i)) {
-                    riIdx = i;
-                }
-            }
-            if (!children.IndexOf(host, hostIdx)) {
-                return;
-            }
-            if (riIdx != UINT32_MAX) {
-                if (hostIdx != riIdx + 1) {
-                    children.RemoveAt(hostIdx);
-                    if (hostIdx < riIdx) {
-                        children.InsertAt(riIdx, host);
-                    } else {
-                        children.InsertAt(riIdx + 1, host);
-                    }
-                }
-            } else if (hostIdx + 1 != children.Size()) {
-                children.RemoveAt(hostIdx);
-                children.Append(host);
-            }
-            EnsureOverlayIconAboveGlyph(panel.as<FrameworkElement>());
-            return;
+            if (input[index].runningIndicator) position = i + 1;
+        } else if (style != GlowStyle::Full && input[index].aboveHost) {
+            position = (std::min)(position, i);
         }
+    }
+    plan.hostZ = static_cast<int>(2 * position) - 1;
+    return plan;
+}
 
-        // Frame / side bar: stay under OverlayIcon, progress, a native thin
-        // running pill, and (for side bar) the glyph. Do *not* stay under a
-        // Styler hover plate (large RunningIndicator) — that covers the bar.
+using IconZOrderBag = winrt::Windows::Foundation::Collections::PropertySet;
+using IconZOrderEntries = winrt::Windows::Foundation::Collections::IVector<
+    winrt::Windows::Foundation::IInspectable>;
+constexpr PCWSTR kIconZOrderMarker = L"WhRecentFocusZOrder";
+
+bool StillOwnIconZIndex(UIElement element, IconZOrderBag bag) {
+    auto local = element.ReadLocalValue(Controls::Canvas::ZIndexProperty());
+    return local && local != DependencyProperty::UnsetValue() &&
+        winrt::unbox_value<int>(local) == winrt::unbox_value<int>(bag.Lookup(L"ours"));
+}
+void RestoreIconZEntry(IconZOrderBag bag) {
+    auto element = bag.Lookup(L"element").as<UIElement>();
+    if (!StillOwnIconZIndex(element, bag)) return; // preserve a later owner's value
+    auto prior = bag.Lookup(L"prior");
+    if (prior == DependencyProperty::UnsetValue()) {
+        element.ClearValue(Controls::Canvas::ZIndexProperty());
+    } else {
+        element.SetValue(Controls::Canvas::ZIndexProperty(), prior);
+    }
+}
+void RestoreGlowZOrder(FrameworkElement host) {
+    if (!host) return;
+    try {
+        auto marker = FindChildByName(host, kIconZOrderMarker);
+        auto entries = marker ? marker.Tag().try_as<IconZOrderEntries>() : nullptr;
+        if (!entries) return;
+        for (auto value : entries) {
+            try { RestoreIconZEntry(value.as<IconZOrderBag>()); } catch (...) {}
+        }
+        entries.Clear();
+    } catch (...) {}
+}
+
+// The host is appended once in EnsureGlowHost. Never insert/move it before a
+// native child: even host-only collection moves broke the second badge cycle.
+// Saved native property values live on a marker inside our host, not a global.
+void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host, GlowStyle style) {
+    if (!panel || !host) return;
+    try {
+        auto hostPanel = host.try_as<Controls::Panel>();
+        if (!hostPanel) return;
+        auto marker = FindChildByName(hostPanel, kIconZOrderMarker);
+        if (!marker) {
+            Controls::Border created;
+            created.Name(kIconZOrderMarker);
+            created.Visibility(Visibility::Collapsed);
+            created.IsHitTestVisible(false);
+            created.Tag(winrt::single_threaded_vector<winrt::Windows::Foundation::IInspectable>());
+            hostPanel.Children().Append(created);
+            marker = created;
+        }
+        auto entries = marker.Tag().as<IconZOrderEntries>();
+        auto children = panel.Children();
+        if (children.Size() > 4096) return;
+        // Drop references to badges removed/recreated since the last paint.
+        for (uint32_t i = entries.Size(); i > 0; --i) {
+            auto bag = entries.GetAt(i - 1).as<IconZOrderBag>();
+            uint32_t index;
+            if (!children.IndexOf(bag.Lookup(L"element").as<UIElement>(), index)) {
+                RestoreIconZEntry(bag);
+                entries.RemoveAt(i - 1);
+            }
+        }
+        std::vector<UIElement> elements;
+        std::vector<IconZOrderBag> owners;
+        std::vector<IconZOrderInput> inputs;
         auto panelFe = panel.as<FrameworkElement>();
-        uint32_t insertBefore = children.Size();
-        bool foundTop = false;
-        auto considerUnder = [&](PCWSTR name) {
-            auto el = FindChildByName(panelFe, name);
-            if (!el) {
-                return;
+        for (auto element : children) {
+            if (element == host) continue;
+            IconZOrderBag owner{nullptr};
+            for (auto value : entries) {
+                auto bag = value.as<IconZOrderBag>();
+                if (bag.Lookup(L"element") == element) { owner = bag; break; }
             }
-            uint32_t idx = 0;
-            if (!children.IndexOf(el, idx)) {
-                return;
-            }
-            if (!foundTop || idx < insertBefore) {
-                insertBefore = idx;
-                foundTop = true;
-            }
-        };
-        considerUnder(L"OverlayIcon");
-        considerUnder(L"MultiWindowElement");
-        considerUnder(L"ProgressIndicator");
-        if (style == GlowStyle::LeftBar) {
-            considerUnder(L"Icon");
-            considerUnder(L"DefaultIcon");
-        }
-        if (auto ri = FindRunningIndicator(panelFe)) {
-            if (!RunningIndicatorLooksLikeHoverPlate(ri, panelFe)) {
-                considerUnder(L"RunningIndicator");
-            }
-        }
-
-        if (!children.IndexOf(host, hostIdx)) {
-            return;
-        }
-
-        if (foundTop) {
-            if (hostIdx < insertBefore) {
-                if (hostIdx + 1 == insertBefore) {
-                    // Already immediately under the first element that must
-                    // stay on top.
-                    EnsureOverlayIconAboveGlyph(panelFe);
-                    return;
-                }
-                // Gap (Styler plate between host and icon) — raise the bar.
-                children.RemoveAt(hostIdx);
-                children.InsertAt(insertBefore - 1, host);
+            int baseline = Controls::Canvas::GetZIndex(element);
+            if (owner && StillOwnIconZIndex(element, owner)) {
+                baseline = winrt::unbox_value<int>(owner.Lookup(L"baseline"));
             } else {
-                children.RemoveAt(hostIdx);
-                children.InsertAt(insertBefore, host);
-            }
-        } else if (hostIdx + 1 != children.Size()) {
-            children.RemoveAt(hostIdx);
-            children.Append(host);
-        }
-
-        // Moving the host can leave OverlayIcon behind Icon when Windows later
-        // re-appends the glyph (Discord/Thunderbird ping). Heal after we settle.
-        EnsureOverlayIconAboveGlyph(panel.as<FrameworkElement>());
-    } catch (...) {
-    }
-}
-
-// TaskListLabeledButtonPanel paints later children on top. Native template
-// order is BackgroundElement (back) → Icon → OverlayIcon → RunningIndicator
-// (front). Inserting/removing our host can leave BackgroundElement in front
-// of the running underscore, or leave OverlayIcon *behind* Icon (Discord /
-// Thunderbird / WhatsApp badge clipped by the glyph after a ping + UVS).
-void EnsureOverlayIconAboveGlyph(FrameworkElement iconPanel) {
-    if (!iconPanel) {
-        return;
-    }
-    auto panel = iconPanel.try_as<Controls::Panel>();
-    if (!panel) {
-        return;
-    }
-    try {
-        auto overlay = FindChildByName(iconPanel, L"OverlayIcon");
-        if (!overlay) {
-            return;
-        }
-        auto children = panel.Children();
-        uint32_t oIdx = 0;
-        if (!children.IndexOf(overlay, oIdx)) {
-            return;
-        }
-
-        uint32_t glyphLast = 0;
-        bool haveGlyph = false;
-        for (PCWSTR name : {L"Icon", L"DefaultIcon"}) {
-            auto el = FindChildByName(iconPanel, name);
-            if (!el) {
-                continue;
-            }
-            uint32_t idx = 0;
-            if (!children.IndexOf(el, idx)) {
-                continue;
-            }
-            if (!haveGlyph || idx > glyphLast) {
-                glyphLast = idx;
-                haveGlyph = true;
-            }
-        }
-        if (!haveGlyph || oIdx > glyphLast) {
-            return;
-        }
-
-        children.RemoveAt(oIdx);
-        uint32_t dest = glyphLast;
-        if (dest > children.Size()) {
-            dest = children.Size();
-        }
-        children.InsertAt(dest, overlay);
-        Wh_Log(L"Raised OverlayIcon above Icon (notification badge was behind "
-               L"the glyph)");
-    } catch (...) {
-    }
-}
-
-void RememberNativeIconPanelOrder(FrameworkElement iconPanel) {
-    if (!iconPanel) {
-        return;
-    }
-    auto panel = iconPanel.try_as<Controls::Panel>();
-    if (!panel) {
-        return;
-    }
-    void* id = InspectableIdentity(iconPanel);
-    if (!id) {
-        return;
-    }
-    std::vector<winrt::weak_ref<UIElement>> saved;
-    try {
-        auto children = panel.Children();
-        const uint32_t n = children.Size();
-        saved.reserve(n);
-        for (uint32_t i = 0; i < n; ++i) {
-            auto el = children.GetAt(i);
-            if (!el) {
-                continue;
-            }
-            try {
-                if (auto fe = el.try_as<FrameworkElement>()) {
-                    if (fe.Name() == kGlowElementName) {
-                        continue;
-                    }
+                // First takeover, or another mod changed ZIndex since ours.
+                if (!owner) {
+                    owner = IconZOrderBag{};
+                    owner.Insert(L"element", element);
+                    entries.Append(owner);
                 }
-            } catch (...) {
+                owner.Insert(L"prior", element.ReadLocalValue(Controls::Canvas::ZIndexProperty()));
+                owner.Insert(L"baseline", winrt::box_value(baseline));
+                owner.Insert(L"ours", winrt::box_value(baseline));
             }
-            saved.push_back(winrt::make_weak(el));
+            auto fe = element.try_as<FrameworkElement>();
+            auto name = fe ? fe.Name() : winrt::hstring{};
+            bool running = name == L"RunningIndicator";
+            bool above = name == L"OverlayIcon" || name == L"MultiWindowElement" ||
+                         name == L"ProgressIndicator";
+            if (style == GlowStyle::LeftBar && (name == L"Icon" || name == L"DefaultIcon")) above = true;
+            if (running && !RunningIndicatorLooksLikeHoverPlate(fe, panelFe)) above = true;
+            elements.push_back(element);
+            owners.push_back(owner);
+            inputs.push_back({baseline, above, running});
         }
-    } catch (...) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
-    auto it = g_layoutWatches.find(id);
-    if (it == g_layoutWatches.end() ||
-        !WeakIsSameElement(it->second.panel, iconPanel) ||
-        it->second.haveNativeOrder) {
-        return;
-    }
-    it->second.nativeChildren = std::move(saved);
-    it->second.haveNativeOrder = true;
-}
-
-void RestoreIconPanelNativeZOrder(FrameworkElement iconPanel) {
-    if (!iconPanel) {
-        return;
-    }
-    auto panel = iconPanel.try_as<Controls::Panel>();
-    if (!panel) {
-        return;
-    }
-    try {
-        auto children = panel.Children();
-        std::vector<winrt::weak_ref<UIElement>> saved;
-        {
-            void* id = InspectableIdentity(iconPanel);
-            std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
-            auto it = id ? g_layoutWatches.find(id) : g_layoutWatches.end();
-            if (it != g_layoutWatches.end() &&
-                WeakIsSameElement(it->second.panel, iconPanel) &&
-                it->second.haveNativeOrder) {
-                saved = it->second.nativeChildren;
+        auto plan = PlanIconZOrder(inputs, style);
+        for (size_t i = 0; i < elements.size(); ++i) {
+            auto& element = elements[i];
+            auto local = element.ReadLocalValue(Controls::Canvas::ZIndexProperty());
+            if (!local || local == DependencyProperty::UnsetValue() ||
+                winrt::unbox_value<int>(local) != plan.nativeZ[i]) {
+                element.SetValue(Controls::Canvas::ZIndexProperty(), winrt::box_value(plan.nativeZ[i]));
             }
+            owners[i].Insert(L"ours", winrt::box_value(plan.nativeZ[i]));
         }
-        if (!saved.empty()) {
-            uint32_t dest = 0;
-            for (auto& weak : saved) {
-                UIElement el = nullptr;
-                try {
-                    el = weak.get();
-                } catch (...) {
-                    continue;
-                }
-                if (!el) {
-                    continue;
-                }
-                uint32_t idx = 0;
-                if (!children.IndexOf(el, idx)) {
-                    continue;
-                }
-                if (idx != dest) {
-                    children.RemoveAt(idx);
-                    if (idx < dest) {
-                        --dest;
-                    }
-                    children.InsertAt(dest, el);
-                }
-                ++dest;
-            }
-            // Snapshot is from first glow. OverlayIcon (mail badge) can appear
-            // later — compaction would leave it behind the glyph.
-            EnsureOverlayIconAboveGlyph(iconPanel);
-            return;
+        if (Controls::Canvas::GetZIndex(host) != plan.hostZ) {
+            Controls::Canvas::SetZIndex(host, plan.hostZ);
         }
-
-        auto indexOfName = [&](PCWSTR name) -> int {
-            auto el = FindChildByName(iconPanel, name);
-            if (!el) {
-                return -1;
-            }
-            uint32_t idx = 0;
-            if (!children.IndexOf(el, idx)) {
-                return -1;
-            }
-            return static_cast<int>(idx);
-        };
-
-        const int bg = indexOfName(kBackgroundElementName);
-        const int run = indexOfName(L"RunningIndicator");
-        if (bg >= 0 && run >= 0 && bg > run) {
-            auto bgEl = FindChildByName(iconPanel, kBackgroundElementName);
-            if (bgEl) {
-                uint32_t bgIdx = 0;
-                if (children.IndexOf(bgEl, bgIdx)) {
-                    children.RemoveAt(bgIdx);
-                    children.InsertAt(0, bgEl);
-                    Wh_Log(
-                        L"Restored IconPanel z-order (BackgroundElement was "
-                        L"in front of RunningIndicator)");
-                }
-            }
-        }
-
-        EnsureOverlayIconAboveGlyph(iconPanel);
-    } catch (...) {
-    }
+    } catch (...) {}
 }
 
 bool ButtonHasOurChrome(FrameworkElement button) {
@@ -2656,6 +2492,7 @@ void ClearButtonHighlight(FrameworkElement button) {
                                     .try_as<Controls::Panel>()) {
                             uint32_t idx = 0;
                             if (parent.Children().IndexOf(orphan, idx)) {
+                                RestoreGlowZOrder(orphan);
                                 parent.Children().RemoveAt(idx);
                             }
                         }
@@ -2665,7 +2502,6 @@ void ClearButtonHighlight(FrameworkElement button) {
             }
         }
 
-        RestoreIconPanelNativeZOrder(iconPanel);
         SetCachedPaintState(button, 0, SettingsSnap()->generation);
     } catch (...) {
         HRESULT hr = winrt::to_hresult();
@@ -2689,7 +2525,6 @@ Controls::Grid EnsureGlowHost(Controls::Panel panel,
     }
 
     if (!host) {
-        RememberNativeIconPanelOrder(iconPanel);
         PCWSTR xaml =
             LR"(
             <Grid
@@ -3114,14 +2949,12 @@ FrameworkElement TaskListButtonFromDescendant(FrameworkElement start) {
     return nullptr;
 }
 
-// Relayout (taskbar moved to another screen edge): put RunningIndicator back
-// in front of BackgroundElement / our host. Do not ClearValue Width/Height —
-// OrientationStates owns those. Only call on size/edge change, not every UVS.
-void HealRunningIndicatorAfterRelayout(FrameworkElement iconPanel) {
+// Relayout: update ZIndex placement relative to the native pill / Styler plate.
+// Never mutate native collection order or geometry.
+void RepositionGlowAfterRelayout(FrameworkElement iconPanel) {
     if (!iconPanel) {
         return;
     }
-    RestoreIconPanelNativeZOrder(iconPanel);
 
     auto panel = iconPanel.try_as<Controls::Panel>();
     if (!panel) {
@@ -3324,7 +3157,7 @@ void EnsureIconPanelLayoutWatch(FrameworkElement button) {
                 }
                 ++g_iconPanelRelayoutDepth;
                 try {
-                    HealRunningIndicatorAfterRelayout(panel);
+                    RepositionGlowAfterRelayout(panel);
                     if (auto btn = TaskListButtonFromDescendant(panel)) {
                         RefreshButtonHighlight(btn);
                         ScheduleRefreshAllHighlights(btn);
@@ -3399,7 +3232,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                     g_cachedAccent.load(std::memory_order_relaxed) &&
                 painted.edge == edge && painted.boxW == boxWi &&
                 painted.boxH == boxHi && ButtonHasOurChrome(button)) {
-                EnsureOverlayIconAboveGlyph(iconPanel);
+                EnsureGlowHostZOrder(panel, existingHost, settings->glowStyle);
                 return;
             }
         }
@@ -3442,13 +3275,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
 
         const BarSide barSide = BarSideForGlowStyle(style, edge);
 
-        // Heal native stacking first (Discord overlay / leftover attention
-        // plate), then place our host (under a native pill; above a Styler
-        // hover plate so the side bar is not covered on PointerOver).
-        RestoreIconPanelNativeZOrder(iconPanel);
-
-        // Z-order once when wrong — never yank RunningIndicator every paint
-        // (that caused short/long underline flicker on mouse-over).
+        // Set drawing order without moving the appended host or native children.
         EnsureGlowHostZOrder(panel, host, style);
 
         HideAllGlowLayers(host);
