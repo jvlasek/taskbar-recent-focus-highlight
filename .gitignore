@@ -73,3 +73,10 @@ example/
 !screenshots/*
 data/
 *.wer
+uwspy/
+*.dmp
+
+# Keep harness sources; root uwspy/ recordings remain ignored.
+!tests/uwspy/
+tests/uwspy/captures
+

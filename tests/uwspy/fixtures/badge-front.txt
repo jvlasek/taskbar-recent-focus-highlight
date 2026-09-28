@@ -1,0 +1,22 @@
+Path: Grid#IconPanel > Image#Icon
+Handle: 0x591AD638
+Child index: 4
+Class: Windows.UI.Xaml.Controls.Image
+Name: Icon
+Local properties:
+- Visibility: 0
+Other Properties:
+- Opacity: 1
+- Visibility: 0
+- Canvas.ZIndex: 0
+
+Path: Grid#IconPanel > Image#OverlayIcon
+Handle: 0x7ACCCC78
+Child index: 6
+Class: Windows.UI.Xaml.Controls.Image
+Name: OverlayIcon
+Local properties:
+Other Properties:
+- Opacity: 1
+- Visibility: 0
+- Canvas.ZIndex: 0
