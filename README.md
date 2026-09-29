@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.42 (visual validation pending) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.43 (visual validation pending) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -131,15 +131,22 @@ Thumbnail HWND mapping follows
 
 ## Badge ordering fix and validation
 
-Version 0.9.42 restores style-specific layering while preserving the explicit
+Version 0.9.43 follows native background geometry for Frame/Full and draws Edge
+as a soft surround behind the native running pill. Side bar is unchanged.
+Frame uses one outline; Full uses one soft fill. Native dimensions and per-corner
+radii are read at paint time; unsupported background shapes fall back to a
+small rounded contour, while missing/invalid pills are skipped. Zero, non-finite
+and excessive dimensions are rejected.
+
+It uses style-specific layering while preserving the explicit
 `InsertAt` fix for deferred XAML child indices. Only our glow host is positioned;
 native child order and ZIndex values are not rewritten. The glow is removed
 when unranked and on unload. No retained-host or native badge-repair workaround
 is used. See [the investigation and evidence](tests/badge-static-analysis.md).
 
 The 0.9.41 diagnostic passed repeated badge recreation and three unload/reload
-rounds with badges both absent and present. These results do not certify 0.9.42:
-its restored host positioning needs a fresh live run and visual checks of all
+rounds with badges both absent and present. These results do not certify 0.9.43:
+its new contours and host positioning needs a fresh live run and visual checks of all
 four icon styles, hover, style switches, taskbar relayout and Styler coexistence.
 Follow [the final validation checklist](tests/badge-final-validation.md).
 

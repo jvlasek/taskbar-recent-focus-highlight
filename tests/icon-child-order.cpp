@@ -15,14 +15,13 @@ int main() {
                 std::vector<GlowOrderChild> input;
                 for (int id : order) {
                     // background, glyph, badge, running indicator, progress, other
-                    bool above=id==2 || id==4 || (id==3 && !plate) || (id==1 && style==GlowStyle::LeftBar);
+                    bool above=id==2 || id==4 || (id==3 && !plate) || (id==1 && (style==GlowStyle::LeftBar || style==GlowStyle::Full));
                     input.push_back({above,id==3});
                 }
                 auto target=GlowHostInsertionIndex(input,style);
                 assert(target<=order.size());
-                if(style==GlowStyle::Full) assert(target==0);
-                else if(style==GlowStyle::BottomBar)
-                    assert(target==std::find(order.begin(),order.end(),3)-order.begin()+1);
+                if(style==GlowStyle::BottomBar)
+                    assert(target==std::find(order.begin(),order.end(),3)-order.begin());
                 else {
                     for(size_t i=0;i<input.size();++i) if(input[i].aboveHost) assert(target<=i);
                     assert(target==input.size() || input[target].aboveHost);
@@ -46,7 +45,7 @@ int main() {
     for(auto style:{GlowStyle::Full,GlowStyle::BottomBar,GlowStyle::Frame,GlowStyle::LeftBar}) {
         assert(GlowHostInsertionIndex({},style)==0);
         std::vector<GlowOrderChild> noAnchors(3,{false,false});
-        assert(GlowHostInsertionIndex(noAnchors,style)==(style==GlowStyle::Full ? 0u : 3u));
+        assert(GlowHostInsertionIndex(noAnchors,style)==3u);
     }
     std::cout << "PASS: " << cases << " host placements; native order preserved, idempotence and missing anchors\n";
 }

@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.42
+// @version         0.9.43
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -145,8 +145,8 @@ to clear highlights.
         (bottom / left / top / right). Side bar = beside the icon (left on a
         bottom or top taskbar, under the icon on a left or right taskbar). Edge
         bar = same side as the native running indicator (screen edge). Frame/Full
-        = rounded rectangle. Edge bar paints our own pill and does not restyle
-        the native running indicator permanently.
+        = native background contour. Edge bar surrounds the native pill and does not restyle
+        the native running indicator.
       $options:
       - leftBar: Side bar (left on bottom/top, under icon on left/right)
       - frame: Frame (hollow rounded rectangle)
@@ -177,27 +177,27 @@ to clear highlights.
     - glowThickness: 3
       $name: Thickness (px)
       $description: >-
-        Frame/Full border width, or bar thickness (1–16). For side/edge bars this
-        is the bar’s short dimension.
+        Frame stroke or side-bar thickness (1–16). Edge surrounds the native
+        pill with padding derived from this value; Full has no stroke.
     - glowRoundness: 28
       $name: Roundness (%)
       $description: >-
-        Corner radius for Frame/Full (0 = square, ~25–35 = Win11, 50 ≈ pill).
-        Side and edge bars stay capsules and ignore this.
+        Thumbnail preview roundness. Frame/Full follow native background corners;
+        side bars stay capsules and Edge follows the native pill.
     - glowSize: 92
       $name: Size (%)
       $description: >-
-        Frame/Full: box size vs icon panel (≤100). Side bar: bar length along the
-        icon. Edge bar: pill length % of the icon’s long side (try 70–100).
+        Frame/Full: inset within native background (≤100, minimum 1px inset).
+        Side bar: bar length. Edge follows the native pill and ignores this.
     - glowLayers: 2
       $name: Layers
       $description: >-
-        Frame/Full: nested frames (1–3). Side bar: soft outer glow layers. Edge
-        bar: ignored.
+        Side bar: soft outer glow layers. Frame/Full/Edge use one contour and
+        ignore this setting.
     - glowFillOpacity: 40
       $name: Fill opacity
       $description: >-
-        0–100. Plate fill for Full; solid bar opacity for Side/Edge. Frame uses
+        0–100. Soft fill strength for Full/Edge; solid bar opacity for Side. Frame uses
         stroke only. (Thumbnail tints use Previews → Tint opacity.)
     - sizeBoostRank1: 10
       $name: Size boost rank 1 (%)
@@ -271,6 +271,7 @@ to clear highlights.
 
 #include <windhawk_utils.h>
 
+#include <cmath>
 #include <commctrl.h>
 #include <initguid.h>
 #include <propkey.h>
@@ -2222,29 +2223,6 @@ void ClearOurHostClip(FrameworkElement host) {
     }
 }
 
-// One glow layer: stroked rounded rect; optional fill for Full style.
-void StyleGlowRectangle(Shapes::Rectangle rect,
-                        const winrt::Windows::UI::Color& stroke,
-                        const winrt::Windows::UI::Color& fill,
-                        double strokeThickness,
-                        double corner,
-                        double inset,
-                        double opacity) {
-    rect.Stroke(Media::SolidColorBrush{stroke});
-    rect.StrokeThickness(strokeThickness);
-    rect.Fill(Media::SolidColorBrush{fill});
-    rect.RadiusX(corner);
-    rect.RadiusY(corner);
-    rect.Opacity(opacity);
-    rect.HorizontalAlignment(HorizontalAlignment::Stretch);
-    rect.VerticalAlignment(VerticalAlignment::Stretch);
-    rect.Margin(Thickness{inset, inset, inset, inset});
-    rect.ClearValue(FrameworkElement::WidthProperty());
-    rect.ClearValue(FrameworkElement::HeightProperty());
-    rect.IsHitTestVisible(false);
-    rect.Visibility(Visibility::Visible);
-}
-
 FrameworkElement FindRunningIndicator(FrameworkElement iconPanel) {
     if (!iconPanel) {
         return nullptr;
@@ -2285,10 +2263,9 @@ struct GlowOrderChild {
 };
 uint32_t GlowHostInsertionIndex(const std::vector<GlowOrderChild>& children,
                                 GlowStyle style) {
-    if (style == GlowStyle::Full) return 0;
     for (uint32_t i = 0; i < children.size(); ++i) {
         if (style == GlowStyle::BottomBar) {
-            if (children[i].runningIndicator) return i + 1;
+            if (children[i].runningIndicator) return i;
         } else if (children[i].aboveHost) {
             return i;
         }
@@ -2314,7 +2291,7 @@ void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host, GlowStyle style
             bool running = name == L"RunningIndicator";
             bool above = name == L"OverlayIcon" || name == L"MultiWindowElement" ||
                          name == L"ProgressIndicator";
-            if (style == GlowStyle::LeftBar &&
+            if ((style == GlowStyle::LeftBar || style == GlowStyle::Full) &&
                 (name == L"Icon" || name == L"DefaultIcon")) above = true;
             if (running && !RunningIndicatorLooksLikeHoverPlate(fe, panelFe)) above = true;
             native.push_back({above, running});
@@ -2461,6 +2438,9 @@ void HideAllGlowLayers(Controls::Grid host) {
     if (!host) {
         return;
     }
+    if (auto contour = FindChildByName(host, L"WhRecentFocusContour")) {
+        contour.Visibility(Visibility::Collapsed);
+    }
     for (int i = 0; i < kGlowMaxLayers; ++i) {
         if (auto r =
                 FindChildByName(host, kGlowLayerNames[i]).try_as<Shapes::Rectangle>()) {
@@ -2470,6 +2450,110 @@ void HideAllGlowLayers(Controls::Grid host) {
                 winrt::Windows::UI::Color{0, 0, 0, 0}});
         }
     }
+}
+
+// Reject malformed geometry before arithmetic or assigning XAML properties.
+// Coordinates are DIPs relative to our host. Never divide by native dimensions.
+bool SafeGlowMetric(double value) {
+    return std::isfinite(value) && std::abs(value) <= 16384.0;
+}
+bool SafeGlowBounds(double x, double y, double w, double h) {
+    return SafeGlowMetric(x) && SafeGlowMetric(y) && SafeGlowMetric(w) &&
+           SafeGlowMetric(h) && w > 0.5 && h > 0.5;
+}
+double InsetGlowRadius(double radius, double inset, double w, double h) {
+    if (!SafeGlowMetric(radius) || radius < 0 || !SafeGlowMetric(inset) ||
+        !SafeGlowBounds(0, 0, w, h)) return 0;
+    return (std::max)(0.0, (std::min)(radius - inset, (std::min)(w, h) * 0.5));
+}
+struct NativeGlowShape {
+    double x = 0, y = 0, w = 0, h = 0;
+    CornerRadius corners{0, 0, 0, 0};
+};
+bool ReadNativeGlowShape(FrameworkElement element, Controls::Grid host,
+                         NativeGlowShape& shape) {
+    try {
+        if (!element || element.Visibility() != Visibility::Visible) return false;
+        double w = element.ActualWidth(), h = element.ActualHeight();
+        if (!SafeGlowBounds(0, 0, w, h)) return false;
+        CornerRadius corners{0, 0, 0, 0};
+        if (auto border = element.try_as<Controls::Border>()) {
+            corners = border.CornerRadius();
+        } else if (auto rect = element.try_as<Shapes::Rectangle>()) {
+            double radius = (std::min)(rect.RadiusX(), rect.RadiusY());
+            corners = CornerRadius{radius, radius, radius, radius};
+        } else {
+            return false; // Unknown shape: use fallback, not a guessed native contour.
+        }
+        auto transform = element.TransformToVisual(host);
+        auto origin = transform.TransformPoint({0, 0});
+        auto unitX = transform.TransformPoint({1, 0});
+        auto unitY = transform.TransformPoint({0, 1});
+        double sx = unitX.X-origin.X, sy = unitY.Y-origin.Y;
+        // Border radii cannot reproduce rotations, skew or non-uniform scaling.
+        if (!SafeGlowMetric(unitX.Y) || !SafeGlowMetric(unitY.X) ||
+            !SafeGlowMetric(sx) || !SafeGlowMetric(sy) || sx <= 0 || sy <= 0 ||
+            std::abs(unitX.Y-origin.Y) > 0.01 || std::abs(unitY.X-origin.X) > 0.01 ||
+            std::abs(sx-sy) > 0.01) return false;
+        if (!SafeGlowBounds(origin.X, origin.Y, w*sx, h*sy)) return false;
+        shape = {origin.X, origin.Y, w*sx, h*sy,
+                 CornerRadius{corners.TopLeft*sx, corners.TopRight*sx,
+                              corners.BottomRight*sx, corners.BottomLeft*sx}};
+        return true;
+    } catch (...) {
+        return false; // Detached or changing native visual; use the safe fallback.
+    }
+}
+void PaintNativeContour(Controls::Grid host, FrameworkElement iconPanel,
+                         GlowStyle style, winrt::Windows::UI::Color color,
+                         double thickness, double sizeFrac, double opacity,
+                         int fillOpacity) {
+    NativeGlowShape shape;
+    bool pill = style == GlowStyle::BottomBar;
+    auto indicator = FindRunningIndicator(iconPanel);
+    bool plate = indicator && RunningIndicatorLooksLikeHoverPlate(indicator, iconPanel);
+    if (pill) {
+        // A hidden/zero-sized pill or a Styler full-cell plate is not a pill.
+        if (!indicator || plate || !ReadNativeGlowShape(indicator, host, shape)) return;
+    } else {
+        bool found = false;
+        if (plate) found = ReadNativeGlowShape(indicator, host, shape);
+        if (!found) found = ReadNativeGlowShape(FindChildByName(iconPanel, L"BackgroundElement"), host, shape);
+        if (!found) {
+            shape.w = host.ActualWidth(); shape.h = host.ActualHeight();
+            if (!SafeGlowBounds(0, 0, shape.w, shape.h)) return;
+            shape.corners = CornerRadius{4, 4, 4, 4};
+        }
+    }
+    double inset = pill ? -(std::min)(3.0, (std::max)(1.0, thickness * 0.5)) :
+        (std::max)(1.0, (std::min)(shape.w, shape.h) * (1.0-sizeFrac) * 0.5);
+    double w = shape.w-2*inset, h = shape.h-2*inset;
+    if (!SafeGlowBounds(shape.x+inset, shape.y+inset, w, h)) return;
+    Controls::Border border = FindChildByName(host, L"WhRecentFocusContour").try_as<Controls::Border>();
+    if (!border) {
+        border = Controls::Border();
+        border.Name(L"WhRecentFocusContour");
+        border.IsHitTestVisible(false);
+        auto children = host.Children();
+        children.InsertAt(children.Size(), border);
+    }
+    border.HorizontalAlignment(HorizontalAlignment::Left);
+    border.VerticalAlignment(VerticalAlignment::Top);
+    border.Width(w); border.Height(h);
+    border.Margin({shape.x+inset, shape.y+inset, 0, 0});
+    border.CornerRadius({InsetGlowRadius(shape.corners.TopLeft,inset,w,h),
+                         InsetGlowRadius(shape.corners.TopRight,inset,w,h),
+                         InsetGlowRadius(shape.corners.BottomRight,inset,w,h),
+                         InsetGlowRadius(shape.corners.BottomLeft,inset,w,h)});
+    bool frame = style == GlowStyle::Frame;
+    double stroke = frame ? (std::min)(thickness, (std::min)(w,h)*0.5) : 0;
+    border.BorderThickness({stroke,stroke,stroke,stroke});
+    auto strokeColor = color; strokeColor.A = 230;
+    border.BorderBrush(Media::SolidColorBrush{strokeColor});
+    color.A = frame ? 0 : static_cast<uint8_t>((std::clamp)(fillOpacity,0,100)*2.55*0.6+0.5);
+    border.Background(Media::SolidColorBrush{color});
+    border.Opacity((std::clamp)(opacity,0.0,1.0));
+    border.Visibility(Visibility::Visible);
 }
 
 PCWSTR GlowStyleName(GlowStyle s) {
@@ -3113,10 +3197,10 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
 
         double panelW = iconPanel.ActualWidth();
         double panelH = iconPanel.ActualHeight();
-        if (!(panelW > 1.0)) {
+        if (!SafeGlowMetric(panelW) || !(panelW > 1.0)) {
             panelW = 44.0;
         }
-        if (!(panelH > 1.0)) {
+        if (!SafeGlowMetric(panelH) || !(panelH > 1.0)) {
             panelH = 44.0;
         }
         const TaskbarEdge edge = CachedTaskbarEdge(iconPanel);
@@ -3124,11 +3208,13 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         double keyW = panelW;
         double keyH = panelH;
         GlowContentBoxSize(existingHost, iconPanel, panelW, panelH, keyW, keyH);
+        if (!SafeGlowBounds(0, 0, keyW, keyH)) { keyW = panelW; keyH = panelH; }
         const int boxWi = static_cast<int>(keyW + 0.5);
         const int boxHi = static_cast<int>(keyH + 0.5);
         {
             auto painted = GetCachedPaintState(button);
-            if (painted.rank == rankOneBased &&
+            if (settings->glowStyle == GlowStyle::LeftBar &&
+                painted.rank == rankOneBased &&
                 painted.settingsGen == settings->generation &&
                 painted.accent ==
                     g_cachedAccent.load(std::memory_order_relaxed) &&
@@ -3158,8 +3244,6 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             (std::max)(1, (std::min)(kGlowMaxLayers, settings->glowLayers));
         const double thickness = static_cast<double>(
             (std::max)(1, (std::min)(16, settings->glowThickness)));
-        const double roundnessFrac =
-            (std::max)(0, (std::min)(50, settings->glowRoundness)) / 100.0;
         const double sizeFrac =
             (std::max)(40, (std::min)(100, settings->glowSize)) / 100.0;
         const GlowStyle style = settings->glowStyle;
@@ -3192,45 +3276,8 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         }
 
         if (style == GlowStyle::Frame || style == GlowStyle::Full) {
-            const double baseInset =
-                (std::min)(boxW, boxH) * (1.0 - sizeFrac) * 0.5;
-            const bool isFrame = style == GlowStyle::Frame;
-
-            for (int i = 0; i < kGlowMaxLayers; ++i) {
-                auto rect = FindChildByName(host, kGlowLayerNames[i])
-                                .try_as<Shapes::Rectangle>();
-                if (!rect) {
-                    continue;
-                }
-                if (i >= layers) {
-                    continue;
-                }
-
-                const double step =
-                    (i == 0) ? 0.0 : (3.0 + thickness * 0.55) * i;
-                const double inset = baseInset + step;
-                const double inner =
-                    (std::max)(8.0, (std::min)(boxW, boxH) - 2.0 * inset);
-                const double corner = inner * roundnessFrac;
-                const double layerT = t * (1.0 - 0.15 * i);
-                const double th =
-                    (std::max)(1.0, thickness * (1.0 - 0.1 * i));
-                // Rank intensity is element Opacity only. Brush alpha is the
-                // stroke/fill setting — multiplying both made 60% look ~36%.
-                const int strokeA = static_cast<int>(
-                    230.0 * (1.0 - 0.12 * i) + 0.5);
-                const double opacity = layerT;
-
-                winrt::Windows::UI::Color fill{0, 0, 0, 0};
-                if (!isFrame && i == 0) {
-                    int fillA = static_cast<int>(fillOpacitySetting * 2.55 +
-                                                 0.5);
-                    fill = withAlpha(base, fillA);
-                }
-
-                StyleGlowRectangle(rect, withAlpha(base, strokeA), fill, th,
-                                   corner, inset, opacity);
-            }
+            PaintNativeContour(host, iconPanel, style, base, thickness, sizeFrac,
+                               t, fillOpacitySetting);
         } else if (style == GlowStyle::LeftBar) {
             // Side bar: left of the icon on a bottom/top taskbar, under the
             // icon on a left/right taskbar — never the native-pill edge.
@@ -3254,27 +3301,8 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                                    barSide, i, opacity);
             }
         } else if (style == GlowStyle::BottomBar) {
-            // Edge bar on the native RunningIndicator side. Cover the pill
-            // by z-order (host after RI). Never set Visibility/Width/Height
-            // on the native indicator.
-            if (!FindRunningIndicator(iconPanel)) {
-                Wh_Log(L"EdgeBar: RunningIndicator not found on \"%s\"",
-                       GetButtonAutomationName(button).c_str());
-            }
-
-            const int fillA =
-                static_cast<int>(fillOpacitySetting * 2.55 + 0.5);
-            const double barT =
-                (std::max)(2.0, (std::min)(6.0, thickness));
-            const double barLen =
-                BarLengthForSide(boxW, boxH, barSide, sizeFrac);
-
-            if (auto rect = FindChildByName(host, kGlowLayerNames[0])
-                                .try_as<Shapes::Rectangle>()) {
-                StyleGlowBarOnSide(rect, withAlpha(base, fillA), barT, barLen,
-                                   barSide, 0, t);
-            }
-
+            PaintNativeContour(host, iconPanel, style, base, thickness, sizeFrac,
+                               t, fillOpacitySetting);
         }
 
         if (auto icon = FindChildByName(iconPanel, L"Icon")) {

@@ -1,14 +1,17 @@
-# 0.9.42 final visual/lifecycle validation
+# 0.9.43 final visual/lifecycle validation
 
 Status: automated checks/build recorded in the handoff; live checks pending.
-Do not describe .42 as visually validated or submit its draft review response
+Do not describe .43 as visually validated or submit its draft review response
 as completed validation until the following checks are performed.
 
-1. Recompile/load .42, restart Explorer, attach UWPSpy. Use the same settings
+1. Recompile/load .43, restart Explorer, attach UWPSpy. Use the same settings
    as the .41 baseline (leftBar, top 3, 8-second minimum; harness hold 10s).
 2. Run five enabled badge cycles. Confirm screenshots, not only PASS.
 3. Repeat for frame, full and bottomBar. Verify glyph readability, badge front,
    expected bar/frame/plate placement, hover and active/inactive running pills.
+   Frame must have one contour; Full must follow the same native bounds. Edge
+   must surround the native pill without hiding it. Check square and circular
+   Styler backgrounds; missing/zero-sized pills should produce no edge tint.
 4. Switch between all four styles while test/ordinary apps remain open. Confirm
    old visuals disappear, native pills return, and unranked icons are untouched.
 5. With the user's usual Taskbar Styler theme, repeat hover and badge checks.
