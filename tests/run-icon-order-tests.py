@@ -1,31 +1,21 @@
-"""Test production drawing-order planner and reject collection repositioning."""
+"""Guard the 0.9.39 host-only diagnostic against native ZIndex writes/moves.
+The older C++ planner/owner fixtures describe 0.9.37 and are retained as history.
+This structural check is not a live XAML regression test.
+"""
 from pathlib import Path
-import subprocess
-import tempfile
 root=Path(__file__).resolve().parent.parent
 s=(root/'taskbar-recent-focus-highlight.wh.cpp').read_text(encoding='utf-8')
-start=s.index('struct IconZOrderInput {')
-end=s.index('using IconZOrderBag',start)
-helpers=s[start:end]
-start=s.index('void EnsureGlowHostZOrder(')
-end=s.index('bool ButtonHasOurChrome(',start)
-positioning=s[start:end]
-for mutation in ('children.RemoveAt(', 'children.InsertAt(', 'children.Append('):
-    assert mutation not in positioning, f'IconPanel collection mutation reintroduced: {mutation}'
-assert 'RestoreGlowZOrder(child)' in s
-harness=(root/'tests/icon-child-order.cpp').read_text(encoding='utf-8-sig')
-with tempfile.TemporaryDirectory(prefix='windhawk-icon-order-') as directory:
-    cpp=Path(directory)/'order.cpp';exe=Path(directory)/'order.exe'
-    cpp.write_text(harness.replace('// PRODUCTION_HELPERS',helpers),encoding='utf-8')
-    subprocess.run(['g++','-std=c++17',str(cpp),'-o',str(exe)],check=True)
-    subprocess.run([str(exe)],check=True,timeout=20)
-
-start=s.index('bool StillOwnIconZIndex(')
-end=s.index('void RestoreGlowZOrder(FrameworkElement host) {',start)
-owner_helpers=s[start:end]
-with tempfile.TemporaryDirectory(prefix='windhawk-icon-owner-') as directory:
-    cpp=Path(directory)/'owner.cpp';exe=Path(directory)/'owner.exe'
-    harness=(root/'tests/icon-z-owner.cpp').read_text(encoding='utf-8-sig')
-    cpp.write_text(harness.replace('// PRODUCTION_HELPERS',owner_helpers),encoding='utf-8')
-    subprocess.run(['g++','-std=c++17',str(cpp),'-o',str(exe)],check=True)
-    subprocess.run([str(exe)],check=True,timeout=20)
+a=s.index('void EnsureGlowHostZOrder(')
+b=s.index('bool ButtonHasOurChrome(',a)
+body=s[a:b]
+assert 'Children(' not in body
+assert 'SetZIndex(host, hostZ)' in body
+import re
+value=int(re.search(r'constexpr int hostZ = (\d+);',body).group(1))
+assert 0 < value <= 1000000, 'ZIndex exceeds the XAML API limit'
+assert s.count('SetZIndex(')==1
+assert 'ZIndexProperty()' not in s
+assert 'RestoreGlowZOrder' not in s
+assert 'PlanIconZOrder' not in s
+assert 'WhRecentFocusZOrder' not in s
+print('PASS: host-only ZIndex; no native ZIndex ownership or collection access in positioning helper')

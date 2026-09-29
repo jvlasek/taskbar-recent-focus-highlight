@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.37 — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.40 (diagnostic) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -129,26 +129,24 @@ Thumbnail HWND mapping follows
 5. After updating the `.cpp`, recompile in Windhawk; a full **explorer restart**
    is the cleanest way to pick up new hooks.
 
-## Badge recreation candidate fix (0.9.37)
+## Badge recreation diagnostic (0.9.39)
 
-The icon glow is appended to IconPanel once and is never moved within that
-child collection. Drawing order uses `Canvas.ZIndex` instead. Native children
-receive temporary spaced ZIndex values that preserve their existing draw order;
-the glow occupies the appropriate gap for its style. Cleanup restores prior
-local values (or clears previously unset values) only while the installed value
-is still present. Another owner's different value survives. A same-value write
-by another owner cannot be distinguished from ours for an integer property.
+0.9.37 still failed the second badge-recreation cycle. This diagnostic appends
+our glow once and sets **only its own** Canvas.ZIndex to the XAML maximum
+(1,000,000). It never sets/restores native ZIndex values or repositions children.
+All icon styles temporarily draw above native content, including full plates;
+this deliberately sacrifices their final layering to isolate the badge bug.
+An external element at the same maximum ZIndex can still tie by child order.
+Other behavior (including icon size boost and preview highlighting) is unchanged.
 
-The previous host-only-movement patch (0.9.36) still failed on the second badge
-cycle. Restart Explorer after loading 0.9.37, then run the
-[four-app harness](tests/uwspy/README.md) enabled for ten cycles. Also verify
-side/edge/frame/full styles and any Taskbar Styler hover theme. Live confirmation
-of this candidate is pending; existing altered XAML state is not repaired.
+Load/recompile 0.9.39, restart Explorer, reattach UWPSpy, and run the
+[four-app harness](tests/uwspy/README.md) enabled for ten cycles, using the same
+leftBar settings as the failing run. Keep screenshots and Windhawk logs.
+The experiment is pending live verification; it is not a confirmed fix.
 
-`python tests/run-icon-order-tests.py` checks the extracted production drawing
-planner (14,400 cases), native draw-order preservation, repeated badge cycles,
-and ownership-aware restoration. It does not simulate Windows' private XAML
-realization machinery.
+`python tests/run-icon-order-tests.py` now checks the host-only ZIndex invariant.
+The older C++ planner/ownership fixtures are historical 0.9.37 tests and are not
+run against this diagnostic, which removes those helpers.
 
 ## How to test
 
@@ -313,3 +311,75 @@ dispatcher does not prove old callbacks are gone. If the dispatcher keeps
 rejecting work while its thread stays alive, disabling may remain blocked;
 the mod logs this condition once and stays loaded rather than risk executing
 unloaded code.
+
+## Automated regression checks
+
+See [the four-app harness guide](tests/uwspy/README.md) for build prerequisites,
+manual UWPSpy attachment, automatic pipe discovery, badge recreation cycles,
+screenshots, and optional `--windhawk-log` capture with step labels. Run both
+mod-enabled and fresh-Explorer mod-disabled comparisons. The harness checks
+badge drawing order, highlight membership and foreground preconditions; it
+does not certify visual appearance, flyout behavior or all Windows builds.
+
+`python tests/run-icon-order-tests.py` checks the host-only diagnostic ZIndex invariant without injecting the mod. IPC and collector checks are
+documented in the harness guide; collector tests need no Explorer attachment.
+
+Diagnostic correction: 0.9.38 incorrectly attempted INT_MAX, above XAML's
+1,000,000 limit. Capture `20260929-001938-172478` shows the host ZIndex unset
+and the same second-cycle badge reversal. 0.9.39 corrects the limit and logs
+assignment exceptions once. Native children remain untouched. Live validation
+must confirm the host has local Canvas.ZIndex 1000000 before interpreting it.
+
+
+### Retained-host experiment (0.9.40)
+
+0.9.39 applied host ZIndex 1000000 correctly but still failed cycle two
+(capture `20260929-002408-010948`). 0.9.40 now collapses the existing glow
+when unranked, restoring any owned icon scaling, and reuses it on re-entry.
+Unload still removes the host. No host is created for a never-highlighted
+button. Host-only ZIndex 1000000 and the diagnostic above-native layering
+remain unchanged. This is pending live testing, not a confirmed fix.
+
+The harness now treats a collapsed host as unhighlighted, but disabled-mode
+controls still reject any host (visible or collapsed), to catch failed cleanup.
+Restart Explorer and reattach UWPSpy before the enabled ten-cycle comparison.
+If it passes, separately verify disable/unload removes retained hosts.
+
+
+### Same-button unload regression
+
+The harness option `--test-unload` (requires `--mode enabled`) runs the enabled
+cycles, then pauses for manual mod disable while retaining A/B/C/D, the original
+UWPSpy element references, and the Explorer session. Do not restart Explorer,
+reattach UWPSpy, or close the apps during this pause. Press Enter after disabling;
+the harness verifies all glow hosts are gone, then asks you to click A again and
+repeats the cycles with disabled expectations. Evidence labels use
+`post-unload-`. Foreground monitoring allows human input only at the phase
+boundary and resumes after A is activated. PASS requires both phases to pass.
+A separate disabled run creates fresh buttons and does not test delayed damage
+to the previously highlighted buttons. `--cycles` applies to each phase.
+
+From `tests/uwspy`:
+
+```powershell
+python .\harness.py --mode enabled --test-unload --top 3 --focus-seconds 10 --cycles 10 --screenshots --windhawk-log --output captures
+```
+
+
+Badge-absent unload variant: add `--unload-badge absent --test-unload`.
+The harness clears and verifies A's badge before the manual disable pause,
+verifies absence again after disable, then checks the first recreation before
+running the disabled cycles. Default unload behavior keeps the badge present.
+`--cycles 5` runs five cycles in each phase; keep the same Explorer and apps
+across the pause as above. No mod rebuild is required for this harness option.
+
+
+Repeated lifecycle test: `--test-unload --unload-rounds 3` runs three
+(enabled cycles -> manual disable -> disabled cycles) pairs. Before pairs 2/3,
+the harness pauses for manual re-enable, then asks for A activation again.
+All phases retain the original windows and element references. `--cycles 5`
+means five cycles per phase (30 total with three pairs). Use
+`--unload-badge absent` for each badge-absent unload boundary. The final state
+is disabled. Labels include the round number; no settings are changed by code.
+`test_lifecycle.py` checks phase ordering and reference preservation without
+interacting with Explorer.

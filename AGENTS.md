@@ -771,3 +771,102 @@ exclusion on pending/preview history.
 7. Test seam + `make release` concat (pure ranking/identity table tests).
 8. Watch `ReportClicked` for jump-list
    / MRU side effects (once per button on full bind / press, not on hover).
+
+
+## Regression test infrastructure
+
+- `tests/run-icon-order-tests.py`: extracts the production ZIndex planner and
+  ownership helpers into portable C++ checks (14,400 plans plus restoration).
+- `tests/uwspy/`: four native test apps, Python scenario harness, IPC transport
+  fixture and reduced badge regression dumps. The reusable UWPSpy Python client
+  is loaded from `UWPSPY_ROOT` or the sibling `UWPSpy/watcher` worktree.
+- `tests/uwspy/README.md` is the authoritative setup/run guide. Pipe discovery
+  is automatic; multiple sessions require a numbered selection. Button discovery
+  uses exact test AppIDs and excludes parked/collapsed elements.
+- Optional `--windhawk-log` launches bundled DbgViewMini locally with unbuffered
+  `[WH]` filtering and a startup probe. Raw and receipt-time/step-labelled JSONL
+  logs accompany the captures. Enable mod logging manually and close competing
+  viewers. Collector failure must not silently permit PASS. Do not write the
+  main scenario log from the collector reader thread.
+- `test_ipc.py` exercises the IPC fixture and captured badge/discovery data;
+  `test_windhawk_log.py` checks collector lifecycle, labels and conflict errors.
+- Do not automatically restart Explorer, inject UWPSpy, or change mod settings.
+  Live scenario runs switch foreground among A/B/C/D and need explicit user
+  coordination. Retain user captures. Unit checks are not proof of live visual
+  correctness; test enabled and fresh-Explorer disabled controls separately.
+
+
+## Current diagnostic override: 0.9.39
+
+This section supersedes the earlier 0.9.37 native ZIndex planner/ownership
+rules in this document. That candidate failed cycle two in capture
+`tests/uwspy/captures/20260929-000813-416375`.
+The diagnostic appends the glow once and sets only the glow's Canvas.ZIndex to
+1,000,000. No native ZIndex reads/writes/restore marker, no native child moves,
+and no host repositioning. All icon styles temporarily draw above native
+content; full/edge/side visual layering rules above are suspended for this
+experiment. Existing size boost and thumbnail behavior remain unchanged.
+Restart Explorer for comparisons; do not infer correctness from a reload into
+an already affected tree. `tests/run-icon-order-tests.py` checks this structural
+invariant; the old 14,400-case planner/ownership C++ fixtures are historical,
+not tests of the current implementation. Live ten-cycle verification is pending.
+
+Diagnostic correction: 0.9.38 incorrectly attempted INT_MAX, above XAML's
+1,000,000 limit. Capture `20260929-001938-172478` shows the host ZIndex unset
+and the same second-cycle badge reversal. 0.9.39 corrects the limit and logs
+assignment exceptions once. Native children remain untouched. Live validation
+must confirm the host has local Canvas.ZIndex 1000000 before interpreting it.
+
+
+### Retained-host experiment (0.9.40)
+
+0.9.39 applied host ZIndex 1000000 correctly but still failed cycle two
+(capture `20260929-002408-010948`). 0.9.40 now collapses the existing glow
+when unranked, restoring any owned icon scaling, and reuses it on re-entry.
+Unload still removes the host. No host is created for a never-highlighted
+button. Host-only ZIndex 1000000 and the diagnostic above-native layering
+remain unchanged. This is pending live testing, not a confirmed fix.
+
+The harness now treats a collapsed host as unhighlighted, but disabled-mode
+controls still reject any host (visible or collapsed), to catch failed cleanup.
+Restart Explorer and reattach UWPSpy before the enabled ten-cycle comparison.
+If it passes, separately verify disable/unload removes retained hosts.
+
+
+### Same-button unload regression
+
+The harness option `--test-unload` (requires `--mode enabled`) runs the enabled
+cycles, then pauses for manual mod disable while retaining A/B/C/D, the original
+UWPSpy element references, and the Explorer session. Do not restart Explorer,
+reattach UWPSpy, or close the apps during this pause. Press Enter after disabling;
+the harness verifies all glow hosts are gone, then asks you to click A again and
+repeats the cycles with disabled expectations. Evidence labels use
+`post-unload-`. Foreground monitoring allows human input only at the phase
+boundary and resumes after A is activated. PASS requires both phases to pass.
+A separate disabled run creates fresh buttons and does not test delayed damage
+to the previously highlighted buttons. `--cycles` applies to each phase.
+
+From `tests/uwspy`:
+
+```powershell
+python .\harness.py --mode enabled --test-unload --top 3 --focus-seconds 10 --cycles 10 --screenshots --windhawk-log --output captures
+```
+
+
+Badge-absent unload variant: add `--unload-badge absent --test-unload`.
+The harness clears and verifies A's badge before the manual disable pause,
+verifies absence again after disable, then checks the first recreation before
+running the disabled cycles. Default unload behavior keeps the badge present.
+`--cycles 5` runs five cycles in each phase; keep the same Explorer and apps
+across the pause as above. No mod rebuild is required for this harness option.
+
+
+Repeated lifecycle test: `--test-unload --unload-rounds 3` runs three
+(enabled cycles -> manual disable -> disabled cycles) pairs. Before pairs 2/3,
+the harness pauses for manual re-enable, then asks for A activation again.
+All phases retain the original windows and element references. `--cycles 5`
+means five cycles per phase (30 total with three pairs). Use
+`--unload-badge absent` for each badge-absent unload boundary. The final state
+is disabled. Labels include the round number; no settings are changed by code.
+`test_lifecycle.py` checks phase ordering and reference preservation without
+interacting with Explorer.

@@ -27,11 +27,17 @@ open. If an older DLL remains loaded, save recordings and restart Explorer
 before attaching the new build. No build/test script restarts Explorer, injects
 UWPSpy, or changes mod settings.
 
-Discover the endpoint:
+The harness discovers the pipe automatically on every run. With multiple
+sessions it offers a numbered choice; select the Explorer session.
+You can still supply `--endpoint` explicitly.
+
+For other CLI commands, PowerShell can capture the output directly (no `$()`
+required). This example requires exactly one session:
 
 ```powershell
-python "$env:UWPSPY_ROOT\tools\uwspy_cli.py" endpoints
-$endpoint = '\\.\pipe\UWPSpy-1234-{paste-the-actual-session-guid}'
+$pipes = @(python "$env:UWPSPY_ROOT\tools\uwspy_cli.py" endpoints)
+if ($LASTEXITCODE -ne 0 -or $pipes.Count -ne 1) { throw 'Expected one UWPSpy session' }
+$endpoint = $pipes[0]
 ```
 
 See `tools/README.md` in UWPSpy for generic CLI commands and protocol details.
@@ -46,7 +52,7 @@ Keep taskbar buttons visible, avoid auto-hide, and keep inspector windows off
 the screenshot area. Record other relevant mods/settings in your run notes.
 
 ```powershell
-python .\harness.py --endpoint $endpoint --mode enabled --top 3 --focus-seconds 10 --cycles 3 --screenshots --output C:\captures\runs
+python .\harness.py --mode enabled --top 3 --focus-seconds 10 --cycles 3 --screenshots --output C:\captures\runs
 ```
 
 The harness launches A/B/C/D and asks for Enter after preparation. It then finds
@@ -66,7 +72,7 @@ fault are NOT asserted. A passing list-order check cannot prove the screenshot
 looks correct; review the PNG when investigating composition issues.
 
 For the clean comparison, disable the mod and restart Explorer yourself,
-reattach UWPSpy, select the new endpoint, and run with `--mode disabled`.
+reattach UWPSpy and run with `--mode disabled`; the new endpoint is discovered automatically.
 That mode asserts the test buttons have no mod glow hosts.
 
 `run.jsonl` contains labels, command acknowledgements, actual foreground events,
@@ -111,3 +117,91 @@ or left of the XAML root (including parked repeater elements retaining old IDs).
 It retries missing buttons for five seconds. Exported coordinates here are
 root-relative, so this does not exclude monitors with negative desktop origins.
 `button_discovery` records rectangles and `layout_eligible` for every candidate.
+
+## Optional Windhawk debug log
+
+Add `--windhawk-log` to the scenario command. Before running, set this mod's
+Advanced / Debug logging to **Mod logs** (or Detailed debug logs for engine
+troubleshooting), and close Windhawk's **Show log output**, DebugView, or other
+collectors. The harness does not change Windhawk settings.
+
+```powershell
+python .\harness.py --mode enabled --top 3 --focus-seconds 10 --cycles 10 --screenshots --windhawk-log --output captures
+```
+
+The bundled DbgViewMini is located automatically under Program Files/Windhawk;
+use `--dbgview 'X:\portable\...\DbgViewMini.exe'` for another installation.
+It runs without a console window, captures local-session messages matching
+`*[WH]*`, and stops when the run finishes. This includes other Windhawk mods or
+processes emitting that prefix, not exclusively this mod or Explorer.
+A unique probe confirms collection before test apps start. Collector conflicts,
+startup failure, or loss of capture make an otherwise passing run inconclusive.
+Existing viewers are never terminated by the harness.
+
+`windhawk.log` preserves the collector's UTF-8 output (including its timestamps,
+PIDs and process names). `windhawk.jsonl` adds UTC and monotonic receipt times,
+the current scenario label and a probe flag. Labels describe receipt time, not
+exact execution order; buffering/scheduling can cross a step boundary. The
+probe proves the collector works, not that mod logging is enabled. No history
+from before collection is available. Logging may affect timing; compare runs
+without it when investigating timing-sensitive failures.
+
+Collector lifecycle/label/error tests (no Explorer attachment needed):
+
+```powershell
+python -m unittest discover -s . -p test_windhawk_log.py -v
+```
+
+
+### Retained-host experiment (0.9.40)
+
+0.9.39 applied host ZIndex 1000000 correctly but still failed cycle two
+(capture `20260929-002408-010948`). 0.9.40 now collapses the existing glow
+when unranked, restoring any owned icon scaling, and reuses it on re-entry.
+Unload still removes the host. No host is created for a never-highlighted
+button. Host-only ZIndex 1000000 and the diagnostic above-native layering
+remain unchanged. This is pending live testing, not a confirmed fix.
+
+The harness now treats a collapsed host as unhighlighted, but disabled-mode
+controls still reject any host (visible or collapsed), to catch failed cleanup.
+Restart Explorer and reattach UWPSpy before the enabled ten-cycle comparison.
+If it passes, separately verify disable/unload removes retained hosts.
+
+
+### Same-button unload regression
+
+The harness option `--test-unload` (requires `--mode enabled`) runs the enabled
+cycles, then pauses for manual mod disable while retaining A/B/C/D, the original
+UWPSpy element references, and the Explorer session. Do not restart Explorer,
+reattach UWPSpy, or close the apps during this pause. Press Enter after disabling;
+the harness verifies all glow hosts are gone, then asks you to click A again and
+repeats the cycles with disabled expectations. Evidence labels use
+`post-unload-`. Foreground monitoring allows human input only at the phase
+boundary and resumes after A is activated. PASS requires both phases to pass.
+A separate disabled run creates fresh buttons and does not test delayed damage
+to the previously highlighted buttons. `--cycles` applies to each phase.
+
+From `tests/uwspy`:
+
+```powershell
+python .\harness.py --mode enabled --test-unload --top 3 --focus-seconds 10 --cycles 10 --screenshots --windhawk-log --output captures
+```
+
+
+Badge-absent unload variant: add `--unload-badge absent --test-unload`.
+The harness clears and verifies A's badge before the manual disable pause,
+verifies absence again after disable, then checks the first recreation before
+running the disabled cycles. Default unload behavior keeps the badge present.
+`--cycles 5` runs five cycles in each phase; keep the same Explorer and apps
+across the pause as above. No mod rebuild is required for this harness option.
+
+
+Repeated lifecycle test: `--test-unload --unload-rounds 3` runs three
+(enabled cycles -> manual disable -> disabled cycles) pairs. Before pairs 2/3,
+the harness pauses for manual re-enable, then asks for A activation again.
+All phases retain the original windows and element references. `--cycles 5`
+means five cycles per phase (30 total with three pairs). Use
+`--unload-badge absent` for each badge-absent unload boundary. The final state
+is disabled. Labels include the round number; no settings are changed by code.
+`test_lifecycle.py` checks phase ordering and reference preservation without
+interacting with Explorer.

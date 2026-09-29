@@ -7,9 +7,16 @@ import subprocess
 import time
 import unittest
 from uwspy_client import Client, K, endpoints, parse_dump
-from harness import badge_state, Inconclusive, test_app_identity, discover_test_buttons, button_layout_eligible
+from harness import has_active_glow, badge_state, Inconclusive, test_app_identity, discover_test_buttons, button_layout_eligible
 
 class DumpTests(unittest.TestCase):
+    def test_collapsed_retained_glow_is_not_active(self):
+        node={'name':'WhRecentFocusGlow','local':{'Visibility':['1']},'other':{'Visibility':['0']}}
+        self.assertFalse(has_active_glow([node]))
+        node['local']['Visibility']=['0']
+        self.assertTrue(has_active_glow([node]))
+        self.assertFalse(has_active_glow([]))
+
     def test_real_badge_regression(self):
         root=Path(__file__).parent/'fixtures'
         for state in ('front','absent','behind'):

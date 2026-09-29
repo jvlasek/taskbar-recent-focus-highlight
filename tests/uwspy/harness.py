@@ -9,7 +9,8 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
-from uwspy_client import Client
+from uwspy_client import Client, endpoints
+from windhawk_log import WindhawkLog, default_collector
 
 U = C.WinDLL('user32', use_last_error=True)
 U.GetForegroundWindow.restype = W.HWND
@@ -61,6 +62,12 @@ def badge_state(nodes):
         iz=int(property_value(icon,'Canvas.ZIndex','0')); bz=int(property_value(badge,'Canvas.ZIndex','0'))
         return 'front' if (bz,int(badge['child_index'])) > (iz,int(icon['child_index'])) else 'behind'
     except (ValueError,KeyError) as error: raise Inconclusive('missing ordering data') from error
+
+
+def has_active_glow(nodes):
+    # Visibility enum: 0 Visible, 1 Collapsed. Local properties take precedence.
+    return any(n.get('name')=='WhRecentFocusGlow' and
+               property_value(n,'Visibility','0')=='0' for n in nodes)
 
 
 def test_app_identity(nodes):
@@ -131,14 +138,15 @@ class ForegroundMonitor:
 
 class Run:
     def __init__(self,args):
-        self.args=args;self.client=Client(args.endpoint);self.children={};self.windows={};self.elements={}
-        self.monitor=None;self.watch_tree=None;self.cursor='0';self.recency=[];self.label='setup';self.expected_hwnd=None;self.focus_mark=0
+        self.args=args;self.mode=args.mode;self.client=Client(args.endpoint);self.children={};self.windows={};self.elements={}
+        self.debug_log=None;self.monitor=None;self.watch_tree=None;self.cursor='0';self.recency=[];self.label='setup';self.expected_hwnd=None;self.focus_mark=0
         self.output=args.output.resolve()/datetime.now().strftime('%Y%m%d-%H%M%S-%f');self.output.mkdir(parents=True)
         self.logfile=(self.output/'run.jsonl').open('w',encoding='utf-8')
     def log(self,kind,**fields):
         record={'utc':utc(),'kind':kind,'label':self.label,**fields}
         self.logfile.write(json.dumps(record,ensure_ascii=False)+'\n');self.logfile.flush()
     def check(self):
+        if self.debug_log:self.debug_log.check()
         if any(p.poll() is not None for p in self.children.values()):raise Disrupted('a test child exited')
         if self.expected_hwnd:
             for e in self.monitor.since(self.focus_mark):
@@ -188,12 +196,14 @@ class Run:
         observed=set()
         for app in 'ABCD':
             nodes=self.get(app)
-            if any(n.get('name')=='WhRecentFocusGlow' for n in nodes):observed.add(app)
+            if has_active_glow(nodes):observed.add(app)
+            if self.mode=='disabled' and any(n.get('name')=='WhRecentFocusGlow' for n in nodes):
+                raise Failure('mod-disabled control contains a retained glow host')
             if app!='A' and badge_state(nodes)!='absent':raise Failure(f'unexpected badge on {app}')
-        expected=set(self.recency[:self.args.top]) if self.args.mode=='enabled' else set()
+        expected=set(self.recency[:self.args.top]) if self.mode=='enabled' else set()
         self.log('highlight_membership',expected=sorted(expected),observed=sorted(observed),history=self.recency.copy())
         if not expected.issubset(observed):raise Failure('expected recent app is not highlighted')
-        if (self.args.mode=='disabled' or len(self.recency)==4) and observed!=expected:
+        if (self.mode=='disabled' or len(self.recency)==4) and observed!=expected:
             raise Failure('highlighted test-app set differs from expected top N')
     def badge(self,number,expected):
         self.log('badge_request',app='A',number=number)
@@ -214,6 +224,11 @@ class Run:
         if expected=='absent' and state!='absent':raise Failure('badge reappeared unexpectedly')
     def setup(self):
         self.log('configuration',arguments={k:str(v) for k,v in vars(self.args).items()},endpoint=self.args.endpoint)
+        if self.args.windhawk_log:
+            self.debug_log=WindhawkLog(self.output, lambda:self.label)
+            self.debug_log.start(self.args.dbgview)
+            self.log('windhawk_log_started',collector=str(self.args.dbgview))
+            print('Windhawk log capture ready. Enable Mod logs in Windhawk to emit mod messages.',flush=True)
         for name in 'ABCD':self.children[name]=subprocess.Popen([str(Path(__file__).parent/'bin'/f'{name}.exe')])
         deadline=time.monotonic()+15
         while len(self.windows)!=4:
@@ -251,6 +266,8 @@ class Run:
         self.log('watch_started',result=result)
         self.cursor=self.client.call('events',after='0')['cursor']
         self.monitor=ForegroundMonitor()
+        self.await_activation()
+    def await_activation(self):
         print('Click the A test window now. The run starts after it becomes foreground. Do not use mouse/keyboard during the run.',flush=True)
         deadline=time.monotonic()+120
         while U.GetForegroundWindow()!=self.windows['A']:
@@ -259,20 +276,82 @@ class Run:
         time.sleep(.1)
         print(f'Starting run... A has focus. Waiting {self.args.focus_seconds:g} seconds for the focus threshold; no further input needed.',flush=True)
         self.expected_hwnd=self.windows['A'];self.focus_mark=time.monotonic();self.wait(self.args.focus_seconds)
+    def run_cycles(self, prefix=''):
+        for cycle in range(self.args.cycles):
+            self.step(f'{prefix}{cycle:02}-A-focused');self.focus('A')
+            self.step(f'{prefix}{cycle:02}-A-badge-initial');self.badge(1,'present')
+            self.step(f'{prefix}{cycle:02}-A-badge-cleared');self.badge(0,'absent')
+            for name in 'BCD':self.step(f'{prefix}{cycle:02}-focus-{name}');self.focus(name)
+            self.step(f'{prefix}{cycle:02}-A-out-of-topN')
+            if has_active_glow(self.get('A')):
+                raise Failure('A remains highlighted after three other apps; check highlightCount')
+            for name in 'ABCD':self.capture(name)
+            self.step(f'{prefix}{cycle:02}-A-badge-recreated');self.badge(2,'present')
+    def pause_for_unload(self, prefix=""):
+        if self.args.unload_badge=='absent':
+            self.step(prefix+'pre-unload-badge-cleared')
+            self.badge(0,'absent')
+        self.step(prefix+'unload-pause')
+        self.log('unload_precondition',badge=self.args.unload_badge)
+        print(f'A badge at unload: {self.args.unload_badge}',flush=True)
+        self.log('phase_complete',mode=self.mode)
+        # Human interaction is expected only during this explicit boundary.
+        self.expected_hwnd=None
+        print('Enabled phase passed. Keep these test apps, Explorer and UWPSpy open.\n'
+              'Disable the mod in Windhawk, wait for disable to finish, then return here.\n'
+              'Do NOT restart Explorer or reattach UWPSpy. Press Enter when disabled.',flush=True)
+        input()
+        self.check()
+        # Use the original references: do not rediscover freshly created buttons.
+        self.mode='disabled'
+        self.recency=[]
+        self.step(prefix+'post-unload-check')
+        for name in 'ABCD':
+            nodes=self.get(name)
+            self.capture(name)
+            if any(n.get('name')=='WhRecentFocusGlow' for n in nodes):
+                raise Failure(f'{name}: glow host remains after disabling the mod')
+            if name=='A' and self.args.unload_badge=='absent' and badge_state(nodes)!='absent':
+                raise Failure('A badge is not absent at the post-unload boundary')
+        self.log('phase_started',mode=self.mode,windows=self.windows,elements=self.elements)
+        self.await_activation()
+        if self.args.unload_badge=='absent':
+            self.step(prefix+'post-unload-first-badge-recreated')
+            self.badge(2,'present')
+
+    def pause_for_reload(self, prefix):
+        self.step(prefix+'reload-pause')
+        self.log('phase_complete',mode=self.mode)
+        self.expected_hwnd=None
+        print('Disabled phase passed. Re-enable the same mod in Windhawk.\n'
+              'Keep Explorer, UWPSpy and all four test apps open.\n'
+              'Press Enter here after enabling; then click A when prompted.',flush=True)
+        input()
+        self.check()
+        self.mode='enabled'
+        self.recency=[]
+        # Resolve only the saved references, never substitute newly found buttons.
+        for name in 'ABCD':self.get(name)
+        self.log('phase_started',mode=self.mode,windows=self.windows,elements=self.elements)
+        self.await_activation()
+
+    def run_phases(self):
+        self.run_cycles()
+        if self.args.test_unload:
+            for round_index in range(self.args.unload_rounds):
+                prefix=f'round-{round_index+1:02}-'
+                if round_index:
+                    self.pause_for_reload(prefix)
+                    self.run_cycles(prefix+'enabled-')
+                self.pause_for_unload(prefix)
+                self.run_cycles(prefix+'post-unload-')
+
     def execute(self):
         outcome='inconclusive';reason='not started'
         try:
             self.setup()
-            for cycle in range(self.args.cycles):
-                self.step(f'{cycle:02}-A-focused');self.focus('A')
-                self.step(f'{cycle:02}-A-badge-initial');self.badge(1,'present')
-                self.step(f'{cycle:02}-A-badge-cleared');self.badge(0,'absent')
-                for name in 'BCD':self.step(f'{cycle:02}-focus-{name}');self.focus(name)
-                self.step(f'{cycle:02}-A-out-of-topN')
-                if any(n.get('name')=='WhRecentFocusGlow' for n in self.get('A')):
-                    raise Failure('A remains highlighted after three other apps; check highlightCount')
-                for name in 'ABCD':self.capture(name)
-                self.step(f'{cycle:02}-A-badge-recreated');self.badge(2,'present')
+            self.run_phases()
+            self.check()
             outcome='pass';reason='badge ordering, highlight membership, and focus preconditions held'
         except Disrupted as e:outcome='disrupted';reason=str(e)
         except Failure as e:outcome='fail';reason=str(e)
@@ -280,6 +359,17 @@ class Run:
         except Exception as e:outcome='inconclusive';reason=repr(e)
         finally:
             if self.monitor:self.log('foreground_history',events=self.monitor.since(0));self.monitor.close()
+            if self.debug_log:
+                try:
+                    self.debug_log.check()
+                except Exception as error:
+                    self.log('windhawk_log_error',error=str(error))
+                    if outcome=='pass':outcome='inconclusive';reason=str(error)
+                finally:
+                    try:self.debug_log.close()
+                    except Exception as error:
+                        self.log('windhawk_log_error',error=str(error))
+                        if outcome=='pass':outcome='inconclusive';reason=str(error)
             self.log('result',outcome=outcome,reason=reason)
             (self.output/'result.json').write_text(json.dumps({'outcome':outcome,'reason':reason},indent=2),encoding='utf-8')
             if self.watch_tree:
@@ -296,7 +386,7 @@ class Run:
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--endpoint',required=True)
+    p.add_argument('--endpoint',help='pipe path; omitted: discover automatically, or offer a numbered choice')
     p.add_argument('--output',type=Path,default=Path('test-runs'))
     p.add_argument('--tree',help='restrict matching when secondary taskbars produce multiple matches')
     p.add_argument('--mode',choices=['enabled','disabled'],required=True,help='record actual mod state; no mod settings are changed')
@@ -304,7 +394,33 @@ def main():
     p.add_argument('--cycles',type=int,default=3)
     p.add_argument('--top',type=int,choices=[1,2,3],default=3,help='must match the mod highlightCount setting')
     p.add_argument('--screenshots',action='store_true')
+    p.add_argument('--unload-badge',choices=['present','absent'],default='present',help='badge state at manual unload boundary; requires --test-unload for absent')
+    p.add_argument('--unload-rounds',type=int,default=1,help='enabled/disabled phase pairs on the same buttons; requires --test-unload for multiple rounds')
+    p.add_argument('--test-unload',action='store_true',help='pause after enabled cycles for manual disable, then repeat on the same buttons')
+    p.add_argument('--windhawk-log',action='store_true',help='capture Windhawk debug output alongside evidence; enable Mod logs manually')
+    p.add_argument('--dbgview',type=Path,default=default_collector(),help='override bundled DbgViewMini.exe path')
     a=p.parse_args()
     if a.focus_seconds<=0 or a.cycles<1:p.error('focus-seconds and cycles must be positive')
+    if a.unload_rounds<1:p.error('--unload-rounds must be positive')
+    if a.unload_rounds!=1 and not a.test_unload:p.error('--unload-rounds requires --test-unload')
+    if a.unload_badge=='absent' and not a.test_unload:p.error('--unload-badge absent requires --test-unload')
+    if a.test_unload and a.mode!='enabled':p.error('--test-unload requires --mode enabled')
+    if not a.endpoint:
+        available=endpoints()
+        if not available:
+            p.error('No UWPSpy inspectors found. Attach UWPSpy to Explorer and leave the inspectors open.')
+        if len(available)==1:
+            a.endpoint=available[0]
+        else:
+            print('Multiple UWPSpy sessions found:')
+            for number, endpoint in enumerate(available, 1):
+                print(f'  {number}: {endpoint}')
+            try:
+                choice=int(input('Select the Explorer session number: '))
+                if not 1<=choice<=len(available): raise ValueError()
+            except (ValueError, EOFError):
+                p.error('Select a listed number, or supply --endpoint explicitly.')
+            a.endpoint=available[choice-1]
+    print(f'Using inspector: {a.endpoint}', flush=True)
     raise SystemExit(Run(a).execute())
 if __name__=='__main__':main()
