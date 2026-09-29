@@ -1,4 +1,4 @@
-"""Guard the 0.9.39 host-only diagnostic against native ZIndex writes/moves.
+"""Guard the 0.9.41 host-only diagnostic against native ZIndex writes/moves.
 The older C++ planner/owner fixtures describe 0.9.37 and are retained as history.
 This structural check is not a live XAML regression test.
 """
@@ -19,3 +19,11 @@ assert 'RestoreGlowZOrder' not in s
 assert 'PlanIconZOrder' not in s
 assert 'WhRecentFocusZOrder' not in s
 print('PASS: host-only ZIndex; no native ZIndex ownership or collection access in positioning helper')
+
+creation=s[s.index('Controls::Grid EnsureGlowHost('):s.index('void HideAllGlowLayers(')]
+assert 'children.InsertAt(children.Size(), host)' in creation
+assert '.Append(host)' not in creation
+clear=s[s.index('void ClearButtonHighlight('):s.index('Controls::Grid EnsureGlowHost(')]
+assert 'Visibility::Collapsed' not in clear
+assert 'RemoveNamedChild(panel, kGlowElementName)' in clear
+print('PASS: explicit end insertion and removal on unhighlight; no retained-host branch')

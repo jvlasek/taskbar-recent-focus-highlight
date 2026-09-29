@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.40 (diagnostic) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.41 (diagnostic) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -129,24 +129,21 @@ Thumbnail HWND mapping follows
 5. After updating the `.cpp`, recompile in Windhawk; a full **explorer restart**
    is the cleanest way to pick up new hooks.
 
-## Badge recreation diagnostic (0.9.39)
+## Badge recreation diagnostic (0.9.41)
 
-0.9.37 still failed the second badge-recreation cycle. This diagnostic appends
-our glow once and sets **only its own** Canvas.ZIndex to the XAML maximum
-(1,000,000). It never sets/restores native ZIndex values or repositions children.
-All icon styles temporarily draw above native content, including full plates;
-this deliberately sacrifices their final layering to isolate the badge bug.
-An external element at the same maximum ZIndex can still tie by child order.
-Other behavior (including icon size boost and preview highlighting) is unchanged.
+This restores 0.9.39's remove-on-unhighlight lifecycle, reconstructed by
+removing 0.9.40's retention branch. Creation now uses
+`InsertAt(Children.Size(), host)` instead of `Append(host)`, to exercise XAML's
+deferred-index insertion notification. See [the static analysis](tests/badge-static-analysis.md).
+Native child positions and properties remain untouched. Only our host has
+ZIndex 1000000; all icon styles still have diagnostic above-native layering.
 
-Load/recompile 0.9.39, restart Explorer, reattach UWPSpy, and run the
-[four-app harness](tests/uwspy/README.md) enabled for ten cycles, using the same
-leftBar settings as the failing run. Keep screenshots and Windhawk logs.
-The experiment is pending live verification; it is not a confirmed fix.
+Recompile 0.9.41, restart Explorer, reattach UWPSpy, and run five enabled cycles
+with the same leftBar settings. If successful, repeat lifecycle testing.
+No live success is claimed yet. Earlier diagnostic notes below are history.
 
-`python tests/run-icon-order-tests.py` now checks the host-only ZIndex invariant.
-The older C++ planner/ownership fixtures are historical 0.9.37 tests and are not
-run against this diagnostic, which removes those helpers.
+`python tests/run-icon-order-tests.py` checks host-only ZIndex, explicit end
+insertion and removal on unhighlight. This structural check is not a XAML test.
 
 ## How to test
 

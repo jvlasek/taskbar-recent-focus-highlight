@@ -1,5 +1,13 @@
 # Agent / contributor guide
 
+## Version checkpoint rule
+
+After each version increase, commit the corresponding source, documentation,
+and checks to local Git before handing the version to the user. Run the relevant
+checks first and record any unverified behavior. Do not push unless requested.
+Do not include unrelated user changes in the version commit.
+
+
 Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.9.x). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
@@ -870,3 +878,15 @@ means five cycles per phase (30 total with three pairs). Use
 is disabled. Labels include the round number; no settings are changed by code.
 `test_lifecycle.py` checks phase ordering and reference preservation without
 interacting with Explorer.
+
+
+## Current diagnostic override: 0.9.41
+
+Supersedes the 0.9.40 retained-host lifecycle and earlier append instructions.
+ClearButtonHighlight removes the host on unhighlight, as in 0.9.39. Creation
+uses `children.InsertAt(children.Size(), host)` instead of Append, leaving
+native positions unchanged while notifying deferred-element index bookkeeping.
+Keep host-only ZIndex 1000000 and diagnostic above-native layering unchanged
+for this comparison. No native ZIndex ownership/repair. Static analysis:
+`tests/badge-static-analysis.md`. Five enabled cycles on fresh Explorer are the
+first live check; then repeated unload/reload. Old retained-host notes are history.

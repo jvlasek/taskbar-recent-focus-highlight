@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.40
+// @version         0.9.41
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -2278,7 +2278,7 @@ bool RunningIndicatorLooksLikeHoverPlate(FrameworkElement ri,
     }
 }
 
-// Diagnostic 0.9.40: append once, and set only our host's drawing priority.
+// Diagnostic 0.9.41: insert at the end on creation, and set only our host's drawing priority.
 // Native children keep their collection positions AND all native properties.
 // All icon styles temporarily draw above the native glyph/pill/badge; this is
 // an isolation experiment, not final full-plate/edge-bar visual behavior.
@@ -2342,17 +2342,6 @@ void ClearButtonHighlight(FrameworkElement button) {
             // Restore prior transform from the glow host Tag before the host
             // is removed (tree-owned strong ref).
             ClearIconScaleIfOurs(icon, button);
-        }
-
-        // Diagnostic: keep the native Children collection stable between ranks.
-        // Restore icon scaling above even while retaining the collapsed host.
-        // Unload still removes our host through the existing cleanup below.
-        if (!g_unloading.load()) {
-            if (auto host = FindChildByName(iconPanel, kGlowElementName)) {
-                host.Visibility(Visibility::Collapsed);
-                SetCachedPaintState(button, 0, SettingsSnap()->generation);
-                return;
-            }
         }
 
         if (auto panel = iconPanel.try_as<Controls::Panel>()) {
@@ -2425,7 +2414,11 @@ Controls::Grid EnsureGlowHost(Controls::Panel panel,
             </Grid>
         )";
         host = Markup::XamlReader::Load(xaml).as<Controls::Grid>();
-        panel.Children().Append(host);
+        // InsertAt(end), unlike Append, notifies XAML's deferred-element
+        // index bookkeeping. Pair this with removal when unhighlighted.
+        // Diagnostic hypothesis: see tests/badge-static-analysis.md.
+        auto children = panel.Children();
+        children.InsertAt(children.Size(), host);
     }
 
     SpanHostOverPanel(host, panel);
