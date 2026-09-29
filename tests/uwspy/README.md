@@ -153,20 +153,9 @@ python -m unittest discover -s . -p test_windhawk_log.py -v
 ```
 
 
-### Retained-host experiment (0.9.40)
-
-0.9.39 applied host ZIndex 1000000 correctly but still failed cycle two
-(capture `20260929-002408-010948`). 0.9.40 now collapses the existing glow
-when unranked, restoring any owned icon scaling, and reuses it on re-entry.
-Unload still removes the host. No host is created for a never-highlighted
-button. Host-only ZIndex 1000000 and the diagnostic above-native layering
-remain unchanged. This is pending live testing, not a confirmed fix.
-
-The harness now treats a collapsed host as unhighlighted, but disabled-mode
-controls still reject any host (visible or collapsed), to catch failed cleanup.
-Restart Explorer and reattach UWPSpy before the enabled ten-cycle comparison.
-If it passes, separately verify disable/unload removes retained hosts.
-
+The visibility assertion recognizes collapsed hosts from historical diagnostic
+captures. Current .42 removes unranked hosts; disabled controls reject any
+remaining host. For current release checks see [final validation](../badge-final-validation.md).
 
 ### Same-button unload regression
 

@@ -1,29 +1,27 @@
-"""Guard the 0.9.41 host-only diagnostic against native ZIndex writes/moves.
-The older C++ planner/owner fixtures describe 0.9.37 and are retained as history.
-This structural check is not a live XAML regression test.
-"""
+"""Exercise the production host placement planner without Explorer injection."""
 from pathlib import Path
+import subprocess
+import tempfile
 root=Path(__file__).resolve().parent.parent
 s=(root/'taskbar-recent-focus-highlight.wh.cpp').read_text(encoding='utf-8')
+a=s.index('struct GlowOrderChild {')
+b=s.index('// Preserve the established style layering',a)
+helpers=s[a:b]
 a=s.index('void EnsureGlowHostZOrder(')
 b=s.index('bool ButtonHasOurChrome(',a)
 body=s[a:b]
-assert 'Children(' not in body
-assert 'SetZIndex(host, hostZ)' in body
-import re
-value=int(re.search(r'constexpr int hostZ = (\d+);',body).group(1))
-assert 0 < value <= 1000000, 'ZIndex exceeds the XAML API limit'
-assert s.count('SetZIndex(')==1
-assert 'ZIndexProperty()' not in s
-assert 'RestoreGlowZOrder' not in s
-assert 'PlanIconZOrder' not in s
-assert 'WhRecentFocusZOrder' not in s
-print('PASS: host-only ZIndex; no native ZIndex ownership or collection access in positioning helper')
-
+assert 'children.RemoveAt(current)' in body and 'children.InsertAt(target, host)' in body
+assert 'if (target == current) return;' in body
 creation=s[s.index('Controls::Grid EnsureGlowHost('):s.index('void HideAllGlowLayers(')]
 assert 'children.InsertAt(children.Size(), host)' in creation
-assert '.Append(host)' not in creation
+assert '.Append(' not in creation and '.Append(' not in body
+assert 'SetZIndex(' not in s and 'ZIndexProperty()' not in s
+assert 'RestoreGlowZOrder' not in s and 'WhRecentFocusZOrder' not in s
 clear=s[s.index('void ClearButtonHighlight('):s.index('Controls::Grid EnsureGlowHost(')]
 assert 'Visibility::Collapsed' not in clear
-assert 'RemoveNamedChild(panel, kGlowElementName)' in clear
-print('PASS: explicit end insertion and removal on unhighlight; no retained-host branch')
+with tempfile.TemporaryDirectory(prefix='windhawk-glow-order-') as folder:
+    cpp=Path(folder)/'test.cpp';exe=Path(folder)/'test.exe'
+    cpp.write_text((root/'tests/icon-child-order.cpp').read_text().replace('// PRODUCTION_HELPERS',helpers))
+    subprocess.run(['g++','-std=c++17',str(cpp),'-o',str(exe)],check=True)
+    subprocess.run([str(exe)],check=True,timeout=20)
+print('PASS: explicit insertion, no native ZIndex writes or retained-host clear')

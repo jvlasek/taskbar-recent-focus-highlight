@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.41
+// @version         0.9.42
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -2278,23 +2278,53 @@ bool RunningIndicatorLooksLikeHoverPlate(FrameworkElement ri,
     }
 }
 
-// Diagnostic 0.9.41: insert at the end on creation, and set only our host's drawing priority.
-// Native children keep their collection positions AND all native properties.
-// All icon styles temporarily draw above the native glyph/pill/badge; this is
-// an isolation experiment, not final full-plate/edge-bar visual behavior.
-// An external child at the same maximum ZIndex can still tie by child order.
-void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host, GlowStyle) {
+// Position in the native-only child sequence. Never reorder native children.
+struct GlowOrderChild {
+    bool aboveHost;
+    bool runningIndicator;
+};
+uint32_t GlowHostInsertionIndex(const std::vector<GlowOrderChild>& children,
+                                GlowStyle style) {
+    if (style == GlowStyle::Full) return 0;
+    for (uint32_t i = 0; i < children.size(); ++i) {
+        if (style == GlowStyle::BottomBar) {
+            if (children[i].runningIndicator) return i + 1;
+        } else if (children[i].aboveHost) {
+            return i;
+        }
+    }
+    return static_cast<uint32_t>(children.size());
+}
+
+// Preserve the established style layering without changing native properties.
+// Explicit InsertAt is required even at the end: Append omits XAML deferred
+// index notifications while RemoveAt sends them (tests/badge-static-analysis.md).
+void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host, GlowStyle style) {
     if (!panel || !host) return;
     try {
-        constexpr int hostZ = 1000000; // XAML maximum, not INT_MAX.
-        if (Controls::Canvas::GetZIndex(host) != hostZ) {
-            Controls::Canvas::SetZIndex(host, hostZ);
+        auto children = panel.Children();
+        uint32_t current;
+        if (!children.IndexOf(host, current)) return;
+        std::vector<GlowOrderChild> native;
+        auto panelFe = panel.as<FrameworkElement>();
+        for (auto child : children) {
+            if (child == host) continue;
+            auto fe = child.try_as<FrameworkElement>();
+            auto name = fe ? fe.Name() : winrt::hstring{};
+            bool running = name == L"RunningIndicator";
+            bool above = name == L"OverlayIcon" || name == L"MultiWindowElement" ||
+                         name == L"ProgressIndicator";
+            if (style == GlowStyle::LeftBar &&
+                (name == L"Icon" || name == L"DefaultIcon")) above = true;
+            if (running && !RunningIndicatorLooksLikeHoverPlate(fe, panelFe)) above = true;
+            native.push_back({above, running});
         }
+        uint32_t target = GlowHostInsertionIndex(native, style);
+        if (target == current) return;
+        children.RemoveAt(current);
+        children.InsertAt(target, host);
     } catch (...) {
-        static std::atomic<bool> logged{false};
-        if (!logged.exchange(true)) {
-            Wh_Log(L"Diagnostic glow ZIndex assignment failed; inspect the host property before interpreting the run");
-        }
+        Wh_Log(L"Glow host placement failed: %08X", winrt::to_hresult());
     }
 }
 
@@ -2416,7 +2446,7 @@ Controls::Grid EnsureGlowHost(Controls::Panel panel,
         host = Markup::XamlReader::Load(xaml).as<Controls::Grid>();
         // InsertAt(end), unlike Append, notifies XAML's deferred-element
         // index bookkeeping. Pair this with removal when unhighlighted.
-        // Diagnostic hypothesis: see tests/badge-static-analysis.md.
+        // See tests/badge-static-analysis.md for the reproduced badge-index drift.
         auto children = panel.Children();
         children.InsertAt(children.Size(), host);
     }
@@ -2821,7 +2851,7 @@ FrameworkElement TaskListButtonFromDescendant(FrameworkElement start) {
     return nullptr;
 }
 
-// Relayout: preserve the diagnostic host-only drawing priority.
+// Relayout: restore the host placement relative to the native pill / Styler plate.
 // Never mutate native collection order or geometry.
 void RepositionGlowAfterRelayout(FrameworkElement iconPanel) {
     if (!iconPanel) {
@@ -3147,7 +3177,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
 
         const BarSide barSide = BarSideForGlowStyle(style, edge);
 
-        // Set drawing order without moving the appended host or native children.
+        // Position only our host; native children keep their relative order.
         EnsureGlowHostZOrder(panel, host, style);
 
         HideAllGlowLayers(host);

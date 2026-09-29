@@ -170,3 +170,28 @@ scripts/JSON, selected annotated disassemblies, downloaded matching PDBs,
 public source copies, and `index-model.py`. The model only illustrates the
 arithmetic; it is not an end-to-end regression test. No Windows binaries or
 PDBs should be committed or bundled with the mod.
+
+
+## Subsequent live validation and version history
+
+| Version / experiment | Capture | Result |
+|---|---|---|
+| .39 append/remove, host-only valid ZIndex | 20260929-002408-010948 | Cycle-two failure |
+| .40 retain/collapse host | 20260929-011412-529156 | Ten cycles pass |
+| .40 one unload, badge present | 20260929-111917-988596 | Ten enabled + ten disabled pass |
+| .40 one unload, badge absent | 20260929-115015-755137 | Five per phase pass |
+| .40 repeated lifetimes | 20260929-123416-338747 | First badge after second unload fails |
+| .41 remove on unhighlight, InsertAt(end) | 20260929-171341-925596 | Five cycles pass; host absent after each demotion |
+| .41 three lifecycle pairs, badge absent | 20260929-173422-138625 | All 33 recreation assertions front |
+| .41 three lifecycle pairs, badge present | 20260929-175921-490747 | All 30 recreation assertions front |
+
+The .38 diagnostic incorrectly used INT_MAX, above XAML's 1,000,000 maximum;
+.39 corrected that. Earlier native ZIndex normalization and retained-host
+experiments were removed. The original static-analysis conclusions above are
+historical as of that analysis; .41 now provides strong live evidence for the
+explicit-insertion fix, though private proxy values were not traced live.
+
+Version .42 restores style-specific host placement via explicit insertion and
+removes the diagnostic high ZIndex. No native ZIndex mutations or child moves
+are restored. The .41 results do not substitute for the pending .42 visual and
+lifecycle checks in `badge-final-validation.md`.

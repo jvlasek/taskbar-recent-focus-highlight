@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.41 (diagnostic) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.42 (visual validation pending) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -129,21 +129,19 @@ Thumbnail HWND mapping follows
 5. After updating the `.cpp`, recompile in Windhawk; a full **explorer restart**
    is the cleanest way to pick up new hooks.
 
-## Badge recreation diagnostic (0.9.41)
+## Badge ordering fix and validation
 
-This restores 0.9.39's remove-on-unhighlight lifecycle, reconstructed by
-removing 0.9.40's retention branch. Creation now uses
-`InsertAt(Children.Size(), host)` instead of `Append(host)`, to exercise XAML's
-deferred-index insertion notification. See [the static analysis](tests/badge-static-analysis.md).
-Native child positions and properties remain untouched. Only our host has
-ZIndex 1000000; all icon styles still have diagnostic above-native layering.
+Version 0.9.42 restores style-specific layering while preserving the explicit
+`InsertAt` fix for deferred XAML child indices. Only our glow host is positioned;
+native child order and ZIndex values are not rewritten. The glow is removed
+when unranked and on unload. No retained-host or native badge-repair workaround
+is used. See [the investigation and evidence](tests/badge-static-analysis.md).
 
-Recompile 0.9.41, restart Explorer, reattach UWPSpy, and run five enabled cycles
-with the same leftBar settings. If successful, repeat lifecycle testing.
-No live success is claimed yet. Earlier diagnostic notes below are history.
-
-`python tests/run-icon-order-tests.py` checks host-only ZIndex, explicit end
-insertion and removal on unhighlight. This structural check is not a XAML test.
+The 0.9.41 diagnostic passed repeated badge recreation and three unload/reload
+rounds with badges both absent and present. These results do not certify 0.9.42:
+its restored host positioning needs a fresh live run and visual checks of all
+four icon styles, hover, style switches, taskbar relayout and Styler coexistence.
+Follow [the final validation checklist](tests/badge-final-validation.md).
 
 ## How to test
 
@@ -318,65 +316,7 @@ mod-enabled and fresh-Explorer mod-disabled comparisons. The harness checks
 badge drawing order, highlight membership and foreground preconditions; it
 does not certify visual appearance, flyout behavior or all Windows builds.
 
-`python tests/run-icon-order-tests.py` checks the host-only diagnostic ZIndex invariant without injecting the mod. IPC and collector checks are
-documented in the harness guide; collector tests need no Explorer attachment.
-
-Diagnostic correction: 0.9.38 incorrectly attempted INT_MAX, above XAML's
-1,000,000 limit. Capture `20260929-001938-172478` shows the host ZIndex unset
-and the same second-cycle badge reversal. 0.9.39 corrects the limit and logs
-assignment exceptions once. Native children remain untouched. Live validation
-must confirm the host has local Canvas.ZIndex 1000000 before interpreting it.
-
-
-### Retained-host experiment (0.9.40)
-
-0.9.39 applied host ZIndex 1000000 correctly but still failed cycle two
-(capture `20260929-002408-010948`). 0.9.40 now collapses the existing glow
-when unranked, restoring any owned icon scaling, and reuses it on re-entry.
-Unload still removes the host. No host is created for a never-highlighted
-button. Host-only ZIndex 1000000 and the diagnostic above-native layering
-remain unchanged. This is pending live testing, not a confirmed fix.
-
-The harness now treats a collapsed host as unhighlighted, but disabled-mode
-controls still reject any host (visible or collapsed), to catch failed cleanup.
-Restart Explorer and reattach UWPSpy before the enabled ten-cycle comparison.
-If it passes, separately verify disable/unload removes retained hosts.
-
-
-### Same-button unload regression
-
-The harness option `--test-unload` (requires `--mode enabled`) runs the enabled
-cycles, then pauses for manual mod disable while retaining A/B/C/D, the original
-UWPSpy element references, and the Explorer session. Do not restart Explorer,
-reattach UWPSpy, or close the apps during this pause. Press Enter after disabling;
-the harness verifies all glow hosts are gone, then asks you to click A again and
-repeats the cycles with disabled expectations. Evidence labels use
-`post-unload-`. Foreground monitoring allows human input only at the phase
-boundary and resumes after A is activated. PASS requires both phases to pass.
-A separate disabled run creates fresh buttons and does not test delayed damage
-to the previously highlighted buttons. `--cycles` applies to each phase.
-
-From `tests/uwspy`:
-
-```powershell
-python .\harness.py --mode enabled --test-unload --top 3 --focus-seconds 10 --cycles 10 --screenshots --windhawk-log --output captures
-```
-
-
-Badge-absent unload variant: add `--unload-badge absent --test-unload`.
-The harness clears and verifies A's badge before the manual disable pause,
-verifies absence again after disable, then checks the first recreation before
-running the disabled cycles. Default unload behavior keeps the badge present.
-`--cycles 5` runs five cycles in each phase; keep the same Explorer and apps
-across the pause as above. No mod rebuild is required for this harness option.
-
-
-Repeated lifecycle test: `--test-unload --unload-rounds 3` runs three
-(enabled cycles -> manual disable -> disabled cycles) pairs. Before pairs 2/3,
-the harness pauses for manual re-enable, then asks for A activation again.
-All phases retain the original windows and element references. `--cycles 5`
-means five cycles per phase (30 total with three pairs). Use
-`--unload-badge absent` for each badge-absent unload boundary. The final state
-is disabled. Labels include the round number; no settings are changed by code.
-`test_lifecycle.py` checks phase ordering and reference preservation without
-interacting with Explorer.
+`python tests/run-icon-order-tests.py` runs the extracted host placement planner
+against 40,320 cases and checks that host creation uses explicit insertion.
+IPC, collector and lifecycle checks are documented in the harness guide.
+These tests do not inject into Explorer or prove visual correctness.

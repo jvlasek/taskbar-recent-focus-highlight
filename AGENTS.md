@@ -334,12 +334,12 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 |----------|--------|-----------|
 | Icon chrome | Own `WhRecentFocusGlow` only | Never style `BackgroundElement` |
 | Icon default | **Side bar** (`leftBar`) | Left on bottom/top taskbar; under icon on left/right — stays off the native running pill |
-| Frame Z-order | Overlay last (above icon) | Stroke not covered |
-| Full Z-order | Overlay first (behind icon) | Plate under glyph |
+| Frame Z-order | Host before the first badge/progress/native thin-pill anchor, otherwise at end | Preserve native order; frame coverage needs visual validation where native anchors precede the glyph |
+| Full Z-order | Host first | Plate behind glyph and native indicators |
 | Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
 | Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Each not-running → running episode clears `resolvedWhileRunning` and the empty-resolve cap, then resolves again; `kUnresolvedRetryMs` throttles other retries. Running + dead sample HWND, PID mismatch, or live image-path mismatch also re-resolves. Empty re-resolve does not wipe a known path. `observedRunning` is the last UI `IsRunning` snapshot (sticky until the UI sees false). | UVS must not `ReportClicked`. Explorer reuses the same `TaskListButton` on launch **and** when the exe is replaced by another folder’s copy. A capped empty resolve must not stick across close and relaunch. |
 | UVS vs rebind | Cached paint: **-1** unknown, **0** unranked, **>0** paint if `(rank, generation, accent, edge, panel size)` changed. | `{rank, gen, accent}` alone left the bar on the old side after a taskbar-edge / icon-size relayout. |
-| Native z-order | Append WhRecentFocusGlow once; never reposition it or native IconPanel children. PlanIconZOrder preserves native (baseline ZIndex, child index) draw order and allocates gaps for the glow. | 0.9.36 host-only moves still broke badge recreation. 0.9.37 uses temporary native ZIndex values saved inside the owned host, restoring only while our integer value remains installed; no native collection repair. |
+| Native z-order | Move only WhRecentFocusGlow when its style position changes; remove when unranked | Every insertion, including creation at end, uses InsertAt. Append omits deferred-index notification. Never rewrite native order or ZIndex |
 | Rank match | Exact path / HWND / AUMID only. Cached group windows and the sample HWND store the PID captured with the handle; `IdentityMatchesRank` accepts that HWND only while `HwndMatchesStoredPid` still holds. `PathAppearsOnTaskbar` is exact path / AUMID **and** a button last observed running (`observedRunning`, or 400 ms grace after a not-running snapshot). Pinned-only / closed must not occupy a top-N slot. A path-cache row whose button is already dead is erased on the UI thread (`PruneDeadButtonPathCache_UIThread`, from `CollectLiveButtons`) before eligibility; this function does not `weak.get()`. | Two folders of `python.exe` stay distinct; closing a pinned app (or moving the exe on update) frees the slot. Idle apps must not drop because no hover refreshed a tick. A destroyed button must not keep the slot. A recycled group HWND must not light the old button. |
 | Tray-only | `requireTaskbarButton` | Widgets / tray popups |
 | Multi-monitor | Same cache on every tracked button | Secondary if UVS fires |
@@ -351,11 +351,11 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | Preview titleBg | Tint-opacity ceiling × linear rank intensity; 4px rounded rect, 6px inset both sides | Readable; 100 vs 5 must differ |
 | Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank. Marker stores the displaced brush and our installed brush. Restore only while the border’s current brush is still ours; the next takeover saves whoever owns it now. Zero fill does not replace the background | Strong signal; a Styler change during the flyout survives repaint and clear |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
-| RunningIndicator | Never set Fill/Width/Height; never reorder every paint | Edge bar draws own pill. Glow host sits *under* a native thin pill, *above* a Taskbar Styler hover plate (RunningIndicator restyled to fill the icon cell — otherwise PointerOver acrylic covers the side bar). On taskbar-edge relayout recompute the ZIndex plan without moving children. |
+| RunningIndicator | Never set Fill/Width/Height or native ZIndex | Edge-bar host follows the indicator. Frame/side hosts go below a thin pill; a full-cell Styler plate is not an above-host anchor |
 | Bar geometry | Size vs glow **host** (padded inner box), `Center` alignment | IconPanel is 48×32 on a left taskbar but the host is 40×28 (padding 4,2). Length is `size%` of that cell, **same for every rank** (rank is opacity). Icon-width underlines on a left taskbar are too short to scan. |
 | RunningIndicator on style switch | Cover Edge bar via z-order only. Never ClearValue Visibility/Width/Height, never GoToState | VSM stores InactiveRunningIndicator `Visible` as a local value. ClearValue → template Collapsed. GoToState of the *current* state is a no-op, so the short unfocused pill stays gone. |
 | Bar auto-rotate | `leftBar` = side (perpendicular); `bottomBar` = edge (screen edge) | Settings keys stay `leftBar`/`bottomBar`. Detect: `VerticalOrientation` / panel 48×32 (wider than tall ⇒ **vertical** bar) first. Do not treat leftover RunningIndicator `VA=Bottom` as a bottom taskbar. |
-| OverlayIcon | Leave its collection index to Windows; include newly realized badges in the ZIndex plan even on cached paints. | The appended host must never shift native slots. Detached entries are restored/released; cleanup restores native local ZIndex (including unset). |
+| OverlayIcon | Native ordering belongs to Windows; badge is an above-host anchor for frame/side styles | No native badge repair. Cached paints recompute host position so newly realized anchors are considered |
 | Size boost | Icon `ScaleTransform` only; remember our instance and clear only that object. Previous local transform lives on the glow host Tag (not a cache `weak_ref`) and is replaced on every new takeover. Zero intensity/boost still calls `ClearIconScaleIfOurs` (do not skip on the empty-visual return). | Other mods (taskbar-dock-animation) scale the same `Icon` |
 | Rank intensity | Element Opacity (bars/frames) or brush alpha (native plate / titleBg) **once** | Do not also multiply fill/stroke alpha by `t`. 100/80/60 must read as 100/80/60, not ~100/64/36. |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
@@ -649,8 +649,8 @@ next round’s required finding.
    Cite: `taskbar-thumbnail-reorder` repeater `GetAt` + ctor map.
 5. **Do not fight native template / other mods.** Own-named overlays.
    Don’t `ClearValue` native fills/visibility. Don’t reorder `IconPanel`
-   native children or reposition our host. Use the drawing-order plan and
-   ownership-aware ZIndex restoration. Don’t wipe another mod’s `ScaleTransform`. Plate tints
+   native children or rewrite their ZIndex. Position only our host with
+   explicit InsertAt (including at end); remove it when unranked and on unload. Don’t wipe another mod’s `ScaleTransform`. Plate tints
    save/restore the previous brush.
 6. **Catalog packaging.** The YAML README is the store page (screenshots on
    `raw.githubusercontent.com`, no tester checklist, no “see the repo
@@ -702,7 +702,7 @@ and must not guess identity from localized UI strings.
 | Path cache is not a poll | `EnsureButtonPathCached` from UVS = `ReportClicked` into `HandleClick` | Resolve on full bind + `OnPointerPressed` only; never from UVS |
 | Identity-map keys need a live weak_ref | Raw `IUnknown*` is reused when Explorer reallocates a button | Erase the entry unless `weak.get() == this button` |
 | Identity-keyed maps, not linear `weak.get()` | Four COM-resolving scans per UVS per button | `unordered_map<IUnknown*, …>`; keep the map, skip paint on unranked |
-| No collection reordering | Historical clears/paints healed native z-order | No native moves and no glow repositioning. Append owned glow at creation, restore owned ZIndex changes and remove only that glow at cleanup. |
+| No native collection reordering | Historical clears/paints healed native z-order | Move/remove only the owned host. Use explicit InsertAt even at end so insertion/removal notify deferred bookkeeping |
 | No `SizeChanged` without a drainable dispatcher | `RememberUiDispatcher` can fail; uninit never revokes that watch | Register the watch only if the dispatcher was recorded |
 | No icon name fuzzy | English `" running"` / `" pinned"`, `LISTER`/`VSCODIUM` special cases, wrong glow | HWND / AUMID / path only. Preview unique-title dropped |
 | No in-mod enable / debug toggles | Duplicates Windhawk’s mod on/off and Advanced logging | Drop `enabled` and `glowDebugLog`; use `Wh_Log` |
@@ -714,7 +714,7 @@ and must not guess identity from localized UI strings.
 | Do not deref ctor-map `taskItem` | HWND gone ⇒ native `ITaskItem` likely freed; `GetWindowFromTaskItem` UAF | Store HWND at ctor; raw pointer is compare-only (thumbnail-reorder) |
 | UVS must not clear on overlay sweep | Desktop switch / decay set the flag then UVS blanked ranked icons until `ApplyAllHighlights` | Paint cached rank; the full bind is the sweep |
 | Paint cache includes edge + size | SizeChanged updated `lastEdge` then `ApplyButtonHighlight` early-out | Key is rank + settings + accent + edge + panel size |
-| Native order snapshots removed | 0.9.35 moved native children; 0.9.36 moved only the glow but still failed cycle two | 0.9.37 appends the glow once, uses Canvas.ZIndex for drawing order, and restores owned property changes before removing the glow. |
+| Native order snapshots removed | Earlier snapshots and native ZIndex normalization were abandoned | 0.9.42 preserves native relative order and properties; explicit host insertion fixes the reproduced deferred-index asymmetry |
 | Paint rank **-1** ≠ **0** | First UVS scored an unresolved button as 0 and skipped the full bind | Unknown identity stays -1 and schedules rebind; 0 only after a real resolve said “no rank” |
 | Own `ScaleTransform` instance | `ClearValue` wiped `taskbar-dock-animation`. A `weak_ref` to the displaced transform goes null if Icon held the last strong ref. | Remember the object we set; keep the previous transform on the glow host Tag (tree-owned, like the preview plate brush); restore only while current == ours |
 | YAML defaults are real | All-zero preview intensities must not be “unset” | Do not override user 0s after an in-place recompile |
@@ -759,7 +759,7 @@ exe-replace path-cache re-resolve, `PathAppearsOnTaskbar` exact-only, unmatched 
 `lastHwnd`+pid, replica/score prune, flyout Low coalesce, snap-group GetAt
 guard, click confirm on the focus thread, idle decay timer, pinned→running
 re-resolve, ctor-map HWND only, no UVS clear on overlay sweep, paint cache
-edge+size, append-only glow with owned ZIndex planning (0.9.37), DataContext-first preview bind,
+edge+size, explicit host insertion with native-order preservation (0.9.42), DataContext-first preview bind,
 unique-title dropped (stash), Thumbnails clear-on-retarget, bounded transient
 min-focus, File Explorer folder windows, deadline-style full-rebind debounce,
 preview overlay host reuse, window recency key is path or `APPID:` (not AFH
@@ -783,110 +783,36 @@ exclusion on pending/preview history.
 
 ## Regression test infrastructure
 
-- `tests/run-icon-order-tests.py`: extracts the production ZIndex planner and
-  ownership helpers into portable C++ checks (14,400 plans plus restoration).
-- `tests/uwspy/`: four native test apps, Python scenario harness, IPC transport
-  fixture and reduced badge regression dumps. The reusable UWPSpy Python client
-  is loaded from `UWPSPY_ROOT` or the sibling `UWPSpy/watcher` worktree.
-- `tests/uwspy/README.md` is the authoritative setup/run guide. Pipe discovery
-  is automatic; multiple sessions require a numbered selection. Button discovery
-  uses exact test AppIDs and excludes parked/collapsed elements.
-- Optional `--windhawk-log` launches bundled DbgViewMini locally with unbuffered
-  `[WH]` filtering and a startup probe. Raw and receipt-time/step-labelled JSONL
-  logs accompany the captures. Enable mod logging manually and close competing
-  viewers. Collector failure must not silently permit PASS. Do not write the
-  main scenario log from the collector reader thread.
-- `test_ipc.py` exercises the IPC fixture and captured badge/discovery data;
-  `test_windhawk_log.py` checks collector lifecycle, labels and conflict errors.
-- Do not automatically restart Explorer, inject UWPSpy, or change mod settings.
-  Live scenario runs switch foreground among A/B/C/D and need explicit user
-  coordination. Retain user captures. Unit checks are not proof of live visual
-  correctness; test enabled and fresh-Explorer disabled controls separately.
+`tests/uwspy/README.md` is the authoritative harness guide: external UWPSpy
+client, native A/B/C/D apps, automatic pipe discovery, screenshots, optional
+Windhawk logs, and same-button unload/reload phases. Do not restart Explorer,
+reattach UWPSpy or close children between lifecycle phases. Do not automate
+mod enable/disable or Explorer injection. Keep user captures intact.
 
+- `tests/run-icon-order-tests.py` extracts the production host placement planner
+  into C++ checks: 40,320 placements, native order preservation, idempotence,
+  and missing anchors. It also rejects Append in host creation/positioning and
+  native ZIndex writes. This is not a XAML integration test.
+- `test_ipc.py`: IPC fixture, captured badge order, discovery and visibility.
+- `test_windhawk_log.py`: collector lifecycle, labels and conflict reporting.
+- `test_lifecycle.py`: phase order and preservation of original references.
+- `tests/badge-static-analysis.md`: binary/source analysis and historical results.
+- `tests/badge-final-validation.md`: current release-candidate live checklist.
 
-## Current diagnostic override: 0.9.39
+## Current icon host lifecycle (0.9.42)
 
-This section supersedes the earlier 0.9.37 native ZIndex planner/ownership
-rules in this document. That candidate failed cycle two in capture
-`tests/uwspy/captures/20260929-000813-416375`.
-The diagnostic appends the glow once and sets only the glow's Canvas.ZIndex to
-1,000,000. No native ZIndex reads/writes/restore marker, no native child moves,
-and no host repositioning. All icon styles temporarily draw above native
-content; full/edge/side visual layering rules above are suspended for this
-experiment. Existing size boost and thumbnail behavior remain unchanged.
-Restart Explorer for comparisons; do not infer correctness from a reload into
-an already affected tree. `tests/run-icon-order-tests.py` checks this structural
-invariant; the old 14,400-case planner/ownership C++ fixtures are historical,
-not tests of the current implementation. Live ten-cycle verification is pending.
+Create only for ranked buttons with explicit `InsertAt(Size(), host)`. Position
+only the host with RemoveAt/InsertAt when its desired slot changes; no native
+ZIndex writes, native moves, order snapshots or badge-healing callbacks.
+Full: first. Edge bar: immediately after RunningIndicator, else end.
+Frame/side: before the earliest badge/progress/multiwindow/thin-pill anchor;
+side additionally stays below Icon/DefaultIcon. A full-cell Styler indicator
+is not treated as a thin-pill anchor. Native custom ZIndex values remain in
+force; arbitrary themes can override the intended collection-based layering.
 
-Diagnostic correction: 0.9.38 incorrectly attempted INT_MAX, above XAML's
-1,000,000 limit. Capture `20260929-001938-172478` shows the host ZIndex unset
-and the same second-cycle badge reversal. 0.9.39 corrects the limit and logs
-assignment exceptions once. Native children remain untouched. Live validation
-must confirm the host has local Canvas.ZIndex 1000000 before interpreting it.
-
-
-### Retained-host experiment (0.9.40)
-
-0.9.39 applied host ZIndex 1000000 correctly but still failed cycle two
-(capture `20260929-002408-010948`). 0.9.40 now collapses the existing glow
-when unranked, restoring any owned icon scaling, and reuses it on re-entry.
-Unload still removes the host. No host is created for a never-highlighted
-button. Host-only ZIndex 1000000 and the diagnostic above-native layering
-remain unchanged. This is pending live testing, not a confirmed fix.
-
-The harness now treats a collapsed host as unhighlighted, but disabled-mode
-controls still reject any host (visible or collapsed), to catch failed cleanup.
-Restart Explorer and reattach UWPSpy before the enabled ten-cycle comparison.
-If it passes, separately verify disable/unload removes retained hosts.
-
-
-### Same-button unload regression
-
-The harness option `--test-unload` (requires `--mode enabled`) runs the enabled
-cycles, then pauses for manual mod disable while retaining A/B/C/D, the original
-UWPSpy element references, and the Explorer session. Do not restart Explorer,
-reattach UWPSpy, or close the apps during this pause. Press Enter after disabling;
-the harness verifies all glow hosts are gone, then asks you to click A again and
-repeats the cycles with disabled expectations. Evidence labels use
-`post-unload-`. Foreground monitoring allows human input only at the phase
-boundary and resumes after A is activated. PASS requires both phases to pass.
-A separate disabled run creates fresh buttons and does not test delayed damage
-to the previously highlighted buttons. `--cycles` applies to each phase.
-
-From `tests/uwspy`:
-
-```powershell
-python .\harness.py --mode enabled --test-unload --top 3 --focus-seconds 10 --cycles 10 --screenshots --windhawk-log --output captures
-```
-
-
-Badge-absent unload variant: add `--unload-badge absent --test-unload`.
-The harness clears and verifies A's badge before the manual disable pause,
-verifies absence again after disable, then checks the first recreation before
-running the disabled cycles. Default unload behavior keeps the badge present.
-`--cycles 5` runs five cycles in each phase; keep the same Explorer and apps
-across the pause as above. No mod rebuild is required for this harness option.
-
-
-Repeated lifecycle test: `--test-unload --unload-rounds 3` runs three
-(enabled cycles -> manual disable -> disabled cycles) pairs. Before pairs 2/3,
-the harness pauses for manual re-enable, then asks for A activation again.
-All phases retain the original windows and element references. `--cycles 5`
-means five cycles per phase (30 total with three pairs). Use
-`--unload-badge absent` for each badge-absent unload boundary. The final state
-is disabled. Labels include the round number; no settings are changed by code.
-`test_lifecycle.py` checks phase ordering and reference preservation without
-interacting with Explorer.
-
-
-## Current diagnostic override: 0.9.41
-
-Supersedes the 0.9.40 retained-host lifecycle and earlier append instructions.
-ClearButtonHighlight removes the host on unhighlight, as in 0.9.39. Creation
-uses `children.InsertAt(children.Size(), host)` instead of Append, leaving
-native positions unchanged while notifying deferred-element index bookkeeping.
-Keep host-only ZIndex 1000000 and diagnostic above-native layering unchanged
-for this comparison. No native ZIndex ownership/repair. Static analysis:
-`tests/badge-static-analysis.md`. Five enabled cycles on fresh Explorer are the
-first live check; then repeated unload/reload. Old retained-host notes are history.
+Clear restores owned icon scaling and removes the host, including on unload.
+Creation/reposition must never use Append, even as an end-insertion shortcut.
+The isolated InsertAt(end) diagnostic (.41) passed both lifecycle variants;
+.42 restores host movement, so .41 evidence must not be presented as a .42 pass.
+The current host position planner prioritizes foreground anchors without
+rewriting native order; frame appearance and Styler themes need live checks.
