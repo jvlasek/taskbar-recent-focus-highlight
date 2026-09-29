@@ -21,6 +21,8 @@ int main() {
     }
     assert(SafeGlowBounds(-2,-2,44,44));
     assert(InsetGlowRadius(13,1,24,24)==12); // circular native 26px
+    assert(InsetGlowRadius(4,0,36.8,36.8)==4); // preserve native corners despite inset
+    assert(InsetGlowRadius(13,0,24,24)==12); // circular contour remains bounded
     assert(InsetGlowRadius(0,1,38,38)==0); // square theme
     assert(InsetGlowRadius(4,1,38,38)==3);
     assert(InsetGlowRadius(999,1,38,38)==19); // oversized native radius

@@ -799,7 +799,7 @@ mod enable/disable or Explorer injection. Keep user captures intact.
 - `tests/badge-static-analysis.md`: binary/source analysis and historical results.
 - `tests/badge-final-validation.md`: current release-candidate live checklist.
 
-## Current icon host lifecycle (0.9.43)
+## Current icon host lifecycle (0.9.44)
 
 Create only for ranked buttons with explicit `InsertAt(Size(), host)`. Position
 only the host with RemoveAt/InsertAt when its desired slot changes; no native
@@ -814,21 +814,24 @@ force; arbitrary themes can override the intended collection-based layering.
 Clear restores owned icon scaling and removes the host, including on unload.
 Creation/reposition must never use Append, even as an end-insertion shortcut.
 The isolated InsertAt(end) diagnostic (.41) passed both lifecycle variants;
-.43 changes geometry and host placement, so .41 evidence is not a .43 pass.
+.44 changes geometry and host placement, so .41 evidence is not a .44 pass.
 The current host position planner prioritizes foreground anchors without
 rewriting native order; frame appearance and Styler themes need live checks.
 
 
-## Native icon contours (0.9.43)
+## Native icon contours (0.9.44)
 
 Frame/Full use one owned Border (`WhRecentFocusContour`) inside the glow host.
 Read BackgroundElement bounds and CornerRadius (or Rectangle radii), or a
-full-cell Styler RunningIndicator plate. Transform into host coordinates;
+full-cell Styler RunningIndicator plate. Transform into native panel coordinates;
 reject rotated, skewed and non-uniform transforms. Inset at least 1 DIP and
-reduce/clamp each corner radius to fit. Unknown backgrounds use host bounds
-with 4-DIP corners. Edge surrounds a visible native thin pill, skips full-cell
-plates, and never changes native properties. Full/Edge fill has a 60% ceiling
-before rank opacity. Layers apply only to Side; Roundness remains for previews.
+preserve each native corner radius, clamping to fit. Unknown backgrounds use content bounds
+with 4-DIP corners. Center our Border relative to the panel content center
+(accounting for Grid padding/border), using balanced margins. Never measure
+against the newly created host: its first layout has not happened yet.
+Edge uses an icon-width capsule centered on the visible native thin pill, skips
+full-cell plates, and never changes native properties. Full fill has a 60% ceiling
+before rank opacity; Edge uses the full configured fill strength. Layers apply only to Side; Roundness remains for previews.
 
 Geometry must be finite, positive and bounded before XAML assignment or integer
 conversion. No division by native width/height. Failed native reads fall back

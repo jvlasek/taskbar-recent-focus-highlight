@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.43 (visual validation pending) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.44 (visual validation pending) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -131,10 +131,11 @@ Thumbnail HWND mapping follows
 
 ## Badge ordering fix and validation
 
-Version 0.9.43 follows native background geometry for Frame/Full and draws Edge
-as a soft surround behind the native running pill. Side bar is unchanged.
+Version 0.9.44 follows native background geometry for Frame/Full and draws Edge
+as a broad, icon-width capsule behind the native running pill. Side bar is unchanged.
 Frame uses one outline; Full uses one soft fill. Native dimensions and per-corner
-radii are read at paint time; unsupported background shapes fall back to a
+radii are read at paint time and preserved (clamped to fit). Placement uses
+the native panel so it does not depend on first layout of the new overlay; unsupported background shapes fall back to a
 small rounded contour, while missing/invalid pills are skipped. Zero, non-finite
 and excessive dimensions are rejected.
 
@@ -145,7 +146,7 @@ when unranked and on unload. No retained-host or native badge-repair workaround
 is used. See [the investigation and evidence](tests/badge-static-analysis.md).
 
 The 0.9.41 diagnostic passed repeated badge recreation and three unload/reload
-rounds with badges both absent and present. These results do not certify 0.9.43:
+rounds with badges both absent and present. These results do not certify 0.9.44:
 its new contours and host positioning needs a fresh live run and visual checks of all
 four icon styles, hover, style switches, taskbar relayout and Styler coexistence.
 Follow [the final validation checklist](tests/badge-final-validation.md).

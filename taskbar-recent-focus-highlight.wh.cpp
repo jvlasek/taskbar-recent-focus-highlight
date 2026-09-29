@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.43
+// @version         0.9.44
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -178,7 +178,7 @@ to clear highlights.
       $name: Thickness (px)
       $description: >-
         Frame stroke or side-bar thickness (1–16). Edge surrounds the native
-        pill with padding derived from this value; Full has no stroke.
+        pill with a broad capsule whose thickness follows this value; Full has no stroke.
     - glowRoundness: 28
       $name: Roundness (%)
       $description: >-
@@ -188,7 +188,7 @@ to clear highlights.
       $name: Size (%)
       $description: >-
         Frame/Full: inset within native background (≤100, minimum 1px inset).
-        Side bar: bar length. Edge follows the native pill and ignores this.
+        Side bar: bar length. Edge: length relative to the icon, centered on the native pill.
     - glowLayers: 2
       $name: Layers
       $description: >-
@@ -2453,7 +2453,7 @@ void HideAllGlowLayers(Controls::Grid host) {
 }
 
 // Reject malformed geometry before arithmetic or assigning XAML properties.
-// Coordinates are DIPs relative to our host. Never divide by native dimensions.
+// Coordinates are DIPs relative to the native panel. Never divide by native dimensions.
 bool SafeGlowMetric(double value) {
     return std::isfinite(value) && std::abs(value) <= 16384.0;
 }
@@ -2470,7 +2470,7 @@ struct NativeGlowShape {
     double x = 0, y = 0, w = 0, h = 0;
     CornerRadius corners{0, 0, 0, 0};
 };
-bool ReadNativeGlowShape(FrameworkElement element, Controls::Grid host,
+bool ReadNativeGlowShape(FrameworkElement element, FrameworkElement reference,
                          NativeGlowShape& shape) {
     try {
         if (!element || element.Visibility() != Visibility::Visible) return false;
@@ -2485,7 +2485,7 @@ bool ReadNativeGlowShape(FrameworkElement element, Controls::Grid host,
         } else {
             return false; // Unknown shape: use fallback, not a guessed native contour.
         }
-        auto transform = element.TransformToVisual(host);
+        auto transform = element.TransformToVisual(reference);
         auto origin = transform.TransformPoint({0, 0});
         auto unitX = transform.TransformPoint({1, 0});
         auto unitY = transform.TransformPoint({0, 1});
@@ -2508,24 +2508,65 @@ void PaintNativeContour(Controls::Grid host, FrameworkElement iconPanel,
                          GlowStyle style, winrt::Windows::UI::Color color,
                          double thickness, double sizeFrac, double opacity,
                          int fillOpacity) {
+    // The host may not have been arranged yet. Use the native panel's content
+    // center, not TransformToVisual(host), so first paint and later paints agree.
+    double panelW = iconPanel.ActualWidth(), panelH = iconPanel.ActualHeight();
+    if (!SafeGlowBounds(0, 0, panelW, panelH)) return;
+    Thickness padding{0, 0, 0, 0};
+    if (auto grid = iconPanel.try_as<Controls::Grid>()) {
+        auto p = grid.Padding();
+        auto b = grid.BorderThickness();
+        padding = {p.Left+b.Left, p.Top+b.Top, p.Right+b.Right, p.Bottom+b.Bottom};
+    }
+    if (!SafeGlowMetric(padding.Left) || !SafeGlowMetric(padding.Top) ||
+        !SafeGlowMetric(padding.Right) || !SafeGlowMetric(padding.Bottom)) return;
+    double contentW = panelW-padding.Left-padding.Right;
+    double contentH = panelH-padding.Top-padding.Bottom;
+    if (!SafeGlowBounds(0, 0, contentW, contentH)) return;
+    double centerX = padding.Left+contentW*0.5;
+    double centerY = padding.Top+contentH*0.5;
     NativeGlowShape shape;
     bool pill = style == GlowStyle::BottomBar;
     auto indicator = FindRunningIndicator(iconPanel);
     bool plate = indicator && RunningIndicatorLooksLikeHoverPlate(indicator, iconPanel);
     if (pill) {
         // A hidden/zero-sized pill or a Styler full-cell plate is not a pill.
-        if (!indicator || plate || !ReadNativeGlowShape(indicator, host, shape)) return;
+        if (!indicator || plate || !ReadNativeGlowShape(indicator, iconPanel, shape)) return;
     } else {
         bool found = false;
-        if (plate) found = ReadNativeGlowShape(indicator, host, shape);
-        if (!found) found = ReadNativeGlowShape(FindChildByName(iconPanel, L"BackgroundElement"), host, shape);
+        if (plate) found = ReadNativeGlowShape(indicator, iconPanel, shape);
+        if (!found) found = ReadNativeGlowShape(FindChildByName(iconPanel, L"BackgroundElement"), iconPanel, shape);
         if (!found) {
-            shape.w = host.ActualWidth(); shape.h = host.ActualHeight();
+            shape.x = padding.Left; shape.y = padding.Top;
+            shape.w = contentW; shape.h = contentH;
             if (!SafeGlowBounds(0, 0, shape.w, shape.h)) return;
             shape.corners = CornerRadius{4, 4, 4, 4};
         }
     }
-    double inset = pill ? -(std::min)(3.0, (std::max)(1.0, thickness * 0.5)) :
+    if (pill) {
+        // Broad capsule centered on the native indicator, including inactive dots.
+        // Use the icon's layout size (not its animated/boosted transform).
+        auto icon = FindChildByName(iconPanel, L"Icon");
+        double iconW = icon ? icon.ActualWidth() : 0;
+        double iconH = icon ? icon.ActualHeight() : 0;
+        bool vertical = shape.h > shape.w;
+        // A round indicator has no orientation; its location resolves the edge.
+        if (std::abs(shape.w-shape.h) < 0.5)
+            vertical = std::abs((shape.x+shape.w*0.5)-centerX) >
+                       std::abs((shape.y+shape.h*0.5)-centerY);
+        double available = vertical ? contentH : contentW;
+        double iconLength = vertical ? iconH : iconW;
+        if (!SafeGlowMetric(iconLength) || iconLength <= 0.5) iconLength = available*0.8;
+        double length = (std::min)(available, iconLength)*sizeFrac;
+        double breadth = (std::max)(6.0, (std::min)(12.0, thickness*2.0));
+        double cx = shape.x+shape.w*0.5, cy = shape.y+shape.h*0.5;
+        shape.w = vertical ? breadth : length;
+        shape.h = vertical ? length : breadth;
+        shape.x = cx-shape.w*0.5; shape.y = cy-shape.h*0.5;
+        double radius = breadth*0.5;
+        shape.corners = {radius,radius,radius,radius};
+    }
+    double inset = pill ? 0.0 :
         (std::max)(1.0, (std::min)(shape.w, shape.h) * (1.0-sizeFrac) * 0.5);
     double w = shape.w-2*inset, h = shape.h-2*inset;
     if (!SafeGlowBounds(shape.x+inset, shape.y+inset, w, h)) return;
@@ -2537,20 +2578,23 @@ void PaintNativeContour(Controls::Grid host, FrameworkElement iconPanel,
         auto children = host.Children();
         children.InsertAt(children.Size(), border);
     }
-    border.HorizontalAlignment(HorizontalAlignment::Left);
-    border.VerticalAlignment(VerticalAlignment::Top);
+    double dx = shape.x+shape.w*0.5-centerX;
+    double dy = shape.y+shape.h*0.5-centerY;
+    if (!SafeGlowMetric(dx) || !SafeGlowMetric(dy)) return;
+    border.HorizontalAlignment(HorizontalAlignment::Center);
+    border.VerticalAlignment(VerticalAlignment::Center);
     border.Width(w); border.Height(h);
-    border.Margin({shape.x+inset, shape.y+inset, 0, 0});
-    border.CornerRadius({InsetGlowRadius(shape.corners.TopLeft,inset,w,h),
-                         InsetGlowRadius(shape.corners.TopRight,inset,w,h),
-                         InsetGlowRadius(shape.corners.BottomRight,inset,w,h),
-                         InsetGlowRadius(shape.corners.BottomLeft,inset,w,h)});
+    border.Margin({dx, dy, -dx, -dy});
+    border.CornerRadius({InsetGlowRadius(shape.corners.TopLeft,0,w,h),
+                         InsetGlowRadius(shape.corners.TopRight,0,w,h),
+                         InsetGlowRadius(shape.corners.BottomRight,0,w,h),
+                         InsetGlowRadius(shape.corners.BottomLeft,0,w,h)});
     bool frame = style == GlowStyle::Frame;
     double stroke = frame ? (std::min)(thickness, (std::min)(w,h)*0.5) : 0;
     border.BorderThickness({stroke,stroke,stroke,stroke});
     auto strokeColor = color; strokeColor.A = 230;
     border.BorderBrush(Media::SolidColorBrush{strokeColor});
-    color.A = frame ? 0 : static_cast<uint8_t>((std::clamp)(fillOpacity,0,100)*2.55*0.6+0.5);
+    color.A = frame ? 0 : static_cast<uint8_t>((std::clamp)(fillOpacity,0,100)*2.55*(pill ? 1.0 : 0.6)+0.5);
     border.Background(Media::SolidColorBrush{color});
     border.Opacity((std::clamp)(opacity,0.0,1.0));
     border.Visibility(Visibility::Visible);
