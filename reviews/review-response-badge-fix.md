@@ -1,4 +1,4 @@
-# Draft — complete 0.9.45 live validation before posting
+# Review response — 0.9.45
 
 The notification-badge regression was reproduced with a four-app harness:
 repeated highlight removal/recreation placed OverlayIcon behind Icon on the
@@ -26,6 +26,13 @@ remain unchanged.
 
 Automated validation: 30,240 extracted-planner placement cases, invalid-geometry/radius tests,
 and a Windhawk 1.7.3 compiler build. Existing IPC/collector/lifecycle tests
-passed during the previous pass; the harness has not changed. These do not prove
-live rendering. FINAL .45 VISUAL AND LIFECYCLE RESULTS: PENDING — fill in after
-`tests/badge-final-validation.md` is completed. .41 results are not .45 results.
+passed during the previous pass; the harness has not changed.
+
+On the current version, five enabled badge cycles passed (capture
+`20260930-022800-951939`). Manual switching between Side, Frame and Full,
+hover, initial positioning and a multi-window flyout showed no issues.
+There was an initial settings-switch hiccup around the removed Edge style;
+its cause was not established. The same Explorer process has been in use
+since .42 without a reported badge recurrence. The badge-present/absent
+lifecycle harness results above belong to .41; those variants have not been
+rerun on .45. Broader theme and multimonitor coverage is not claimed.

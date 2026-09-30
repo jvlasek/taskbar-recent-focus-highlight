@@ -1,8 +1,18 @@
 # 0.9.45 final visual/lifecycle validation
 
-Status: automated checks/build recorded in the handoff; live checks pending.
-Do not describe .45 as visually validated or submit its draft review response
-as completed validation until the following checks are performed.
+Status: ready for review with the following evidence and limits (2026-09-30).
+
+- Current-version five-cycle enabled run passed: `20260930-022800-951939`.
+- User reports style switching, hover, initial placement and multi-window
+  flyout smoke checks passed. An initial switch from the removed style did
+  not behave as expected; cause unconfirmed, no special migration implemented.
+- User reports the same Explorer process has run since .42 without recurrence.
+- Both three-round lifecycle variants passed on .41. They have not been rerun
+  on .45; user elected to proceed based on the isolated fix and subsequent use.
+- Broader theme, taskbar relayout and multimonitor coverage remains unverified.
+
+The checklist below is retained for further regression testing, not as a claim
+that every item has been completed or a requirement to delay review.
 
 1. Recompile/load .45, restart Explorer, attach UWPSpy. Use the same settings
    as the .41 baseline (leftBar, top 3, 8-second minimum; harness hold 10s).
