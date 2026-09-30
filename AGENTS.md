@@ -351,10 +351,10 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | Preview titleBg | Tint-opacity ceiling × linear rank intensity; 4px rounded rect, 6px inset both sides | Readable; 100 vs 5 must differ |
 | Preview plate | BackgroundBorder tint via `previewFillOpacity` × rank. Marker stores the displaced brush and our installed brush. Restore only while the border’s current brush is still ours; the next takeover saves whoever owns it now. Zero fill does not replace the background | Strong signal; a Styler change during the flyout survives repaint and clear |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
-| RunningIndicator | Never set Fill/Width/Height or native ZIndex | Edge-bar host precedes the indicator. Frame/side hosts go below a thin pill; a full-cell Styler plate is not an above-host anchor |
+| RunningIndicator | Never set Fill/Width/Height or native ZIndex | Frame/side hosts go below a thin pill; a full-cell Styler plate is not an above-host anchor |
 | Bar geometry | Size vs glow **host** (padded inner box), `Center` alignment | IconPanel is 48×32 on a left taskbar but the host is 40×28 (padding 4,2). Length is `size%` of that cell, **same for every rank** (rank is opacity). Icon-width underlines on a left taskbar are too short to scan. |
-| RunningIndicator on style switch | Surround native pill from below via host order only. Never ClearValue Visibility/Width/Height, never GoToState | VSM stores InactiveRunningIndicator `Visible` as a local value. ClearValue → template Collapsed. GoToState of the *current* state is a no-op, so the short unfocused pill stays gone. |
-| Bar auto-rotate | `leftBar` = side (perpendicular); `bottomBar` = edge (screen edge) | Settings keys stay `leftBar`/`bottomBar`. Detect: `VerticalOrientation` / panel 48×32 (wider than tall ⇒ **vertical** bar) first. Do not treat leftover RunningIndicator `VA=Bottom` as a bottom taskbar. |
+| RunningIndicator on style switch | Never ClearValue Visibility/Width/Height, never GoToState | VSM stores InactiveRunningIndicator `Visible` as a local value. ClearValue → template Collapsed. GoToState of the *current* state is a no-op, so the short unfocused pill stays gone. |
+| Bar auto-rotate | `leftBar` = side (perpendicular) | Removed `bottomBar` falls back to Side. Detect: `VerticalOrientation` / panel 48×32 (wider than tall ⇒ **vertical** bar) first. Do not treat leftover RunningIndicator `VA=Bottom` as a bottom taskbar. |
 | OverlayIcon | Native ordering belongs to Windows; badge is an above-host anchor for frame/side styles | No native badge repair. Cached paints recompute host position so newly realized anchors are considered |
 | Size boost | Icon `ScaleTransform` only; remember our instance and clear only that object. Previous local transform lives on the glow host Tag (not a cache `weak_ref`) and is replaced on every new takeover. Zero intensity/boost still calls `ClearIconScaleIfOurs` (do not skip on the empty-visual return). | Other mods (taskbar-dock-animation) scale the same `Icon` |
 | Rank intensity | Element Opacity (bars/frames) or brush alpha (native plate / titleBg) **once** | Do not also multiply fill/stroke alpha by `t`. 100/80/60 must read as 100/80/60, not ~100/64/36. |
@@ -412,7 +412,7 @@ General keys stay top-level; icon/preview keys are dotted.
 | General | `decayMinutes` | app decay |
 | General | `requireTaskbarButton` | tray-only filter |
 | General | `excludedPrograms[i]` | uppercase set |
-| Taskbar icons | `icons.glowStyle` | `LeftBar` (side bar) / `Frame` / `Full` / `BottomBar` (edge bar) |
+| Taskbar icons | `icons.glowStyle` | `LeftBar` (side bar) / `Frame` / `Full`; legacy `bottomBar` falls back to Side |
 | Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | color mode + hex |
 | Taskbar icons | `icons.glowIntensityRank1..3` | `glowIntensity[3]` |
 | Taskbar icons | `icons.glowThickness` / `icons.glowRoundness` / `icons.glowSize` / `icons.glowLayers` | metrics |
@@ -790,7 +790,7 @@ reattach UWPSpy or close children between lifecycle phases. Do not automate
 mod enable/disable or Explorer injection. Keep user captures intact.
 
 - `tests/run-icon-order-tests.py` extracts the production host placement planner
-  into C++ checks: 40,320 placements, native order preservation, idempotence,
+  into C++ checks: 30,240 placements, native order preservation, idempotence,
   and missing anchors. It also rejects Append in host creation/positioning and
   native ZIndex writes. This is not a XAML integration test.
 - `test_ipc.py`: IPC fixture, captured badge order, discovery and visibility.
@@ -799,13 +799,12 @@ mod enable/disable or Explorer injection. Keep user captures intact.
 - `tests/badge-static-analysis.md`: binary/source analysis and historical results.
 - `tests/badge-final-validation.md`: current release-candidate live checklist.
 
-## Current icon host lifecycle (0.9.44)
+## Current icon host lifecycle (0.9.45)
 
 Create only for ranked buttons with explicit `InsertAt(Size(), host)`. Position
 only the host with RemoveAt/InsertAt when its desired slot changes; no native
 ZIndex writes, native moves, order snapshots or badge-healing callbacks.
 Full: before earliest glyph/badge/progress/thin-pill anchor.
-Edge bar: immediately before RunningIndicator, else end (no pill means no paint).
 Frame/side: before the earliest badge/progress/multiwindow/thin-pill anchor;
 side additionally stays below Icon/DefaultIcon. A full-cell Styler indicator
 is not treated as a thin-pill anchor. Native custom ZIndex values remain in
@@ -814,12 +813,12 @@ force; arbitrary themes can override the intended collection-based layering.
 Clear restores owned icon scaling and removes the host, including on unload.
 Creation/reposition must never use Append, even as an end-insertion shortcut.
 The isolated InsertAt(end) diagnostic (.41) passed both lifecycle variants;
-.44 changes geometry and host placement, so .41 evidence is not a .44 pass.
+.45 changes geometry and host placement, so .41 evidence is not a .45 pass.
 The current host position planner prioritizes foreground anchors without
 rewriting native order; frame appearance and Styler themes need live checks.
 
 
-## Native icon contours (0.9.44)
+## Native icon contours (0.9.45)
 
 Frame/Full use one owned Border (`WhRecentFocusContour`) inside the glow host.
 Read BackgroundElement bounds and CornerRadius (or Rectangle radii), or a
@@ -829,13 +828,13 @@ preserve each native corner radius, clamping to fit. Unknown backgrounds use con
 with 4-DIP corners. Center our Border relative to the panel content center
 (accounting for Grid padding/border), using balanced margins. Never measure
 against the newly created host: its first layout has not happened yet.
-Edge uses an icon-width capsule centered on the visible native thin pill, skips
-full-cell plates, and never changes native properties. Full fill has a 60% ceiling
-before rank opacity; Edge uses the full configured fill strength. Layers apply only to Side; Roundness remains for previews.
+Edge was removed in .45: native running/progress indicators already occupy
+that space. Legacy bottomBar settings fall back to Side. Full fill has a 60% ceiling
+before rank opacity; Layers apply only to Side; Roundness remains for previews.
 
 Geometry must be finite, positive and bounded before XAML assignment or integer
 conversion. No division by native width/height. Failed native reads fall back
-or skip. Frame/Full/Edge bypass the old paint-cache early return so native
+or skip. Frame/Full bypass the old paint-cache early return so native
 geometry is reread on paints; Side keeps its existing cache. Check all styles
 live, including square/circular themes and active/inactive pills. Automated
 math/placement tests are `python tests/run-icon-order-tests.py`.

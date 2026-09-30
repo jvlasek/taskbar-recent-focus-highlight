@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.44 (visual validation pending) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.45 (visual validation pending) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -75,7 +75,7 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 ### Taskbar icons
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Icon highlight style | Side bar / Frame / Full / Edge bar (auto-rotates with the taskbar edge) | **Side bar** |
+| Icon highlight style | Side bar / Frame / Full (auto-rotates with the taskbar edge) | **Side bar** |
 | Glow color | Accent / fixed / custom hex (also used for previews) | Accent |
 | Intensity rank 1/2/3 | Strength per rank (0–100) | 100 / 70 / 45 |
 | Thickness / roundness / size / layers | Geometry of icon chrome | 3 / 28 / 92 / 2 |
@@ -131,12 +131,13 @@ Thumbnail HWND mapping follows
 
 ## Badge ordering fix and validation
 
-Version 0.9.44 follows native background geometry for Frame/Full and draws Edge
-as a broad, icon-width capsule behind the native running pill. Side bar is unchanged.
+Version 0.9.45 removes Edge to leave the native running/progress indicator area
+clear. Saved `bottomBar` settings fall back to Side. Frame/Full continue to
+follow native background geometry; Side is unchanged.
 Frame uses one outline; Full uses one soft fill. Native dimensions and per-corner
 radii are read at paint time and preserved (clamped to fit). Placement uses
 the native panel so it does not depend on first layout of the new overlay; unsupported background shapes fall back to a
-small rounded contour, while missing/invalid pills are skipped. Zero, non-finite
+small rounded contour. Zero, non-finite
 and excessive dimensions are rejected.
 
 It uses style-specific layering while preserving the explicit
@@ -146,9 +147,9 @@ when unranked and on unload. No retained-host or native badge-repair workaround
 is used. See [the investigation and evidence](tests/badge-static-analysis.md).
 
 The 0.9.41 diagnostic passed repeated badge recreation and three unload/reload
-rounds with badges both absent and present. These results do not certify 0.9.44:
+rounds with badges both absent and present. These results do not certify 0.9.45:
 its new contours and host positioning needs a fresh live run and visual checks of all
-four icon styles, hover, style switches, taskbar relayout and Styler coexistence.
+three icon styles, hover, style switches, taskbar relayout and Styler coexistence.
 Follow [the final validation checklist](tests/badge-final-validation.md).
 
 ## How to test
@@ -156,7 +157,7 @@ Follow [the final validation checklist](tests/badge-final-validation.md).
 1. Set app min-focus to `1`–`2`s (and preview min-focus to `0`–`1`) for faster trials.
 2. Focus several apps long enough → icon ranks 1 > 2 > 3 (side bar by default).
    Move the taskbar to the left/right: the side bar should sit *under* the icon
-   (not on the running-dot edge). Edge bar should follow the screen edge.
+   (not on the running-dot edge).
    Running dots on unranked icons must survive the relayout.
 3. Open **three+** windows of one app, focus them in turn, hover the combined
    icon → previews show ranks 1 > 2 > 3 (strongest on the last focused window
@@ -325,6 +326,6 @@ badge drawing order, highlight membership and foreground preconditions; it
 does not certify visual appearance, flyout behavior or all Windows builds.
 
 `python tests/run-icon-order-tests.py` runs the extracted host placement planner
-against 40,320 cases and checks that host creation uses explicit insertion.
+against 30,240 cases and checks that host creation uses explicit insertion.
 IPC, collector and lifecycle checks are documented in the harness guide.
 These tests do not inject into Explorer or prove visual correctness.

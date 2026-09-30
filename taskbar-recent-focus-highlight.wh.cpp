@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.9.44
+// @version         0.9.45
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -33,7 +33,6 @@ buttons on the current desktop get a highlight:
 
 - **Side bar** (default) — a bar beside the icon (left on a bottom/top
   taskbar, under the icon on a left/right taskbar)
-- **Edge bar** — a pill on the same side as the native running indicator
 - **Frame** / **Full** — a rounded rectangle around or behind the icon
 
 Rank 1 is strongest; ranks 2 and 3 (and 4+) use the intensities you set.
@@ -143,15 +142,12 @@ to clear highlights.
       $description: >-
         How ranked apps look on the taskbar. Bars rotate with the taskbar edge
         (bottom / left / top / right). Side bar = beside the icon (left on a
-        bottom or top taskbar, under the icon on a left or right taskbar). Edge
-        bar = same side as the native running indicator (screen edge). Frame/Full
-        = native background contour. Edge bar surrounds the native pill and does not restyle
-        the native running indicator.
+        bottom or top taskbar, under the icon on a left or right taskbar).
+        Frame/Full follow the native background contour.
       $options:
       - leftBar: Side bar (left on bottom/top, under icon on left/right)
       - frame: Frame (hollow rounded rectangle)
       - full: Full (filled rounded rectangle)
-      - bottomBar: Edge bar (follows the screen edge)
     - glowColor: accent
       $name: Glow color
       $description: Base color for icon highlights (and previews)
@@ -177,27 +173,26 @@ to clear highlights.
     - glowThickness: 3
       $name: Thickness (px)
       $description: >-
-        Frame stroke or side-bar thickness (1–16). Edge surrounds the native
-        pill with a broad capsule whose thickness follows this value; Full has no stroke.
+        Frame stroke or side-bar thickness (1–16). Full has no stroke.
     - glowRoundness: 28
       $name: Roundness (%)
       $description: >-
         Thumbnail preview roundness. Frame/Full follow native background corners;
-        side bars stay capsules and Edge follows the native pill.
+        side bars stay capsules.
     - glowSize: 92
       $name: Size (%)
       $description: >-
         Frame/Full: inset within native background (≤100, minimum 1px inset).
-        Side bar: bar length. Edge: length relative to the icon, centered on the native pill.
+        Side bar: bar length.
     - glowLayers: 2
       $name: Layers
       $description: >-
-        Side bar: soft outer glow layers. Frame/Full/Edge use one contour and
+        Side bar: soft outer glow layers. Frame/Full use one contour and
         ignore this setting.
     - glowFillOpacity: 40
       $name: Fill opacity
       $description: >-
-        0–100. Soft fill strength for Full/Edge; solid bar opacity for Side. Frame uses
+        0–100. Soft fill strength for Full; solid bar opacity for Side. Frame uses
         stroke only. (Thumbnail tints use Previews → Tint opacity.)
     - sizeBoostRank1: 10
       $name: Size boost rank 1 (%)
@@ -350,7 +345,6 @@ enum class GlowStyle {
     Frame,      // hollow rounded rectangle
     Full,       // filled rounded rectangle
     LeftBar,    // side bar: left on horizontal taskbar, bottom on vertical
-    BottomBar,  // edge bar: same side as the native RunningIndicator
 };
 
 // Physical screen edge the taskbar is on (Win11 24H2/25H2 can use all four).
@@ -2259,14 +2253,10 @@ bool RunningIndicatorLooksLikeHoverPlate(FrameworkElement ri,
 // Position in the native-only child sequence. Never reorder native children.
 struct GlowOrderChild {
     bool aboveHost;
-    bool runningIndicator;
 };
-uint32_t GlowHostInsertionIndex(const std::vector<GlowOrderChild>& children,
-                                GlowStyle style) {
+uint32_t GlowHostInsertionIndex(const std::vector<GlowOrderChild>& children) {
     for (uint32_t i = 0; i < children.size(); ++i) {
-        if (style == GlowStyle::BottomBar) {
-            if (children[i].runningIndicator) return i;
-        } else if (children[i].aboveHost) {
+        if (children[i].aboveHost) {
             return i;
         }
     }
@@ -2294,9 +2284,9 @@ void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host, GlowStyle style
             if ((style == GlowStyle::LeftBar || style == GlowStyle::Full) &&
                 (name == L"Icon" || name == L"DefaultIcon")) above = true;
             if (running && !RunningIndicatorLooksLikeHoverPlate(fe, panelFe)) above = true;
-            native.push_back({above, running});
+            native.push_back({above});
         }
-        uint32_t target = GlowHostInsertionIndex(native, style);
+        uint32_t target = GlowHostInsertionIndex(native);
         if (target == current) return;
         children.RemoveAt(current);
         children.InsertAt(target, host);
@@ -2526,47 +2516,18 @@ void PaintNativeContour(Controls::Grid host, FrameworkElement iconPanel,
     double centerX = padding.Left+contentW*0.5;
     double centerY = padding.Top+contentH*0.5;
     NativeGlowShape shape;
-    bool pill = style == GlowStyle::BottomBar;
     auto indicator = FindRunningIndicator(iconPanel);
     bool plate = indicator && RunningIndicatorLooksLikeHoverPlate(indicator, iconPanel);
-    if (pill) {
-        // A hidden/zero-sized pill or a Styler full-cell plate is not a pill.
-        if (!indicator || plate || !ReadNativeGlowShape(indicator, iconPanel, shape)) return;
-    } else {
-        bool found = false;
-        if (plate) found = ReadNativeGlowShape(indicator, iconPanel, shape);
-        if (!found) found = ReadNativeGlowShape(FindChildByName(iconPanel, L"BackgroundElement"), iconPanel, shape);
-        if (!found) {
-            shape.x = padding.Left; shape.y = padding.Top;
-            shape.w = contentW; shape.h = contentH;
-            if (!SafeGlowBounds(0, 0, shape.w, shape.h)) return;
-            shape.corners = CornerRadius{4, 4, 4, 4};
-        }
+    bool found = false;
+    if (plate) found = ReadNativeGlowShape(indicator, iconPanel, shape);
+    if (!found) found = ReadNativeGlowShape(FindChildByName(iconPanel, L"BackgroundElement"), iconPanel, shape);
+    if (!found) {
+        shape.x = padding.Left; shape.y = padding.Top;
+        shape.w = contentW; shape.h = contentH;
+        if (!SafeGlowBounds(0, 0, shape.w, shape.h)) return;
+        shape.corners = CornerRadius{4, 4, 4, 4};
     }
-    if (pill) {
-        // Broad capsule centered on the native indicator, including inactive dots.
-        // Use the icon's layout size (not its animated/boosted transform).
-        auto icon = FindChildByName(iconPanel, L"Icon");
-        double iconW = icon ? icon.ActualWidth() : 0;
-        double iconH = icon ? icon.ActualHeight() : 0;
-        bool vertical = shape.h > shape.w;
-        // A round indicator has no orientation; its location resolves the edge.
-        if (std::abs(shape.w-shape.h) < 0.5)
-            vertical = std::abs((shape.x+shape.w*0.5)-centerX) >
-                       std::abs((shape.y+shape.h*0.5)-centerY);
-        double available = vertical ? contentH : contentW;
-        double iconLength = vertical ? iconH : iconW;
-        if (!SafeGlowMetric(iconLength) || iconLength <= 0.5) iconLength = available*0.8;
-        double length = (std::min)(available, iconLength)*sizeFrac;
-        double breadth = (std::max)(6.0, (std::min)(12.0, thickness*2.0));
-        double cx = shape.x+shape.w*0.5, cy = shape.y+shape.h*0.5;
-        shape.w = vertical ? breadth : length;
-        shape.h = vertical ? length : breadth;
-        shape.x = cx-shape.w*0.5; shape.y = cy-shape.h*0.5;
-        double radius = breadth*0.5;
-        shape.corners = {radius,radius,radius,radius};
-    }
-    double inset = pill ? 0.0 :
+    double inset =
         (std::max)(1.0, (std::min)(shape.w, shape.h) * (1.0-sizeFrac) * 0.5);
     double w = shape.w-2*inset, h = shape.h-2*inset;
     if (!SafeGlowBounds(shape.x+inset, shape.y+inset, w, h)) return;
@@ -2594,7 +2555,7 @@ void PaintNativeContour(Controls::Grid host, FrameworkElement iconPanel,
     border.BorderThickness({stroke,stroke,stroke,stroke});
     auto strokeColor = color; strokeColor.A = 230;
     border.BorderBrush(Media::SolidColorBrush{strokeColor});
-    color.A = frame ? 0 : static_cast<uint8_t>((std::clamp)(fillOpacity,0,100)*2.55*(pill ? 1.0 : 0.6)+0.5);
+    color.A = frame ? 0 : static_cast<uint8_t>((std::clamp)(fillOpacity,0,100)*2.55*0.6+0.5);
     border.Background(Media::SolidColorBrush{color});
     border.Opacity((std::clamp)(opacity,0.0,1.0));
     border.Visibility(Visibility::Visible);
@@ -2606,8 +2567,6 @@ PCWSTR GlowStyleName(GlowStyle s) {
             return L"full";
         case GlowStyle::LeftBar:
             return L"leftBar";
-        case GlowStyle::BottomBar:
-            return L"bottomBar";
         case GlowStyle::Frame:
         default:
             return L"frame";
@@ -2828,20 +2787,7 @@ TaskbarEdge DetectTaskbarEdge(FrameworkElement iconPanel) {
     return TaskbarEdgeFromAppBar();
 }
 
-BarSide BarSideForGlowStyle(GlowStyle style, TaskbarEdge edge) {
-    if (style == GlowStyle::BottomBar) {
-        switch (edge) {
-            case TaskbarEdge::Left:
-                return BarSide::Left;
-            case TaskbarEdge::Top:
-                return BarSide::Top;
-            case TaskbarEdge::Right:
-                return BarSide::Right;
-            case TaskbarEdge::Bottom:
-            default:
-                return BarSide::Bottom;
-        }
-    }
+BarSide SideBarForTaskbarEdge(TaskbarEdge edge) {
     // Side bar: perpendicular to the taskbar so it does not cover the native
     // running pill (left on bottom/top, under the icon on left/right).
     switch (edge) {
@@ -3303,7 +3249,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         double boxH = panelH;
         GlowContentBoxSize(host, iconPanel, panelW, panelH, boxW, boxH);
 
-        const BarSide barSide = BarSideForGlowStyle(style, edge);
+        const BarSide barSide = SideBarForTaskbarEdge(edge);
 
         // Position only our host; native children keep their relative order.
         EnsureGlowHostZOrder(panel, host, style);
@@ -3344,9 +3290,6 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                 StyleGlowBarOnSide(rect, withAlpha(base, fillA), barT, barLen,
                                    barSide, i, opacity);
             }
-        } else if (style == GlowStyle::BottomBar) {
-            PaintNativeContour(host, iconPanel, style, base, thickness, sizeFrac,
-                               t, fillOpacitySetting);
         }
 
         if (auto icon = FindChildByName(iconPanel, L"Icon")) {
@@ -7749,6 +7692,7 @@ void LoadSettings() {
     }
 
     auto glowStyle = WindhawkUtils::StringSetting::make(L"icons.glowStyle");
+    // Removed bottomBar and unknown saved values fall back to Side.
     s.glowStyle = GlowStyle::LeftBar;
     if (wcscmp(glowStyle.get(), L"full") == 0) {
         s.glowStyle = GlowStyle::Full;
@@ -7756,8 +7700,7 @@ void LoadSettings() {
         s.glowStyle = GlowStyle::Frame;
     } else if (wcscmp(glowStyle.get(), L"leftBar") == 0) {
         s.glowStyle = GlowStyle::LeftBar;
-    } else if (wcscmp(glowStyle.get(), L"bottomBar") == 0) {
-        s.glowStyle = GlowStyle::BottomBar;
+
     }
 
     s.glowThickness = Wh_GetIntSetting(L"icons.glowThickness");
