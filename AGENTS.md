@@ -848,3 +848,11 @@ native panel collections; do not use Append. Deferred children in these
 specific panels have not been demonstrated, but explicit insertion keeps
 notifications balanced with removal. The source guard rejects remaining
 Append calls throughout this mod. Live .45 results are not a .46 preview test.
+
+
+## 0.10.0 submission polish
+
+The embedded source comment links to the public development repository; avoid
+relative references to files absent from windhawk-mods. The stored roundness
+key remains icons.glowRoundness, with the UI label Previews: Roundness (%).
+Geometry/placement helpers use the upstream Chromium-based formatter style.

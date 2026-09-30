@@ -1,5 +1,6 @@
 """Exercise the production host placement planner without Explorer injection."""
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 root=Path(__file__).resolve().parent.parent
@@ -12,7 +13,7 @@ a=s.index('void EnsureGlowHostZOrder(')
 b=s.index('bool ButtonHasOurChrome(',a)
 body=s[a:b]
 assert 'children.RemoveAt(current)' in body and 'children.InsertAt(target, host)' in body
-assert 'if (target == current) return;' in body
+assert re.search(r'if\s*\(target == current\)\s*\{?\s*return;', body)
 creation=s[s.index('Controls::Grid EnsureGlowHost('):s.index('void HideAllGlowLayers(')]
 assert 'children.InsertAt(children.Size(), host)' in creation
 assert '.Append(' not in s  # Native icon and preview collections need explicit insertion.
