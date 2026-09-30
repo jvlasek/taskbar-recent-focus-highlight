@@ -15,7 +15,7 @@ assert 'children.RemoveAt(current)' in body and 'children.InsertAt(target, host)
 assert 'if (target == current) return;' in body
 creation=s[s.index('Controls::Grid EnsureGlowHost('):s.index('void HideAllGlowLayers(')]
 assert 'children.InsertAt(children.Size(), host)' in creation
-assert '.Append(' not in creation and '.Append(' not in body
+assert '.Append(' not in s  # Native icon and preview collections need explicit insertion.
 assert 'SetZIndex(' not in s and 'ZIndexProperty()' not in s
 assert 'RestoreGlowZOrder' not in s and 'WhRecentFocusZOrder' not in s
 clear=s[s.index('void ClearButtonHighlight('):s.index('Controls::Grid EnsureGlowHost(')]

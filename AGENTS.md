@@ -838,3 +838,13 @@ or skip. Frame/Full bypass the old paint-cache early return so native
 geometry is reread on paints; Side keeps its existing cache. Check all styles
 live, including square/circular themes and active/inactive pills. Automated
 math/placement tests are `python tests/run-icon-order-tests.py`.
+
+
+## Explicit preview insertion (0.9.46)
+
+Use `InsertAt(children.Size(), element)` for preview host creation, bringing
+that host to the front, and native-plate marker creation. These also modify
+native panel collections; do not use Append. Deferred children in these
+specific panels have not been demonstrated, but explicit insertion keeps
+notifications balanced with removal. The source guard rejects remaining
+Append calls throughout this mod. Live .45 results are not a .46 preview test.

@@ -42,3 +42,11 @@ Repeat with `--unload-badge present`, enabling the mod first. For a short
 per-style run omit `--test-unload`, `--unload-rounds`, and `--unload-badge`.
 Keep captures and note style/theme/orientation because the harness does not
 read the mod's settings. A failed assertion or visible defect blocks submission.
+
+
+## 0.9.46 follow-up
+
+The three remaining preview Append calls now use InsertAt(Size(), element).
+Build and automated checks passed. Existing live results above remain .45
+results. Pending smoke check: open a multi-window flyout, switch preview
+styles (including native plate), change ranks and disable with cleanup.

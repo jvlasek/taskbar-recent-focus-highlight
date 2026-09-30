@@ -1,4 +1,4 @@
-# Review response — 0.9.45
+# Review response — 0.9.46
 
 The notification-badge regression was reproduced with a four-app harness:
 repeated highlight removal/recreation placed OverlayIcon behind Icon on the
@@ -28,7 +28,7 @@ Automated validation: 30,240 extracted-planner placement cases, invalid-geometry
 and a Windhawk 1.7.3 compiler build. Existing IPC/collector/lifecycle tests
 passed during the previous pass; the harness has not changed.
 
-On the current version, five enabled badge cycles passed (capture
+On .45, five enabled badge cycles passed (capture
 `20260930-022800-951939`). Manual switching between Side, Frame and Full,
 hover, initial positioning and a multi-window flyout showed no issues.
 There was an initial settings-switch hiccup around the removed Edge style;
@@ -36,3 +36,9 @@ its cause was not established. The same Explorer process has been in use
 since .42 without a reported badge recurrence. The badge-present/absent
 lifecycle harness results above belong to .41; those variants have not been
 rerun on .45. Broader theme and multimonitor coverage is not claimed.
+
+Version .46 extends explicit end insertion to the three remaining thumbnail
+panel mutations: overlay creation, bring-to-front and plate ownership marker
+creation. This is preventive consistency; no deferred-child failure was
+reproduced in these flyout panels. Build and automated checks passed; live
+preview validation of .46 is still outstanding.

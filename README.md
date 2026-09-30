@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.9.45 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.9.46 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -130,6 +130,10 @@ Thumbnail HWND mapping follows
    is the cleanest way to pick up new hooks.
 
 ## Badge ordering fix and validation
+
+Version 0.9.46 also uses explicit end insertion for thumbnail overlay creation,
+repositioning and ownership markers. Build and automated checks cover this
+change; a live preview smoke check remains outstanding.
 
 Version 0.9.45 removes Edge to leave the native running/progress indicator area
 clear. Saved `bottomBar` settings fall back to Side. Frame/Full continue to
