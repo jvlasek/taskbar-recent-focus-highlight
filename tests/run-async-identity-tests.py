@@ -6,6 +6,7 @@ root = Path(__file__).resolve().parent.parent
 s = (root/'taskbar-recent-focus-highlight.wh.cpp').read_text(encoding='utf-8')
 data = s[s.index('struct ButtonResolveData {'):s.index('struct ButtonPathCacheEntry {')]
 helpers = s[s.index('bool SameButtonResolveTarget('):s.index('ButtonIdentity GetCachedButtonIdentity(', s.index('bool SameButtonResolveTarget('))]
+running_helper = s[s.index('bool ButtonCountsAsRunning('):s.index('bool ButtonCountsAsRunning(')+s[s.index('bool ButtonCountsAsRunning('):].index('\n}')]+'\n}'
 fixture = r'''
 #include <algorithm>
 #include <atomic>
@@ -32,7 +33,8 @@ struct Entry {
     HWND sampleHwnd = nullptr;
     DWORD samplePid = 0;
     std::vector<CapturedWindow> groupWindows;
-    bool resolveAttempted = false, resolvedWhileRunning = false;
+    bool resolveAttempted = false, resolvedWhileRunning = false, observedRunning = false;
+    ULONGLONG lastRunningTick = 0;
     int emptyResolveAttempts = 0, lastPaintRank = -1;
     ULONGLONG lastResolveTick = 0, resolveSerial = 0, resolveQueuedTick = 0;
     std::optional<ButtonResolveData> resolveResult;
@@ -41,7 +43,12 @@ std::mutex g_buttonPathMutex;
 std::unordered_map<void*, Entry> g_buttonPathCache;
 std::atomic<bool> g_unloading{false}, g_taskbandResolveReady{true};
 constexpr int WM_APP_RESOLVE_BUTTON = 1, kMaxEmptyResolveAttempts = 8;
-constexpr ULONGLONG kUnresolvedRetryMs = 2000;
+constexpr ULONGLONG kUnresolvedRetryMs = 2000, kIsRunningGraceMs = 400;
+int rechecks = 0;
+void ScheduleRefreshAllHighlights(FrameworkElement) {
+    assert(g_buttonPathMutex.try_lock());
+    g_buttonPathMutex.unlock(); ++rechecks;
+}
 ULONGLONG tick = 10000;
 int queries = 0, paints = 0, posts = 0;
 bool postSucceeds = true;
@@ -62,6 +69,7 @@ void* InspectableIdentity(FrameworkElement b) { return b->data.buttonId; }
 bool TaskListButton_IsRunning(FrameworkElement b) { return b->data.running; }
 bool WeakIsSameElement(FrameworkElement a, FrameworkElement b) { return a == b; }
 ButtonResolveData CaptureButtonResolveData(FrameworkElement b) { return b->data; }
+// RUNNING
 // HELPERS
 FrameworkElement button(int id) {
     auto b = std::make_shared<Button>();
@@ -73,6 +81,27 @@ FrameworkElement button(int id) {
 }
 void worker() { std::thread t(ResolveOneButtonOnFocusThread); t.join(); }
 int main() {
+    // Background close: no foreground event or identity worker is required.
+    auto closing = button(88);
+    auto& e = g_buttonPathCache[closing->data.buttonId];
+    e.button = closing; e.sampleHwnd = closing->data.hwnd; e.samplePid = 99;
+    e.lastRunningTick = tick; e.observedRunning = true;
+    closing->data.running = false;
+    assert(!ButtonCountsAsRunning(closing));
+    assert(!e.observedRunning && e.lastRunningTick == 0 && rechecks == 0);
+    // A live sibling permits brief grace, but always arranges an expiry check.
+    e.groupWindows = {{closing->data.hwnd, 42}};
+    e.lastRunningTick = tick;
+    assert(ButtonCountsAsRunning(closing) && rechecks == 1);
+    tick += kIsRunningGraceMs;
+    assert(!ButtonCountsAsRunning(closing) && rechecks == 1);
+    // Relaunch resets episode bookkeeping.
+    closing->data.running = true;
+    e.resolvedWhileRunning = true; e.emptyResolveAttempts = 8;
+    assert(ButtonCountsAsRunning(closing) && e.observedRunning);
+    assert(!e.resolvedWhileRunning && e.emptyResolveAttempts == 0);
+    g_buttonPathCache.clear();
+
     auto b = button(1);
     assert(EnsureButtonPathCached(b, true).empty());
     assert(queries == 0 && g_buttonResolveQueue.size() == 1);
@@ -129,7 +158,7 @@ int main() {
     g_unloading = false; postSucceeds = false;
     assert(!QueueButtonResolve(a) && g_buttonResolveQueue.empty());
 }
-'''.replace('// DATA', data).replace('// HELPERS', helpers)
+'''.replace('// DATA', data).replace('// HELPERS', helpers).replace('// RUNNING', running_helper)
 with tempfile.TemporaryDirectory(prefix='windhawk-async-') as folder:
     cpp=Path(folder)/'test.cpp'; exe=Path(folder)/'test.exe'
     cpp.write_text(fixture, encoding='utf-8')

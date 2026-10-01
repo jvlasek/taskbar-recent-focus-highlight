@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.3
+// @version         0.10.4
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -2076,30 +2076,49 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
     const bool running = TaskListButton_IsRunning(button);
     const ULONGLONG now = GetTickCount64();
     void* id = InspectableIdentity(button);
-    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-    auto it = id ? g_buttonPathCache.find(id) : g_buttonPathCache.end();
-    if (it == g_buttonPathCache.end()) {
-        return running;
-    }
-    if (!WeakIsSameElement(it->second.button, button)) {
-        g_buttonPathCache.erase(it);
-        return running;
-    }
-    auto& e = it->second;
-    if (running) {
-        // New running episode after a not-running observation. The empty
-        // budget must not stay capped from the previous launch.
-        if (!e.observedRunning) {
-            e.resolvedWhileRunning = false;
-            e.emptyResolveAttempts = 0;
+    bool grace = false;
+    {
+        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+        auto it = id ? g_buttonPathCache.find(id) : g_buttonPathCache.end();
+        if (it == g_buttonPathCache.end()) {
+            return running;
         }
-        e.lastRunningTick = now;
-        e.observedRunning = true;
-        return true;
+        if (!WeakIsSameElement(it->second.button, button)) {
+            g_buttonPathCache.erase(it);
+            return running;
+        }
+        auto& e = it->second;
+        if (running) {
+            if (!e.observedRunning) {
+                e.resolvedWhileRunning = false;
+                e.emptyResolveAttempts = 0;
+            }
+            e.lastRunningTick = now;
+            e.observedRunning = true;
+            return true;
+        }
+        e.observedRunning = false;
+        // Grace protects a transient state change, not a closed app. Check
+        // the whole group: the sampled window might close before its siblings.
+        bool liveWindow = HwndMatchesStoredPid(e.sampleHwnd, e.samplePid);
+        for (const auto& window : e.groupWindows) {
+            if (HwndMatchesStoredPid(window.hwnd, window.pid)) {
+                liveWindow = true;
+                break;
+            }
+        }
+        if (!liveWindow) {
+            e.lastRunningTick = 0;
+        }
+        grace = e.lastRunningTick != 0 &&
+                now - e.lastRunningTick < kIsRunningGraceMs;
     }
-    e.observedRunning = false;
-    return e.lastRunningTick != 0 &&
-           now - e.lastRunningTick < kIsRunningGraceMs;
+    if (grace) {
+        // A close animation can report not-running before HWND destruction.
+        // Ensure another pass happens even if Explorer sends no further UVS.
+        ScheduleRefreshAllHighlights(button);
+    }
+    return grace;
 }
 
 std::wstring GetButtonAutomationName(FrameworkElement button) {

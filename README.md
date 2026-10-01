@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.3 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.4 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -352,3 +352,8 @@ Unknown identities wait without highlighting; recency history is retained while
 resolution is pending. Full refreshes use the same path. Flyout clicks already
 resolve on the worker. The tool-window title-presence filter now also avoids
 synchronous window-title messages.
+
+Version 0.10.4 restricts not-running grace to a still-live cached window and
+schedules a recheck while grace applies, so closed pinned apps do not retain
+a highlight waiting for another Explorer event. Live close/relaunch validation
+is still required.

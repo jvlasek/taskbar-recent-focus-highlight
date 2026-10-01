@@ -906,3 +906,11 @@ ShouldIgnoreHwnd now uses GetWindowTitle().empty() for tool-style windows;
 GetWindowTextLengthW is also forbidden there because it sends same-process
 messages. tests/run-async-identity-tests.py exercises production queue, worker
 and UI-result logic with controlled fixtures; it does not emulate XAML.
+
+
+## Not-running grace (0.10.4)
+
+ButtonCountsAsRunning clears lastRunningTick immediately when IsRunning is
+false and no cached sample/group HWND still matches its PID. If a live window
+permits the existing 400ms grace, schedule another full refresh outside the
+cache mutex so expiry is observed without relying on another UVS event.
