@@ -931,3 +931,13 @@ own line. Running-state transitions log only on change. Do not add metadata
 queries solely for logging. `tests/uwspy/record_windhawk.py` wraps the existing
 collector for manual sessions without test apps or UWPSpy. It probes startup,
 checks collector health, and saves timestamped evidence until Ctrl+C.
+
+## Thumbnail window normalization (0.10.7)
+
+HwndFromMappingEntry validates the captured raw HWND/PID before calling
+NormalizeFocusHwnd. Both DataContext and repeater routes therefore return the
+same root identity used by focus tracking and by duplicate/consistency checks.
+Only WS_CHILD windows walk GA_ROOT; top-level owned windows stay distinct.
+IsWindowRecentForPreviewLocked validates the resulting root with the PID stored
+in its recency entry, not the child PID. Do not merge by app ID, process or title.
+Regression checks: `python tests/run-preview-identity-tests.py`.

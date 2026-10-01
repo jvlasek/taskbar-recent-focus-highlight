@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.6
+// @version         0.10.7
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -4581,7 +4581,13 @@ HWND HwndFromMappingEntry(const ThumbnailTaskItemMapping& item) {
     if (item.pid && PidFromHwnd(item.hwnd) != item.pid) {
         return nullptr;
     }
-    return item.hwnd;
+    // Hosted apps can expose the content child to the taskbar while focus
+    // tracking sees its frame. Validate the captured child above, then use
+    // the same root as focus tracking. Recency validates that root against
+    // its own stored PID (which can differ from the child's process).
+    // Both DataContext and repeater lookup share this normalization, so
+    // duplicate detection and their consistency check also compare roots.
+    return NormalizeFocusHwnd(item.hwnd);
 }
 
 // True if two WinRT objects are the same COM identity (different projections

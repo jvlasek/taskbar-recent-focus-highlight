@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.6 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.7 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -366,3 +366,8 @@ Version 0.10.6 adds identity diagnostics (running transitions, queue, worker,
 result, delivery, and UI acceptance) correlated by button pointer and request
 serial. Manual recording: `python tests/uwspy/record_windhawk.py`, then Ctrl+C.
 Enable Mod logs and close other debug viewers before recording.
+
+Version 0.10.7 normalizes thumbnail child windows to the same top-level frame
+used by focus tracking. This fixes hosted Calculator preview recency without
+merging separate top-level windows. Live Calculator/GIMP verification remains
+required; controlled normalization and PID-validation tests pass.
