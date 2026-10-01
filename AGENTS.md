@@ -505,7 +505,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    set. A pinned AutomationId is not a finished Win32 resolve: re-resolve
    once when `IsRunning` becomes true. A known path is not forever either:
    re-resolve when the button is running and the sample HWND is dead or the
-   live image path diverges. Do not wipe a known path on an empty retry, and
+   live image path diverges. Do not wipe a known path on an empty retry for the same captured target, and
    do not treat `GetFileAttributes` missing as stale. UVS must not paint a
    cached rank when the sample HWND is gone (clear chrome, rank **-1**,
    schedule the full bind). Do **not** write paint rank 0 when
@@ -875,3 +875,34 @@ hooking; failures are not retried on subsequent loads of the same view module.
 The init path is serialized before loader hooks activate. The process-image
 cache releases its string allocation at outermost scope exit. Side layers are
 1–2, with only L0/L1 rectangles. Click-path work remains a separate follow-up.
+
+
+## Asynchronous button identity (0.10.3 — current resolver)
+
+This replaces the earlier synchronous full-bind/press metadata and stale-check
+implementation. EnsureButtonPathCached captures task item/group HWNDs and PIDs
+on the UI thread, then queues plain ButtonResolveData on the existing focus
+worker. No XAML or task-item reference crosses that queue. Worker results are
+stored under the button-cache mutex by globally unique request serial; the
+worker never resolves weak XAML references. The UI consumes a result only after
+recapturing the button's HWND/PID, running state, AutomationId and group list.
+A replaced cache row or newer click invalidates the earlier serial.
+
+Clicks force a fresh request, not a synchronous metadata lookup. Full refreshes
+share the resolver. One queued request per button, maximum 128 plus one in
+flight. Five-second deadlines apply before work and when accepting results;
+they do not cancel synchronous Windows APIs. Completion repaints must not
+start routine refresh requests (allowIdentityRefresh=false), avoiding a
+result/requery loop. A changed target may queue its replacement. Expired
+same-target results cool down until a later normal refresh.
+
+Keep confirmed recency while async resolution is pending: absence of a cached
+identity is not proof of a tray-only app. RecomputeRanksForDesktopLocked still
+requires exact running-button identity before showing a rank. The old confirm
+lambda which immediately demoted unresolved apps was removed. Uninit joins the
+worker, clears its value-only queue, then performs the existing UI drain.
+
+ShouldIgnoreHwnd now uses GetWindowTitle().empty() for tool-style windows;
+GetWindowTextLengthW is also forbidden there because it sends same-process
+messages. tests/run-async-identity-tests.py exercises production queue, worker
+and UI-result logic with controlled fixtures; it does not emulate XAML.

@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.2 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.3 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -342,3 +342,13 @@ titles stay empty; window identity and flyout ranking do not depend on titles.
 Version 0.10.2 claims late view-hook attempts atomically, releases the scoped
 process-path cache buffer, and limits Side bar layers to 1–2. Saved 3-layer
 settings become 2 with the same appearance. Click-path resolution is unchanged.
+
+Version 0.10.3 keeps click-triggered identity checks but moves executable-path
+and AppUserModelID queries for button resolution to the existing focus worker.
+UI capture and result validation still use the taskbar thread. Requests are
+coalesced per button, bounded to 128 queued entries, and results expire after
+five seconds. Expiry does not cancel an OS call or allow early DLL unload.
+Unknown identities wait without highlighting; recency history is retained while
+resolution is pending. Full refreshes use the same path. Flyout clicks already
+resolve on the worker. The tool-window title-presence filter now also avoids
+synchronous window-title messages.
