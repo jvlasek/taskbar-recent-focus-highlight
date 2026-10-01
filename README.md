@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.1 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.2 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -338,3 +338,7 @@ These tests do not inject into Explorer or prove visual correctness.
 Version 0.10.1 reads stored window titles without messaging the owning window,
 so a hung same-process folder window cannot block this title-read path. Missing
 titles stay empty; window identity and flyout ranking do not depend on titles.
+
+Version 0.10.2 claims late view-hook attempts atomically, releases the scoped
+process-path cache buffer, and limits Side bar layers to 1–2. Saved 3-layer
+settings become 2 with the same appearance. Click-path resolution is unchanged.

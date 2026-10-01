@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.1
+// @version         0.10.2
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -187,9 +187,9 @@ to clear highlights.
         Frame/Full: inset within native background (≤100, minimum 1px inset).
         Side bar: bar length.
     - glowLayers: 2
-      $name: Layers
+      $name: Side bar layers
       $description: >-
-        Side bar: soft outer glow layers. Frame/Full use one contour and
+        Side bar: 1 = main bar, 2 = main bar plus soft outer glow. Frame/Full use one contour and
         ignore this setting.
     - glowFillOpacity: 40
       $name: Fill opacity
@@ -227,7 +227,7 @@ to clear highlights.
         title wash for ranks 2+. Title bar = thin line under the title
         (thickness follows Icons → Thickness). Title background = soft wash
         behind the title. Plate = tint the whole card (native corners stay;
-        the overlay fallback uses Icons → Roundness).
+        the overlay fallback uses Previews: Roundness).
       $options:
       - titleBar: Bar under window title
       - titleBg: Title background tint
@@ -392,7 +392,7 @@ struct Settings {
     int glowThickness = 3;      // px
     int glowRoundness = 28;     // % of glow box
     int glowSize = 92;          // % of icon panel (clamped to fit)
-    int glowLayers = 2;         // 1–3
+    int glowLayers = 2;         // 1–2 (side bar only)
     int glowFillOpacity = 40;   // % for Full / left / bottom icon styles
     int previewFillOpacity = 40;  // % for thumbnail plate / titleBg only
     int decayMinutes = 30;
@@ -608,7 +608,7 @@ std::mutex g_thumbViewsMutex;
 std::vector<winrt::weak_ref<FrameworkElement>> g_trackedThumbViews;
 
 std::atomic<bool> g_unloading{false};
-std::atomic<bool> g_taskbarViewDllLoaded{false};
+std::atomic<bool> g_taskbarViewHookAttempted{false};
 // After decay / empty ranks / desktop switch: ApplyAllHighlights must visit
 // every button. UVS must not clear chrome just because this is set (flicker).
 std::atomic<bool> g_pendingOverlaySweep{false};
@@ -764,9 +764,8 @@ constexpr PCWSTR kGlowElementName = L"WhRecentFocusGlow";
 constexpr PCWSTR kGlowLayerNames[] = {
     L"WhRecentFocusGlowL0",
     L"WhRecentFocusGlowL1",
-    L"WhRecentFocusGlowL2",
 };
-constexpr int kGlowMaxLayers = 3;
+constexpr int kGlowMaxLayers = 2;
 constexpr PCWSTR kBackgroundElementName = L"BackgroundElement";
 // Thumbnail preview glow (own named overlays on TaskItemThumbnailView).
 constexpr PCWSTR kThumbGlowElementName = L"WhRecentFocusThumbGlow";
@@ -1121,7 +1120,7 @@ struct ProcessImagePathCacheScope {
         if (--g_imagePathCacheScope <= 0) {
             g_imagePathCacheScope = 0;
             g_imagePathCachePid = 0;
-            g_imagePathCache.clear();
+            std::wstring().swap(g_imagePathCache);
         }
     }
 };
@@ -2397,7 +2396,7 @@ void ClearButtonHighlight(FrameworkElement button) {
     }
 }
 
-// Ensure glow host grid exists (L0–L2 rectangles). Returns host or nullptr.
+// Ensure glow host grid exists (L0–L1 rectangles). Returns host or nullptr.
 Controls::Grid EnsureGlowHost(Controls::Panel panel,
                               FrameworkElement iconPanel) {
     Controls::Grid host = nullptr;
@@ -2426,9 +2425,6 @@ Controls::Grid EnsureGlowHost(Controls::Panel panel,
                            IsHitTestVisible="False"
                            Fill="Transparent"/>
                 <Rectangle Name="WhRecentFocusGlowL1"
-                           IsHitTestVisible="False"
-                           Fill="Transparent"/>
-                <Rectangle Name="WhRecentFocusGlowL2"
                            IsHitTestVisible="False"
                            Fill="Transparent"/>
             </Grid>
@@ -3330,9 +3326,8 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                 BarLengthForSide(boxW, boxH, barSide, sizeFrac);
             const int fillBase =
                 static_cast<int>(fillOpacitySetting * 2.55 + 0.5);
-            const int nLeft = (std::max)(1, (std::min)(layers, 2));
 
-            for (int i = 0; i < nLeft; ++i) {
+            for (int i = 0; i < layers; ++i) {
                 auto rect = FindChildByName(host, kGlowLayerNames[i])
                                 .try_as<Shapes::Rectangle>();
                 if (!rect) {
@@ -6654,13 +6649,14 @@ HMODULE GetTaskbarViewModuleHandle() {
 }
 
 void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName) {
-    if (g_taskbarViewDllLoaded.load() ||
-        GetTaskbarViewModuleHandle() != module) {
+    if (g_taskbarViewHookAttempted.load() ||
+        GetTaskbarViewModuleHandle() != module ||
+        g_taskbarViewHookAttempted.exchange(true)) {
         return;
     }
     Wh_Log(L"Loaded %s", lpLibFileName);
+    // Claim once before resolving symbols, including when resolution fails.
     if (HookTaskbarViewDllSymbols(module)) {
-        g_taskbarViewDllLoaded = true;
         Wh_ApplyHookOperations();
     }
 }
@@ -7786,8 +7782,8 @@ void LoadSettings() {
     if (s.glowLayers < 1) {
         s.glowLayers = 1;
     }
-    if (s.glowLayers > 3) {
-        s.glowLayers = 3;
+    if (s.glowLayers > kGlowMaxLayers) {
+        s.glowLayers = kGlowMaxLayers;
     }
 
     s.glowFillOpacity = Wh_GetIntSetting(L"icons.glowFillOpacity");
@@ -7941,7 +7937,7 @@ BOOL Wh_ModInit() {
             ReleaseTaskbarDllIfWeLoadedIt();
             return FALSE;
         }
-        g_taskbarViewDllLoaded = true;
+        g_taskbarViewHookAttempted = true;
     } else {
         Wh_Log(L"Taskbar view module not loaded yet");
     }
@@ -7957,14 +7953,8 @@ BOOL Wh_ModInit() {
 void Wh_ModAfterInit() {
     Wh_Log(L">");
 
-    if (!g_taskbarViewDllLoaded) {
-        if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
-            Wh_Log(L"Got Taskbar.View.dll");
-            if (HookTaskbarViewDllSymbols(taskbarViewModule)) {
-                g_taskbarViewDllLoaded = true;
-                Wh_ApplyHookOperations();
-            }
-        }
+    if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
+        HandleLoadedModuleIfTaskbarView(taskbarViewModule, L"Taskbar view (after init)");
     }
 
     if (HWND fg = GetForegroundWindow()) {

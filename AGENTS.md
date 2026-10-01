@@ -865,3 +865,13 @@ when unavailable or no text is returned. Do not fall back to GetWindowTextW:
 it synchronously messages same-process Explorer windows and can stall the
 focus worker and unload join. No per-app placeholders or retrieval-state model.
 This only removes the title-message dependency, not all possible blocking calls.
+
+
+## Review follow-up (0.10.2)
+
+Late view-hook installation shares HandleLoadedModuleIfTaskbarView between
+LoadLibraryExW and AfterInit. Atomically claim g_taskbarViewHookAttempted before
+hooking; failures are not retried on subsequent loads of the same view module.
+The init path is serialized before loader hooks activate. The process-image
+cache releases its string allocation at outermost scope exit. Side layers are
+1–2, with only L0/L1 rectangles. Click-path work remains a separate follow-up.
