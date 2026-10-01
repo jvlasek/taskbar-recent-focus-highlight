@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.0
+// @version         0.10.1
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -1471,8 +1471,21 @@ bool IsTransientForeground(HWND hWnd) {
 }
 
 std::wstring GetWindowTitle(HWND hWnd) {
-    wchar_t buf[512];
-    int n = GetWindowTextW(hWnd, buf, ARRAYSIZE(buf));
+    // GetWindowTextW sends WM_GETTEXT to same-process windows, so a hung
+    // Explorer folder can stall our worker and its shutdown join. Read stored
+    // text without messaging; missing text is acceptable for this label.
+    using InternalGetWindowText_t = int(WINAPI*)(HWND, LPWSTR, int);
+    static const auto readTitle = []() -> InternalGetWindowText_t {
+        HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        return user32 ? reinterpret_cast<InternalGetWindowText_t>(
+                            GetProcAddress(user32, "InternalGetWindowText"))
+                      : nullptr;
+    }();
+    if (!readTitle) {
+        return {};
+    }
+    wchar_t buf[512]{};
+    int n = readTitle(hWnd, buf, ARRAYSIZE(buf));
     if (n <= 0) {
         return {};
     }

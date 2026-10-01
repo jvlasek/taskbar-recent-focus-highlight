@@ -856,3 +856,12 @@ The embedded source comment links to the public development repository; avoid
 relative references to files absent from windhawk-mods. The stored roundness
 key remains icons.glowRoundness, with the UI label Previews: Roundness (%).
 Geometry/placement helpers use the upstream Chromium-based formatter style.
+
+
+## Window title reads (0.10.1)
+
+GetWindowTitle dynamically resolves InternalGetWindowText and returns empty
+when unavailable or no text is returned. Do not fall back to GetWindowTextW:
+it synchronously messages same-process Explorer windows and can stall the
+focus worker and unload join. No per-app placeholders or retrieval-state model.
+This only removes the title-message dependency, not all possible blocking calls.

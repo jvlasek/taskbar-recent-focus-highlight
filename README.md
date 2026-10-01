@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.0 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.1 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -334,3 +334,7 @@ does not certify visual appearance, flyout behavior or all Windows builds.
 against 30,240 cases and checks that host creation uses explicit insertion.
 IPC, collector and lifecycle checks are documented in the harness guide.
 These tests do not inject into Explorer or prove visual correctness.
+
+Version 0.10.1 reads stored window titles without messaging the owning window,
+so a hung same-process folder window cannot block this title-read path. Missing
+titles stay empty; window identity and flyout ranking do not depend on titles.
