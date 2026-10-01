@@ -941,3 +941,18 @@ Only WS_CHILD windows walk GA_ROOT; top-level owned windows stay distinct.
 IsWindowRecentForPreviewLocked validates the resulting root with the PID stored
 in its recency entry, not the child PID. Do not merge by app ID, process or title.
 Regression checks: `python tests/run-preview-identity-tests.py`.
+
+## Flyout diagnostics (0.10.8)
+
+This diagnostic release preserves matching behavior. With Mod logs enabled,
+`Preview window` records raw/frame HWNDs, PIDs, classes, style, parent/root and
+owner at focus confirmation and thumbnail lookup. Frame child enumeration is
+bounded to 32 diagnostic observations, never used for matching. Mapping creation,
+DataContext, collection capture, GetAt comparisons and refresh requests/callbacks
+are logged to distinguish missing relationships from missing refreshes.
+
+Use `python tests/uwspy/record_windhawk.py`. Start recording before opening the
+first Calculator; focus/type into it, minimize it, launch a second, then inspect
+the flyout. Move away and reopen the flyout without selecting either window.
+Stop with Ctrl+C and keep both Calculators open for inspection. These extra
+observations can affect timing; this is not a fix for detachment or stale lookup.

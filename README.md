@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.7 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.8 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -371,3 +371,18 @@ Version 0.10.7 normalizes thumbnail child windows to the same top-level frame
 used by focus tracking. This fixes hosted Calculator preview recency without
 merging separate top-level windows. Live Calculator/GIMP verification remains
 required; controlled normalization and PID-validation tests pass.
+
+## Flyout diagnostics (0.10.8)
+
+This diagnostic release preserves matching behavior. With Mod logs enabled,
+`Preview window` records raw/frame HWNDs, PIDs, classes, style, parent/root and
+owner at focus confirmation and thumbnail lookup. Frame child enumeration is
+bounded to 32 diagnostic observations, never used for matching. Mapping creation,
+DataContext, collection capture, GetAt comparisons and refresh requests/callbacks
+are logged to distinguish missing relationships from missing refreshes.
+
+Use `python tests/uwspy/record_windhawk.py`. Start recording before opening the
+first Calculator; focus/type into it, minimize it, launch a second, then inspect
+the flyout. Move away and reopen the flyout without selecting either window.
+Stop with Ctrl+C and keep both Calculators open for inspection. These extra
+observations can affect timing; this is not a fix for detachment or stale lookup.

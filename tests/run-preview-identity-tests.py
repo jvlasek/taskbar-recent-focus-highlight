@@ -26,7 +26,9 @@ DWORD PidFromHwnd(HWND h) { return IsWindow(h) ? windows.at(h).pid : 0; }
 long GetWindowLong(HWND h, int) { return windows.at(h).style; }
 HWND GetAncestor(HWND h, int flag) { assert(flag == GA_ROOT); return windows.at(h).root; }
 bool HwndMatchesStoredPid(HWND h, DWORD p) { return p && PidFromHwnd(h) == p; }
-struct ThumbnailTaskItemMapping { HWND hwnd; DWORD pid; };
+struct ThumbnailTaskItemMapping { HWND hwnd; DWORD pid; void* taskGroup=nullptr; void* taskItem=nullptr; };
+template<class... T> void Wh_Log(const wchar_t*, T...) {}
+void LogPreviewWindowIdentity(const wchar_t*, HWND) {}
 struct Recent { ULONGLONG lastConfirmedTick; DWORD pid; };
 struct DesktopRecencyState { std::map<HWND, Recent> windowFocusMap; };
 struct Settings { int previewDecayMinutes = 15; } settings;
