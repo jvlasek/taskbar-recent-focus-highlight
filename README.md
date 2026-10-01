@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.5 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.6 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -361,3 +361,8 @@ is still required.
 Version 0.10.5 clears the visual on the first observed not-running state, even
 if a closing HWND remains alive. The 400ms grace now protects ranking only.
 Explorer must still deliver its state update; live timing is unverified.
+
+Version 0.10.6 adds identity diagnostics (running transitions, queue, worker,
+result, delivery, and UI acceptance) correlated by button pointer and request
+serial. Manual recording: `python tests/uwspy/record_windhawk.py`, then Ctrl+C.
+Enable Mod logs and close other debug viewers before recording.

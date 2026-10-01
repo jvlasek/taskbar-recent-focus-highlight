@@ -194,3 +194,25 @@ means five cycles per phase (30 total with three pairs). Use
 is disabled. Labels include the round number; no settings are changed by code.
 `test_lifecycle.py` checks phase ordering and reference preservation without
 interacting with Explorer.
+
+## Manual log recording
+
+For Settings/Calculator close/reopen testing, no harness or UWPSpy is needed.
+Enable the mod's **Mod logs**, and close Windhawk's log viewer and DebugView.
+From the repository root:
+
+```powershell
+python .\tests\uwspy\record_windhawk.py
+```
+
+Wait for **Recording ready**, reproduce both a successful and failed reopen,
+then return to the terminal and press **Ctrl+C**. The printed evidence folder
+under `tests/uwspy/captures/manual-...` contains `windhawk.log` and
+`windhawk.jsonl`. Record which app failed and the approximate time. Collection
+starts now; it cannot recover earlier messages. `--output` sets the parent
+folder, and `--dbgview` selects a portable DbgViewMini installation.
+
+Version 0.10.6 `Identity` messages show running transitions and each request's
+queue, worker, result, delivery, and acceptance. `sameTarget=0`, `live=0`, or
+`timely=0` explain rejection; `published=0` can mean supersession or unload.
+A successful probe verifies the collector, not that mod logging is enabled.

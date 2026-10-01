@@ -22,6 +22,7 @@ fixture = r'''
 using DWORD = unsigned long;
 using ULONGLONG = unsigned long long;
 using HWND = void*;
+template<class... T> void Wh_Log(const wchar_t*, T...) {}
 struct CapturedWindow { HWND hwnd; DWORD pid; };
 // DATA
 struct Button { ButtonResolveData data; };

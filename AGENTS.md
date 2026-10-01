@@ -921,3 +921,13 @@ ButtonCountsAsRunning returns the observed running state, never the grace
 result. Grace retains lastRunningTick for PathAppearsOnTaskbar and schedules
 expiry, but must not authorize painting a stopped button. This separates
 transient rank preservation from immediate visual clearing.
+
+## Identity diagnostics (0.10.6)
+
+Identity log lines correlate button identity and request serial across queue,
+worker, result publication/dispatch and UI acceptance. Acceptance logs expose
+target changes, HWND/PID liveness and deadline rejection; supersession has its
+own line. Running-state transitions log only on change. Do not add metadata
+queries solely for logging. `tests/uwspy/record_windhawk.py` wraps the existing
+collector for manual sessions without test apps or UWPSpy. It probes startup,
+checks collector health, and saves timestamped evidence until Ctrl+C.

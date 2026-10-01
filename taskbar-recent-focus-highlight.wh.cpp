@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.5
+// @version         0.10.6
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -2088,6 +2088,11 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
             return running;
         }
         auto& e = it->second;
+        if (running != e.observedRunning) {
+            Wh_Log(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u path=%s appId=%s",
+                   id, e.observedRunning, running, e.sampleHwnd, e.samplePid,
+                   e.pathUpper.c_str(), e.appIdUpper.c_str());
+        }
         if (running) {
             if (!e.observedRunning) {
                 e.resolvedWhileRunning = false;
@@ -3935,9 +3940,14 @@ void ResolveOneButtonOnFocusThread() {
         current = it != g_buttonPathCache.end() &&
                   it->second.resolveSerial == data.serial;
     }
-    if (current && !g_unloading.load() &&
-        GetTickCount64() - data.queuedTick <= kButtonResolveDeadlineMs &&
-        ButtonResolveWindowsLive(data)) {
+    const auto serial = data.serial;
+    void* const buttonId = data.buttonId;
+    const bool timely = GetTickCount64() - data.queuedTick <= kButtonResolveDeadlineMs;
+    const bool live = current && timely && ButtonResolveWindowsLive(data);
+    Wh_Log(L"Identity worker: button=%p request=%llu hwnd=%p pid=%u running=%d current=%d timely=%d live=%d age=%llu",
+           buttonId, serial, data.hwnd, data.pid, data.running, current, timely,
+           live, GetTickCount64() - data.queuedTick);
+    if (current && !g_unloading.load() && timely && live) {
         // A deadline rejects late results; it cannot cancel an OS call. The
         // worker is still joined before unloading the mod.
         try {
@@ -3955,6 +3965,9 @@ void ResolveOneButtonOnFocusThread() {
             data.appId.clear();
         }
     }
+    Wh_Log(L"Identity result: button=%p request=%llu age=%llu path=%s appId=%s class=%s",
+           buttonId, serial, GetTickCount64() - data.queuedTick,
+           data.path.c_str(), data.appId.c_str(), data.windowClass.c_str());
     bool published = false;
     if (!g_unloading.load()) {
         std::lock_guard<std::mutex> lock(g_buttonPathMutex);
@@ -3965,9 +3978,12 @@ void ResolveOneButtonOnFocusThread() {
             published = true;
         }
     }
+    bool dispatched = false;
     if (published) {
-        RunOnUiThread([]() { ApplyAllHighlights_UIThread(false); });
+        dispatched = RunOnUiThread([]() { ApplyAllHighlights_UIThread(false); });
     }
+    Wh_Log(L"Identity delivery: button=%p request=%llu published=%d dispatched=%d",
+           buttonId, serial, published, dispatched);
     {
         std::lock_guard<std::mutex> lock(g_buttonResolveMutex);
         g_buttonResolvePosted = !g_unloading.load() &&
@@ -4023,9 +4039,16 @@ std::wstring EnsureButtonPathCached(FrameworkElement button,
     if (!force && !allowRefresh && !result)
         return {};
     auto data = CaptureButtonResolveData(button);
-    bool accepted = result && SameButtonResolveTarget(*result, data) &&
-                    ButtonResolveWindowsLive(*result) &&
-                    now - result->queuedTick <= kButtonResolveDeadlineMs;
+    const bool sameTarget = result && SameButtonResolveTarget(*result, data);
+    const bool liveResult = result && ButtonResolveWindowsLive(*result);
+    const bool timelyResult = result && now - result->queuedTick <= kButtonResolveDeadlineMs;
+    bool accepted = sameTarget && liveResult && timelyResult;
+    if (result) {
+        Wh_Log(L"Identity consume: button=%p request=%llu accepted=%d sameTarget=%d live=%d timely=%d oldHwnd=%p oldPid=%u hwnd=%p pid=%u running=%d age=%llu",
+               id, result->serial, accepted, sameTarget, liveResult, timelyResult,
+               result->hwnd, result->pid, data.hwnd, data.pid, data.running,
+               now - result->queuedTick);
+    }
     // A stale result is discarded, never installed onto a recycled button.
     std::wstring path;
     {
@@ -4033,8 +4056,11 @@ std::wstring EnsureButtonPathCached(FrameworkElement button,
         auto& e = g_buttonPathCache[id];
         if (!e.button)
             e.button = winrt::make_weak(button);
-        if (result && e.resolveSerial != result->serial)
-            return e.pathUpper; // A newer request owns this row now.
+        if (result && e.resolveSerial != result->serial) {
+            Wh_Log(L"Identity superseded: button=%p request=%llu current=%llu",
+                   id, result->serial, e.resolveSerial);
+            return e.pathUpper;
+        }
         e.resolveResult.reset();
         e.resolveSerial = 0;
         e.lastResolveTick = now;
@@ -4087,7 +4113,11 @@ std::wstring EnsureButtonPathCached(FrameworkElement button,
         e.resolveSerial = data.serial;
         e.resolveQueuedTick = now;
     }
-    if (!QueueButtonResolve(data)) {
+    const bool queued = QueueButtonResolve(data);
+    Wh_Log(L"Identity queue: button=%p request=%llu force=%d queued=%d hwnd=%p pid=%u running=%d group=%zu automationId=%s",
+           id, data.serial, force, queued, data.hwnd, data.pid, data.running,
+           data.windows.size(), data.automationId.c_str());
+    if (!queued) {
         std::lock_guard<std::mutex> lock(g_buttonPathMutex);
         auto it = g_buttonPathCache.find(id);
         if (it != g_buttonPathCache.end() &&
