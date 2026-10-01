@@ -914,3 +914,10 @@ ButtonCountsAsRunning clears lastRunningTick immediately when IsRunning is
 false and no cached sample/group HWND still matches its PID. If a live window
 permits the existing 400ms grace, schedule another full refresh outside the
 cache mutex so expiry is observed without relying on another UVS event.
+
+## Immediate stopped-button visuals (0.10.5)
+
+ButtonCountsAsRunning returns the observed running state, never the grace
+result. Grace retains lastRunningTick for PathAppearsOnTaskbar and schedules
+expiry, but must not authorize painting a stopped button. This separates
+transient rank preservation from immediate visual clearing.

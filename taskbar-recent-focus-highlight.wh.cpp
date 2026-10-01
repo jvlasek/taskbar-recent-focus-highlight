@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.4
+// @version         0.10.5
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -2118,7 +2118,9 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
         // Ensure another pass happens even if Explorer sends no further UVS.
         ScheduleRefreshAllHighlights(button);
     }
-    return grace;
+    // Grace preserves rank eligibility only. A stopped button must never
+    // keep painting merely because its closing HWND is still alive.
+    return false;
 }
 
 std::wstring GetButtonAutomationName(FrameworkElement button) {
@@ -6149,8 +6151,8 @@ void RefreshButtonHighlight(FrameworkElement button) {
     }
 
     // Closed / pinned-not-running: drop chrome here and rebind so the slot
-    // frees. Read the rank first — clear stores 0. Grace inside
-    // ButtonCountsAsRunning still covers Alt-Tab flicker.
+    // frees. Read the rank first — clear stores 0.
+    // Rank eligibility retains grace; visuals follow IsRunning immediately.
     if (!ButtonCountsAsRunning(button)) {
         const int cached = GetCachedPaintState(button).rank;
         if (ButtonHasOurChrome(button)) {

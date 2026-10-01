@@ -89,10 +89,11 @@ int main() {
     closing->data.running = false;
     assert(!ButtonCountsAsRunning(closing));
     assert(!e.observedRunning && e.lastRunningTick == 0 && rechecks == 0);
-    // A live sibling permits brief grace, but always arranges an expiry check.
+    // A live sibling preserves rank grace, but never keeps a stopped icon lit.
     e.groupWindows = {{closing->data.hwnd, 42}};
     e.lastRunningTick = tick;
-    assert(ButtonCountsAsRunning(closing) && rechecks == 1);
+    assert(!ButtonCountsAsRunning(closing) && rechecks == 1);
+    assert(e.lastRunningTick == tick && !e.observedRunning);
     tick += kIsRunningGraceMs;
     assert(!ButtonCountsAsRunning(closing) && rechecks == 1);
     // Relaunch resets episode bookkeeping.
