@@ -948,3 +948,22 @@ frame-child enumeration remains. Existing async identity logs and the manual
 recorder remain. Regression test: `python tests/run-preview-identity-tests.py`.
 Live Calculator launch/minimize/relaunch cycles and GIMP multi-window testing
 are required before calling this build validated in Explorer.
+
+
+## Temporary first-activation diagnostics (0.10.12)
+
+Search `TEMP_PREVIEW_ACTIVATION` in the source to remove this instrumentation
+once the Calculator first-activation issue is understood. It logs foreground
+arrival/normalization/acceptance, identity rejection reasons, preview scheduling
+and confirmation exits, and app-vs-thumbnail HWNDs for actual task-item clicks.
+Exit line numbers refer to this exact diagnostic source. Existing confirmation
+logs identify successful stamps. The comparison getter does not select a new
+click target; recency, timers, filtering and rendering behavior are unchanged.
+Remove the temporary comparison helper, its declaration/call, marked log lines,
+and this section after diagnosis. No cache, timer or retry machinery is added.
+Logging and the extra getter can affect timing; this is not a fix or validation.
+
+Record with Mod logs enabled and `python tests/uwspy/record_windhawk.py`.
+Click a flashing Calculator, keep it focused a few seconds, inspect the flyout,
+then switch away and focus that same Calculator again. Stop with Ctrl+C and
+compare both activations. The taskbar icon's 8-second minimum is independent.

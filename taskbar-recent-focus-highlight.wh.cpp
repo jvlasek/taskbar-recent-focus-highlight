@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.11
+// @version         0.10.12
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -1536,23 +1536,31 @@ bool ResolveAppIdentity(HWND hWnd,
 
     hWnd = NormalizeFocusHwnd(hWnd);
     if (ShouldIgnoreHwnd(hWnd)) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION identity reject: hwnd=%p reason=ignored-window", hWnd);
         return false;
     }
 
     DWORD processId = 0;
     GetWindowThreadProcessId(hWnd, &processId);
     if (!processId) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION identity reject: hwnd=%p reason=no-pid", hWnd);
         return false;
     }
 
     const std::wstring classUpper = ToUpper(GetWindowClassName(hWnd));
     const bool explorerFolder = IsExplorerFolderWindowClass(classUpper);
     if (IsOwnExplorerProcess(processId) && !explorerFolder) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION identity reject: hwnd=%p reason=shell-explorer", hWnd);
         return false;
     }
 
     std::wstring path = GetProcessImagePath(processId);
     if (path.empty()) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION identity reject: hwnd=%p reason=no-process-path", hWnd);
         return false;
     }
 
@@ -1561,12 +1569,16 @@ bool ResolveAppIdentity(HWND hWnd,
     std::wstring fileNameUpper = ToUpper(fileName);
 
     if (IsShellHostFileName(fileNameUpper) && !explorerFolder) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION identity reject: hwnd=%p reason=shell-host", hWnd);
         return false;
     }
 
     std::wstring appIdUpper = ToUpper(GetWindowAppUserModelId(hWnd));
 
     if (IsUwpHostFileName(fileNameUpper) && appIdUpper.empty()) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION identity reject: hwnd=%p reason=host-without-appid", hWnd);
         return false;
     }
 
@@ -1587,6 +1599,8 @@ bool ResolveAppIdentity(HWND hWnd,
 
     if (IsExcludedKey(key, ToUpper(displayName), appIdUpper)) {
         Wh_Log(L"Excluded: %s", displayName.c_str());
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION identity reject: hwnd=%p reason=excluded", hWnd);
         return false;
     }
 
@@ -1758,15 +1772,23 @@ void StampWindowRecencyLocked(DesktopRecencyState& desk,
                               const std::wstring& appIdUpper = {});
 
 void ConfirmPreviewFocusNow(HWND hwnd, DWORD expectedPid = 0) {
+    // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+    Wh_Log(L"TEMP_PREVIEW_ACTIVATION click confirm enter: hwnd=%p expectedPid=%lu", hwnd, expectedPid);
     if (!hwnd || g_unloading.load() ||
         !SettingsSnap()->previewHighlightEnabled) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION click confirm rejected: line=%d hwnd=%p", __LINE__, hwnd);
         return;
     }
     if (expectedPid && !HwndMatchesStoredPid(hwnd, expectedPid)) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION click confirm rejected: line=%d hwnd=%p", __LINE__, hwnd);
         return;
     }
     hwnd = NormalizeFocusHwnd(hwnd);
     if (ShouldIgnoreHwnd(hwnd)) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION click confirm rejected: line=%d hwnd=%p", __LINE__, hwnd);
         return;
     }
 
@@ -1777,9 +1799,13 @@ void ConfirmPreviewFocusNow(HWND hwnd, DWORD expectedPid = 0) {
     DWORD processId = 0;
     if (!ResolveAppIdentity(hwnd, key, displayName, processId, &windowTitle,
                             &appIdUpper)) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION click confirm rejected: line=%d hwnd=%p", __LINE__, hwnd);
         return;
     }
     if (IsExcludedKey(key, ToUpper(displayName), appIdUpper)) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION click confirm rejected: line=%d hwnd=%p", __LINE__, hwnd);
         return;
     }
 
@@ -3638,6 +3664,8 @@ using CTaskListWnd_HandleClick_t = HRESULT(WINAPI*)(void* pThis,
                                                     void** launcherOptions);
 CTaskListWnd_HandleClick_t CTaskListWnd_HandleClick_Original;
 HWND GetWindowFromTaskItem(void* taskItem);
+// TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+void LogTemporaryPreviewClick(void* taskItem, HWND appHwnd, HRESULT hr);
 
 HRESULT WINAPI CTaskListWnd_HandleClick_Hook(void* pThis,
                                              void* taskGroup,
@@ -3656,13 +3684,18 @@ HRESULT WINAPI CTaskListWnd_HandleClick_Hook(void* pThis,
     // Confirm on the focus thread — ResolveAppIdentity + preview apply must
     // not run inline on the taskbar UI thread inside HandleClick.
     if (SUCCEEDED(hr) && taskItem) {
-        if (HWND clicked = GetWindowFromTaskItem(taskItem)) {
+        HWND clicked = GetWindowFromTaskItem(taskItem);
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        LogTemporaryPreviewClick(taskItem, clicked, hr);
+        if (clicked) {
             const DWORD pid = PidFromHwnd(clicked);
             PostToHookThread(WM_APP_PREVIEW_CLICK,
                              reinterpret_cast<WPARAM>(clicked),
                              static_cast<LPARAM>(pid));
         }
     }
+    // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+    Wh_Log(L"TEMP_PREVIEW_ACTIVATION click return: item=%p hr=%08X", taskItem, static_cast<unsigned>(hr));
     return hr;
 }
 
@@ -4551,6 +4584,17 @@ HWND GetWindowForThumbnailTaskItem(void* taskItem) {
     }
     return GetWindowFromTaskItem(taskItem);
 }
+
+// TEMP_PREVIEW_ACTIVATION BEGIN: temporary 0.10.12 comparison only.
+// Remove this helper, declaration and calls after first-activation diagnosis.
+// Do not change the click target based on this diagnostic result.
+void LogTemporaryPreviewClick(void* taskItem, HWND appHwnd, HRESULT hr) {
+    HWND thumbnailHwnd = GetWindowForThumbnailTaskItem(taskItem);
+    Wh_Log(L"TEMP_PREVIEW_ACTIVATION click capture: item=%p hr=%08X "
+           L"appHwnd=%p thumbnailHwnd=%p postedHwnd=%p",
+           taskItem, static_cast<unsigned>(hr), appHwnd, thumbnailHwnd, appHwnd);
+}
+// TEMP_PREVIEW_ACTIVATION END
 
 void AddThumbnailTaskItemMapping(
     winrt::Windows::Foundation::IInspectable thumbnail,
@@ -6867,8 +6911,12 @@ bool StillPendingForeground(const PendingFocus& pending,
 }
 
 void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
+    // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+    Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview confirm enter: mode=%d current=%p", static_cast<int>(mode), GetForegroundWindow());
     auto settings = SettingsSnap();
     if (!settings->previewHighlightEnabled || g_unloading.load()) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview confirm exit: reason=disabled-or-unloading");
         return;
     }
 
@@ -6876,6 +6924,8 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         if (!g_pendingFocus.valid) {
+            // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+            Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview confirm exit: reason=no-pending");
             return;
         }
         pending = g_pendingFocus;
@@ -6890,6 +6940,8 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         if (g_pendingFocus.hwnd == pending.hwnd) {
             g_pendingFocus = {};
         }
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview confirm exit: reason=excluded-pending");
         return;
     }
 
@@ -6902,10 +6954,14 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
             start, settings->previewMinFocusSeconds, now);
         if (remaining > 0) {
             ArmHookTimer(kPreviewMinFocusTimerId, remaining);
+            // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+            Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview confirm exit: reason=deadline-not-reached");
             return;
         }
     }
 
+    // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+    Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview pending: hwnd=%p pid=%lu key=%s start=%llu minSeconds=%d", pending.hwnd, pending.processId, pending.key.c_str(), pending.previewStartTick, settings->previewMinFocusSeconds);
     HWND confirmHwnd = nullptr;
     std::wstring title;
     if (!StillPendingForeground(pending, &confirmHwnd, &title)) {
@@ -6929,11 +6985,15 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
                 Wh_Log(L"Preview min-focus: gave up waiting through transient "
                        L"FG for %s",
                        pending.displayName.c_str());
+                // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+                Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview confirm exit: reason=transient-grace-ended");
                 return;
             }
             ArmHookTimer(kPreviewMinFocusTimerId, delay);
         }
         // Focus left the app — drop only preview; app timer may still be pending.
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview confirm exit: reason=foreground-mismatch");
         return;
     }
 
@@ -6946,6 +7006,8 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
                 g_pendingFocus = {};
             }
         }
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview confirm exit: reason=excluded-confirmed");
         return;
     }
 
@@ -7195,6 +7257,8 @@ void EnsurePendingPreviewTimer() {
 }
 
 void SchedulePreviewConfirm(bool windowAlreadyTracked) {
+    // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+    Wh_Log(L"TEMP_PREVIEW_ACTIVATION preview schedule: tracked=%d minSeconds=%d enabled=%d", windowAlreadyTracked, SettingsSnap()->previewMinFocusSeconds, SettingsSnap()->previewHighlightEnabled);
     if (!SettingsSnap()->previewHighlightEnabled) {
         return;
     }
@@ -7214,9 +7278,13 @@ void HandleForegroundChanged(HWND hWnd) {
     }
     ProcessImagePathCacheScope pathCacheScope;
 
+    // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+    Wh_Log(L"TEMP_PREVIEW_ACTIVATION foreground handling: raw=%p current=%p", hWnd, GetForegroundWindow());
     hWnd = NormalizeFocusHwnd(hWnd);
 
     if (IsTransientForeground(hWnd)) {
+        // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+        Wh_Log(L"TEMP_PREVIEW_ACTIVATION foreground transient: normalized=%p", hWnd);
         // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.
         bool ranksNonEmpty = false;
         {
@@ -7268,6 +7336,8 @@ void HandleForegroundChanged(HWND hWnd) {
         return;
     }
 
+    // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+    Wh_Log(L"TEMP_PREVIEW_ACTIVATION foreground accepted: hwnd=%p pid=%lu key=%s", hWnd, processId, key.c_str());
     const ULONGLONG now = GetTickCount64();
     const int minSeconds = (std::max)(0, SettingsSnap()->minFocusSeconds);
 
@@ -7457,6 +7527,8 @@ void CALLBACK WinEventProc(HWINEVENTHOOK /*hWinEventHook*/,
     if (event != EVENT_SYSTEM_FOREGROUND) {
         return;
     }
+    // TEMP_PREVIEW_ACTIVATION: temporary 0.10.12 trace; remove after diagnosis.
+    Wh_Log(L"TEMP_PREVIEW_ACTIVATION foreground event: hwnd=%p object=%ld", hWnd, idObject);
     if (idObject != OBJID_WINDOW || !hWnd) {
         return;
     }
