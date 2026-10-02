@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.8
+// @version         0.10.9
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -768,6 +768,7 @@ constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
+constexpr UINT_PTR kHostedWindowTimerId = 5;
 constexpr UINT kDecayCheckIntervalMs = 30 * 1000;
 constexpr ULONGLONG kIsRunningGraceMs = 400;
 // Full identity rebind (all buttons). UVS only re-paints the cached rank;
@@ -1292,6 +1293,150 @@ std::wstring GetWindowClassName(HWND hWnd) {
         return {};
     }
     return buf;
+}
+
+// Hosted content can detach when minimized. Retain only a relationship
+// actually observed while it was attached, never a process/title guess.
+struct HostedWindowLink {
+    HWND frame = nullptr;
+    DWORD childPid = 0;
+    DWORD framePid = 0;
+};
+std::mutex g_hostedWindowMutex;
+std::unordered_map<HWND, HostedWindowLink> g_hostedWindowLinks;
+struct PendingHostedFrame {
+    HWND hwnd;
+    DWORD pid;
+    ULONGLONG started;
+};
+// Focus-thread only; cleared after that thread is joined.
+std::vector<PendingHostedFrame> g_pendingHostedFrames;
+constexpr size_t kMaxHostedLinks = 256;
+constexpr size_t kMaxPendingHostedFrames = 32;
+constexpr ULONGLONG kHostedCaptureDeadlineMs = 5000;
+
+bool RememberHostedWindow(HWND child, HWND frame) {
+    const DWORD childPid = PidFromHwnd(child);
+    const DWORD framePid = PidFromHwnd(frame);
+    if (!childPid || !framePid || child == frame ||
+        GetWindowClassName(child) != L"Windows.UI.Core.CoreWindow" ||
+        GetWindowClassName(frame) != L"ApplicationFrameWindow" ||
+        !(GetWindowLongW(child, GWL_STYLE) & WS_CHILD) ||
+        GetAncestor(child, GA_ROOT) != frame) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_hostedWindowMutex);
+    std::erase_if(g_hostedWindowLinks, [](const auto& row) {
+        return !HwndMatchesStoredPid(row.first, row.second.childPid) ||
+               !HwndMatchesStoredPid(row.second.frame, row.second.framePid);
+    });
+    auto it = g_hostedWindowLinks.find(child);
+    if (it == g_hostedWindowLinks.end() &&
+        g_hostedWindowLinks.size() >= kMaxHostedLinks) {
+        return false;
+    }
+    const bool changed = it == g_hostedWindowLinks.end() ||
+                         it->second.frame != frame ||
+                         it->second.childPid != childPid ||
+                         it->second.framePid != framePid;
+    g_hostedWindowLinks[child] = {frame, childPid, framePid};
+    if (changed) {
+        Wh_Log(L"Preview hosted link: child=%p pid=%u frame=%p framePid=%u",
+               child, childPid, frame, framePid);
+    }
+    return true;
+}
+
+HWND ResolveHostedPreviewWindow(HWND raw) {
+    HWND root = NormalizeFocusHwnd(raw);
+    if (!root) {
+        return nullptr;
+    }
+    if (root != raw) {
+        if (!RememberHostedWindow(raw, root)) {
+            std::lock_guard<std::mutex> lock(g_hostedWindowMutex);
+            g_hostedWindowLinks.erase(raw);
+        }
+        return root;
+    }
+    // A child whose current root cannot be resolved must not use an old link.
+    if (GetWindowLongW(raw, GWL_STYLE) & WS_CHILD) {
+        return root;
+    }
+    std::lock_guard<std::mutex> lock(g_hostedWindowMutex);
+    auto it = g_hostedWindowLinks.find(raw);
+    if (it == g_hostedWindowLinks.end()) {
+        return root;
+    }
+    const auto link = it->second;
+    if (!HwndMatchesStoredPid(raw, link.childPid) ||
+        !HwndMatchesStoredPid(link.frame, link.framePid)) {
+        g_hostedWindowLinks.erase(it);
+        return root;
+    }
+    Wh_Log(L"Preview hosted reuse: child=%p frame=%p", raw, link.frame);
+    return link.frame;
+}
+
+bool CaptureHostedFrame(HWND frame) {
+    bool found = false;
+    HWND child = nullptr;
+    // Bounded walk of this frame's direct children, not global window matching.
+    for (int i = 0; i < 32; ++i) {
+        child = FindWindowExW(frame, child, nullptr, nullptr);
+        if (!child) {
+            break;
+        }
+        found = RememberHostedWindow(child, frame) || found;
+    }
+    return found;
+}
+
+void PollHostedFrames() {
+    const auto now = GetTickCount64();
+    bool captured = false;
+    std::erase_if(g_pendingHostedFrames, [&](const PendingHostedFrame& entry) {
+        if (!HwndMatchesStoredPid(entry.hwnd, entry.pid) ||
+            now - entry.started >= kHostedCaptureDeadlineMs) {
+            Wh_Log(L"Preview hosted capture ended: frame=%p pid=%u age=%llu",
+                   entry.hwnd, entry.pid, now - entry.started);
+            return true;
+        }
+        if (CaptureHostedFrame(entry.hwnd)) {
+            captured = true;
+            return true;
+        }
+        return false;
+    });
+    if (g_pendingHostedFrames.empty()) {
+        DisarmHookTimer(kHostedWindowTimerId);
+    }
+    if (captured) {
+        RequestApplyPreviewVisuals();
+    }
+}
+
+void ObserveHostedFrame(HWND frame) {
+    if (GetWindowClassName(frame) != L"ApplicationFrameWindow") {
+        return;
+    }
+    if (CaptureHostedFrame(frame)) {
+        return;
+    }
+    const DWORD pid = PidFromHwnd(frame);
+    if (!pid) {
+        return;
+    }
+    for (const auto& entry : g_pendingHostedFrames) {
+        if (entry.hwnd == frame && entry.pid == pid) {
+            return; // Do not extend a pending episode's deadline.
+        }
+    }
+    if (g_pendingHostedFrames.size() >= kMaxPendingHostedFrames) {
+        return;
+    }
+    g_pendingHostedFrames.push_back({frame, pid, GetTickCount64()});
+    ArmHookTimer(kHostedWindowTimerId, 50);
 }
 
 // Diagnostic snapshots only: never use these observations to guess identity.
@@ -4622,7 +4767,7 @@ HWND HwndFromMappingEntry(const ThumbnailTaskItemMapping& item) {
     // its own stored PID (which can differ from the child's process).
     // Both DataContext and repeater lookup share this normalization, so
     // duplicate detection and their consistency check also compare roots.
-    return NormalizeFocusHwnd(item.hwnd);
+    return ResolveHostedPreviewWindow(item.hwnd);
 }
 
 // True if two WinRT objects are the same COM identity (different projections
@@ -7251,6 +7396,7 @@ void HandleForegroundChanged(HWND hWnd) {
     ProcessImagePathCacheScope pathCacheScope;
 
     hWnd = NormalizeFocusHwnd(hWnd);
+    ObserveHostedFrame(hWnd);
 
     if (IsTransientForeground(hWnd)) {
         // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.
@@ -7582,6 +7728,8 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             } else if (wParam == kPreviewMinFocusTimerId) {
                 KillTimer(hWnd, kPreviewMinFocusTimerId);
                 OnPreviewMinFocusTimerElapsed();
+            } else if (wParam == kHostedWindowTimerId) {
+                PollHostedFrames();
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
             } else if (wParam == kFullRebindTimerId) {
@@ -7591,6 +7739,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             }
             return 0;
         case WM_DESTROY:
+            KillTimer(hWnd, kHostedWindowTimerId);
             KillTimer(hWnd, kMinFocusTimerId);
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
@@ -8097,6 +8246,8 @@ void Wh_ModUninit() {
 
     // Stop the worker first so it cannot TryRunAsync after the UI drain.
     StopWinEventHookThread();
+    g_pendingHostedFrames.clear();
+
     {
         std::lock_guard<std::mutex> lock(g_buttonResolveMutex);
         g_buttonResolveQueue.clear();
@@ -8109,6 +8260,10 @@ void Wh_ModUninit() {
             RevokeIconPanelLayoutWatchesOnThisDispatcher();
         })) {
         Wh_Log(L"ERROR: UI cleanup did not finish on every dispatcher");
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_hostedWindowMutex);
+        g_hostedWindowLinks.clear();
     }
     {
         std::lock_guard<std::mutex> lock(g_layoutWatchMutex);

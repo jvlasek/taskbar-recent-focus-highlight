@@ -8,12 +8,16 @@ def function(signature):
     start = source.index(signature)
     end = source.index('\n}', start) + 2
     return source[start:end]
-helpers = '\n'.join(function(x) for x in (
-    'HWND NormalizeFocusHwnd(', 'HWND HwndFromMappingEntry(',
-    'bool IsWindowRecentForPreviewLocked('))
+hosted = source[source.index('struct HostedWindowLink {'):source.index('// Diagnostic snapshots only:')]
+helpers = function('HWND NormalizeFocusHwnd(') + '\n' + hosted + '\n' + function('HWND HwndFromMappingEntry(') + '\n' + function('bool IsWindowRecentForPreviewLocked(')
 cpp = r'''
 #include <cassert>
 #include <map>
+#include <algorithm>
+#include <vector>
+#include <mutex>
+#include <unordered_map>
+#include <string>
 using HWND = void*;
 using DWORD = unsigned long;
 using ULONGLONG = unsigned long long;
@@ -33,9 +37,28 @@ struct Recent { ULONGLONG lastConfirmedTick; DWORD pid; };
 struct DesktopRecencyState { std::map<HWND, Recent> windowFocusMap; };
 struct Settings { int previewDecayMinutes = 15; } settings;
 Settings* SettingsSnap() { return &settings; }
-ULONGLONG GetTickCount64() { return 1000; }
+ULONGLONG clockTick = 1000;
+ULONGLONG GetTickCount64() { return clockTick; }
 ULONGLONG DecayMsFromMinutes(int n) { return n * 60000ULL; }
 bool IsTickDecayed(ULONGLONG t, ULONGLONG d, ULONGLONG now) { return now-t >= d; }
+constexpr int kHostedWindowTimerId = 5;
+bool timerArmed = false;
+int previewRequests = 0;
+void ArmHookTimer(int, ULONGLONG) { timerArmed = true; }
+void DisarmHookTimer(int) { timerArmed = false; }
+void RequestApplyPreviewVisuals() { ++previewRequests; }
+long GetWindowLongW(HWND h, int n) { return GetWindowLong(h,n); }
+std::wstring GetWindowClassName(HWND h) {
+    if (!IsWindow(h)) return {};
+    return windows.at(h).pid == 10 || windows.at(h).pid == 11
+        ? L"ApplicationFrameWindow" : L"Windows.UI.Core.CoreWindow";
+}
+HWND FindWindowExW(HWND frame, HWND after, const wchar_t*, const wchar_t*) {
+    for (const auto& [h,w] : windows) {
+        if (h > after && (w.style & WS_CHILD) && w.root == frame) return h;
+    }
+    return nullptr;
+}
 // HELPERS
 int main() {
     HWND a = reinterpret_cast<HWND>(1), b = reinterpret_cast<HWND>(2);
@@ -63,6 +86,39 @@ int main() {
     // Root's PID must match recency independently of the valid child PID.
     windows[a].pid = 11;
     assert(!IsWindowRecentForPreviewLocked(desk,HwndFromMappingEntry({childA,20})));
+    windows[a].pid = 10;
+    // Capture both links while attached; minimize by detaching the content.
+    assert(RememberHostedWindow(childA,a));
+    assert(RememberHostedWindow(childB,b));
+    windows[childA].style = 0; windows[childA].root = childA;
+    windows[childB].style = 0; windows[childB].root = childB;
+    assert(HwndFromMappingEntry({childA,20}) == a);
+    assert(HwndFromMappingEntry({childB,30}) == b);
+    windows[a].pid = 11;
+    assert(HwndFromMappingEntry({childA,20}) == childA);
+    windows[a].pid = 10;
+    // A detached child with no observation is never guessed by class/process.
+    assert(HwndFromMappingEntry({childA,20}) == childA);
+    // Delayed attachment captured by bounded focus-thread polling.
+    ObserveHostedFrame(a);
+    assert(timerArmed && g_pendingHostedFrames.size() == 1);
+    windows[childA].style = WS_CHILD; windows[childA].root = a;
+    PollHostedFrames();
+    assert(!timerArmed && g_pendingHostedFrames.empty() && previewRequests == 1);
+    windows[childA].style = 0; windows[childA].root = childA;
+    assert(HwndFromMappingEntry({childA,20}) == a);
+    // New direct parent supersedes the old association.
+    windows[childA].style = WS_CHILD; windows[childA].root = b;
+    assert(HwndFromMappingEntry({childA,20}) == b);
+    windows[childA].style = 0; windows[childA].root = childA;
+    assert(HwndFromMappingEntry({childA,20}) == b);
+    ObserveHostedFrame(a);
+    clockTick += kHostedCaptureDeadlineMs;
+    PollHostedFrames();
+    assert(g_pendingHostedFrames.empty() && !timerArmed);
+    // Recycled child cannot reuse the remembered frame.
+    windows[childA].pid = 21;
+    assert(ResolveHostedPreviewWindow(childA) == childA);
     windows.erase(childA);
     assert(!HwndFromMappingEntry({childA,20}));
     assert(!HwndFromMappingEntry({nullptr,0}));
@@ -72,6 +128,6 @@ with tempfile.TemporaryDirectory(prefix='windhawk-preview-') as folder:
     cpp_path = Path(folder) / 'test.cpp'
     exe = Path(folder) / 'test.exe'
     cpp_path.write_text(cpp, encoding='utf-8')
-    subprocess.run(['g++', '-std=c++17', str(cpp_path), '-o', str(exe)], check=True)
+    subprocess.run(['g++', '-std=c++20', str(cpp_path), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True, timeout=20)
 print('PASS: hosted child/frame identity, distinct top-level windows, child and root PID guards')

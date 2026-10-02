@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.8 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.9 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -386,3 +386,26 @@ first Calculator; focus/type into it, minimize it, launch a second, then inspect
 the flyout. Move away and reopen the flyout without selecting either window.
 Stop with Ctrl+C and keep both Calculators open for inspection. These extra
 observations can affect timing; this is not a fix for detachment or stale lookup.
+
+## Hosted preview association (0.10.9)
+
+When an ApplicationFrameWindow gains focus, inspect its direct children for an
+attached CoreWindow. If not attached yet, the existing focus worker polls every
+50ms for at most five seconds per pending frame (32 pending frames maximum).
+Stop the timer when no observations remain. Only observed WS_CHILD / GA_ROOT
+relationships are stored, capped at 256; dead/PID-changed links are pruned.
+
+Thumbnail lookup validates the raw captured HWND/PID, then prefers its current
+root. A directly observed hosted relationship can be reused after detachment
+only while both child and frame still match their stored PIDs. A newly observed
+parent replaces the old link. No title, app-ID, PID-only, or construction-order
+matching. Recency still validates the frame independently. This does not solve
+missing thumbnail models/collections, nor guarantee capture if attachment and
+minimization happen entirely between polls. Unknown relationships fail closed.
+
+Pending observations belong to the focus thread; its window destruction kills
+the timer. Uninit joins it before clearing pending state, and clears links after
+UI cleanup/drain. No extra worker, callback registration, or unload wait.
+`tests/run-preview-identity-tests.py` covers delayed attachment, detachment,
+reparenting, expiry, PID changes, and unchanged top-level window identities.
+Live launch/minimize-three-times and GIMP flyout validation are still required.
