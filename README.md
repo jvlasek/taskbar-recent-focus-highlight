@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.9 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.10 (review candidate) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -409,3 +409,14 @@ UI cleanup/drain. No extra worker, callback registration, or unload wait.
 `tests/run-preview-identity-tests.py` covers delayed attachment, detachment,
 reparenting, expiry, PID changes, and unchanged top-level window identities.
 Live launch/minimize-three-times and GIMP flyout validation are still required.
+
+## Thumbnail getter comparison (0.10.10)
+
+Diagnostic only: at thumbnail construction, log the existing GetAppWindow
+lookup result alongside the optional symbol-resolved immersive
+GetThumbnailWindow result. The latter receives the verified ITaskItem pointer;
+GetAppWindow uses its separate interface projection. Log interface availability
+and HWND/class/PID/parent/root for both. Keep caching the existing lookup result.
+No saved raw pointer is dereferenced later, no new timer/hook callback is added,
+and a missing diagnostic symbol does not prevent loading. Repeat manual
+Calculator launch/minimize recording with Mod logs enabled.

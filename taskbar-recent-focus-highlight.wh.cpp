@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.9
+// @version         0.10.10
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -3737,6 +3737,9 @@ CWindowTaskItem_GetWindow_t CWindowTaskItem_GetWindow;
 
 using CImmersiveTaskItem_GetAppWindow_t = HWND(WINAPI*)(void* pThis);
 CImmersiveTaskItem_GetAppWindow_t CImmersiveTaskItem_GetAppWindow;
+// Diagnostic-only getter. Unlike GetAppWindow, this takes the ITaskItem pointer.
+using CImmersiveTaskItem_GetThumbnailWindow_t = HWND(WINAPI*)(void* pThis);
+CImmersiveTaskItem_GetThumbnailWindow_t CImmersiveTaskItem_GetThumbnailWindow;
 
 void* CImmersiveTaskItem_vftable = nullptr;
 void* CImmersiveTaskItem_vftable_ITaskItem = nullptr;
@@ -4704,6 +4707,26 @@ void ClearAllHighlights_UIThread() {
 // Thumbnail preview glow (multi-window flyouts)
 // ---------------------------------------------------------------------------
 
+// Called only during the constructor hook, while Explorer supplies a live item.
+// appWindow is the result of the existing lookup; do not change what we cache.
+void LogImmersiveThumbnailGetters(void* taskItem, HWND appWindow) {
+    if (!taskItem || !CImmersiveTaskItem_vftable_ITaskItem ||
+        *static_cast<void**>(taskItem) != CImmersiveTaskItem_vftable_ITaskItem) {
+        return;
+    }
+    void* appInterface = QueryViaVtable(taskItem, CImmersiveTaskItem_vftable);
+    HWND thumbnailWindow = nullptr;
+    if (CImmersiveTaskItem_GetThumbnailWindow) {
+        thumbnailWindow = CImmersiveTaskItem_GetThumbnailWindow(taskItem);
+    }
+    Wh_Log(L"Preview getter comparison: item=%p appInterface=%p appGetter=%d thumbnailGetter=%d appHwnd=%p thumbnailHwnd=%p",
+           taskItem, appInterface, CImmersiveTaskItem_GetAppWindow != nullptr,
+           CImmersiveTaskItem_GetThumbnailWindow != nullptr,
+           appWindow, thumbnailWindow);
+    LogPreviewWindowIdentity(L"getter-app", appWindow);
+    LogPreviewWindowIdentity(L"getter-thumbnail", thumbnailWindow);
+}
+
 void AddThumbnailTaskItemMapping(
     winrt::Windows::Foundation::IInspectable thumbnail,
     void* taskGroup,
@@ -4712,6 +4735,7 @@ void AddThumbnailTaskItemMapping(
         return;
     }
     HWND hwnd = GetWindowFromTaskItem(taskItem);
+    LogImmersiveThumbnailGetters(taskItem, hwnd);
     Wh_Log(L"Preview mapping: model=%p group=%p item=%p rawHwnd=%p pid=%u",
            winrt::get_abi(thumbnail), taskGroup, taskItem, hwnd, PidFromHwnd(hwnd));
     LogPreviewWindowIdentity(L"mapping-create", hwnd);
@@ -6868,6 +6892,12 @@ bool HookTaskbarDllSymbols() {
         {
             {LR"(public: virtual struct HWND__ * __cdecl CImmersiveTaskItem::GetAppWindow(void))"},
             &CImmersiveTaskItem_GetAppWindow,
+        },
+        {
+            {LR"(public: virtual struct HWND__ * __cdecl CImmersiveTaskItem::GetThumbnailWindow(void))"},
+            &CImmersiveTaskItem_GetThumbnailWindow,
+            nullptr,
+            true, // Optional diagnostic symbol; never prevents mod loading.
         },
         {
             {LR"(const CImmersiveTaskItem::`vftable')"},
