@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.10
+// @version         0.10.11
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -768,7 +768,6 @@ constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
-constexpr UINT_PTR kHostedWindowTimerId = 5;
 constexpr UINT kDecayCheckIntervalMs = 30 * 1000;
 constexpr ULONGLONG kIsRunningGraceMs = 400;
 // Full identity rebind (all buttons). UVS only re-paints the cached rank;
@@ -1295,176 +1294,6 @@ std::wstring GetWindowClassName(HWND hWnd) {
     return buf;
 }
 
-// Hosted content can detach when minimized. Retain only a relationship
-// actually observed while it was attached, never a process/title guess.
-struct HostedWindowLink {
-    HWND frame = nullptr;
-    DWORD childPid = 0;
-    DWORD framePid = 0;
-};
-std::mutex g_hostedWindowMutex;
-std::unordered_map<HWND, HostedWindowLink> g_hostedWindowLinks;
-struct PendingHostedFrame {
-    HWND hwnd;
-    DWORD pid;
-    ULONGLONG started;
-};
-// Focus-thread only; cleared after that thread is joined.
-std::vector<PendingHostedFrame> g_pendingHostedFrames;
-constexpr size_t kMaxHostedLinks = 256;
-constexpr size_t kMaxPendingHostedFrames = 32;
-constexpr ULONGLONG kHostedCaptureDeadlineMs = 5000;
-
-bool RememberHostedWindow(HWND child, HWND frame) {
-    const DWORD childPid = PidFromHwnd(child);
-    const DWORD framePid = PidFromHwnd(frame);
-    if (!childPid || !framePid || child == frame ||
-        GetWindowClassName(child) != L"Windows.UI.Core.CoreWindow" ||
-        GetWindowClassName(frame) != L"ApplicationFrameWindow" ||
-        !(GetWindowLongW(child, GWL_STYLE) & WS_CHILD) ||
-        GetAncestor(child, GA_ROOT) != frame) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(g_hostedWindowMutex);
-    std::erase_if(g_hostedWindowLinks, [](const auto& row) {
-        return !HwndMatchesStoredPid(row.first, row.second.childPid) ||
-               !HwndMatchesStoredPid(row.second.frame, row.second.framePid);
-    });
-    auto it = g_hostedWindowLinks.find(child);
-    if (it == g_hostedWindowLinks.end() &&
-        g_hostedWindowLinks.size() >= kMaxHostedLinks) {
-        return false;
-    }
-    const bool changed = it == g_hostedWindowLinks.end() ||
-                         it->second.frame != frame ||
-                         it->second.childPid != childPid ||
-                         it->second.framePid != framePid;
-    g_hostedWindowLinks[child] = {frame, childPid, framePid};
-    if (changed) {
-        Wh_Log(L"Preview hosted link: child=%p pid=%u frame=%p framePid=%u",
-               child, childPid, frame, framePid);
-    }
-    return true;
-}
-
-HWND ResolveHostedPreviewWindow(HWND raw) {
-    HWND root = NormalizeFocusHwnd(raw);
-    if (!root) {
-        return nullptr;
-    }
-    if (root != raw) {
-        if (!RememberHostedWindow(raw, root)) {
-            std::lock_guard<std::mutex> lock(g_hostedWindowMutex);
-            g_hostedWindowLinks.erase(raw);
-        }
-        return root;
-    }
-    // A child whose current root cannot be resolved must not use an old link.
-    if (GetWindowLongW(raw, GWL_STYLE) & WS_CHILD) {
-        return root;
-    }
-    std::lock_guard<std::mutex> lock(g_hostedWindowMutex);
-    auto it = g_hostedWindowLinks.find(raw);
-    if (it == g_hostedWindowLinks.end()) {
-        return root;
-    }
-    const auto link = it->second;
-    if (!HwndMatchesStoredPid(raw, link.childPid) ||
-        !HwndMatchesStoredPid(link.frame, link.framePid)) {
-        g_hostedWindowLinks.erase(it);
-        return root;
-    }
-    Wh_Log(L"Preview hosted reuse: child=%p frame=%p", raw, link.frame);
-    return link.frame;
-}
-
-bool CaptureHostedFrame(HWND frame) {
-    bool found = false;
-    HWND child = nullptr;
-    // Bounded walk of this frame's direct children, not global window matching.
-    for (int i = 0; i < 32; ++i) {
-        child = FindWindowExW(frame, child, nullptr, nullptr);
-        if (!child) {
-            break;
-        }
-        found = RememberHostedWindow(child, frame) || found;
-    }
-    return found;
-}
-
-void PollHostedFrames() {
-    const auto now = GetTickCount64();
-    bool captured = false;
-    std::erase_if(g_pendingHostedFrames, [&](const PendingHostedFrame& entry) {
-        if (!HwndMatchesStoredPid(entry.hwnd, entry.pid) ||
-            now - entry.started >= kHostedCaptureDeadlineMs) {
-            Wh_Log(L"Preview hosted capture ended: frame=%p pid=%u age=%llu",
-                   entry.hwnd, entry.pid, now - entry.started);
-            return true;
-        }
-        if (CaptureHostedFrame(entry.hwnd)) {
-            captured = true;
-            return true;
-        }
-        return false;
-    });
-    if (g_pendingHostedFrames.empty()) {
-        DisarmHookTimer(kHostedWindowTimerId);
-    }
-    if (captured) {
-        RequestApplyPreviewVisuals();
-    }
-}
-
-void ObserveHostedFrame(HWND frame) {
-    if (GetWindowClassName(frame) != L"ApplicationFrameWindow") {
-        return;
-    }
-    if (CaptureHostedFrame(frame)) {
-        return;
-    }
-    const DWORD pid = PidFromHwnd(frame);
-    if (!pid) {
-        return;
-    }
-    for (const auto& entry : g_pendingHostedFrames) {
-        if (entry.hwnd == frame && entry.pid == pid) {
-            return; // Do not extend a pending episode's deadline.
-        }
-    }
-    if (g_pendingHostedFrames.size() >= kMaxPendingHostedFrames) {
-        return;
-    }
-    g_pendingHostedFrames.push_back({frame, pid, GetTickCount64()});
-    ArmHookTimer(kHostedWindowTimerId, 50);
-}
-
-// Diagnostic snapshots only: never use these observations to guess identity.
-void LogPreviewWindowIdentity(PCWSTR reason, HWND hwnd) {
-    const auto cls = GetWindowClassName(hwnd);
-    HWND root = hwnd ? GetAncestor(hwnd, GA_ROOT) : nullptr;
-    Wh_Log(L"Preview window: reason=%s hwnd=%p live=%d pid=%u class=%s style=%08X parent=%p root=%p rootPid=%u owner=%p",
-           reason, hwnd, hwnd && IsWindow(hwnd), PidFromHwnd(hwnd), cls.c_str(),
-           hwnd ? static_cast<unsigned>(GetWindowLongW(hwnd, GWL_STYLE)) : 0,
-           hwnd ? GetAncestor(hwnd, GA_PARENT) : nullptr, root, PidFromHwnd(root),
-           hwnd ? GetWindow(hwnd, GW_OWNER) : nullptr);
-}
-
-void LogPreviewFocusIdentity(HWND hwnd) {
-    LogPreviewWindowIdentity(L"focus", hwnd);
-    if (GetWindowClassName(hwnd) != L"ApplicationFrameWindow") {
-        return;
-    }
-    // Capture an observable frame/content relationship before minimization.
-    // Bounded diagnostics, not EnumWindows-based thumbnail matching.
-    int remaining = 32;
-    EnumChildWindows(hwnd, [](HWND child, LPARAM param) -> BOOL {
-        auto& left = *reinterpret_cast<int*>(param);
-        LogPreviewWindowIdentity(L"focus-child", child);
-        return --left > 0;
-    }, reinterpret_cast<LPARAM>(&remaining));
-}
-
 std::wstring GetWindowAppUserModelId(HWND hWnd) {
     if (!hWnd || !IsWindow(hWnd)) {
         return {};
@@ -1954,7 +1783,6 @@ void ConfirmPreviewFocusNow(HWND hwnd, DWORD expectedPid = 0) {
         return;
     }
 
-    LogPreviewFocusIdentity(hwnd);
     const ULONGLONG now = GetTickCount64();
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -3737,7 +3565,7 @@ CWindowTaskItem_GetWindow_t CWindowTaskItem_GetWindow;
 
 using CImmersiveTaskItem_GetAppWindow_t = HWND(WINAPI*)(void* pThis);
 CImmersiveTaskItem_GetAppWindow_t CImmersiveTaskItem_GetAppWindow;
-// Diagnostic-only getter. Unlike GetAppWindow, this takes the ITaskItem pointer.
+// Preview getter. Unlike GetAppWindow, this takes the ITaskItem pointer.
 using CImmersiveTaskItem_GetThumbnailWindow_t = HWND(WINAPI*)(void* pThis);
 CImmersiveTaskItem_GetThumbnailWindow_t CImmersiveTaskItem_GetThumbnailWindow;
 
@@ -4707,24 +4535,21 @@ void ClearAllHighlights_UIThread() {
 // Thumbnail preview glow (multi-window flyouts)
 // ---------------------------------------------------------------------------
 
-// Called only during the constructor hook, while Explorer supplies a live item.
-// appWindow is the result of the existing lookup; do not change what we cache.
-void LogImmersiveThumbnailGetters(void* taskItem, HWND appWindow) {
-    if (!taskItem || !CImmersiveTaskItem_vftable_ITaskItem ||
-        *static_cast<void**>(taskItem) != CImmersiveTaskItem_vftable_ITaskItem) {
-        return;
+// Capture only while the constructor supplies a live ITaskItem. Immersive
+// thumbnails use the presented frame, not the content returned by GetAppWindow.
+HWND GetWindowForThumbnailTaskItem(void* taskItem) {
+    if (!taskItem) {
+        return nullptr;
     }
-    void* appInterface = QueryViaVtable(taskItem, CImmersiveTaskItem_vftable);
-    HWND thumbnailWindow = nullptr;
-    if (CImmersiveTaskItem_GetThumbnailWindow) {
-        thumbnailWindow = CImmersiveTaskItem_GetThumbnailWindow(taskItem);
+    if (CImmersiveTaskItem_vftable_ITaskItem &&
+        *static_cast<void**>(taskItem) == CImmersiveTaskItem_vftable_ITaskItem) {
+        // This symbol takes ITaskItem directly; GetAppWindow uses another
+        // interface projection. Missing optional support must fail closed.
+        return CImmersiveTaskItem_GetThumbnailWindow
+                   ? CImmersiveTaskItem_GetThumbnailWindow(taskItem)
+                   : nullptr;
     }
-    Wh_Log(L"Preview getter comparison: item=%p appInterface=%p appGetter=%d thumbnailGetter=%d appHwnd=%p thumbnailHwnd=%p",
-           taskItem, appInterface, CImmersiveTaskItem_GetAppWindow != nullptr,
-           CImmersiveTaskItem_GetThumbnailWindow != nullptr,
-           appWindow, thumbnailWindow);
-    LogPreviewWindowIdentity(L"getter-app", appWindow);
-    LogPreviewWindowIdentity(L"getter-thumbnail", thumbnailWindow);
+    return GetWindowFromTaskItem(taskItem);
 }
 
 void AddThumbnailTaskItemMapping(
@@ -4734,11 +4559,7 @@ void AddThumbnailTaskItemMapping(
     if (!thumbnail || !taskItem) {
         return;
     }
-    HWND hwnd = GetWindowFromTaskItem(taskItem);
-    LogImmersiveThumbnailGetters(taskItem, hwnd);
-    Wh_Log(L"Preview mapping: model=%p group=%p item=%p rawHwnd=%p pid=%u",
-           winrt::get_abi(thumbnail), taskGroup, taskItem, hwnd, PidFromHwnd(hwnd));
-    LogPreviewWindowIdentity(L"mapping-create", hwnd);
+    HWND hwnd = GetWindowForThumbnailTaskItem(taskItem);
     std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
     std::erase_if(g_thumbnailTaskItemMapping, [&](const ThumbnailTaskItemMapping& item) {
         try {
@@ -4774,24 +4595,13 @@ HWND HwndFromMappingEntry(const ThumbnailTaskItemMapping& item) {
     // HWND was read in the ctor hook while taskItem was live. Do not
     // dereference the raw ITaskItem* later — thumbnail-reorder only compares
     // that pointer, and the native object is gone when IsWindow fails.
-    Wh_Log(L"Preview mapping lookup: group=%p item=%p rawHwnd=%p storedPid=%u currentPid=%u",
-           item.taskGroup, item.taskItem, item.hwnd, item.pid, PidFromHwnd(item.hwnd));
-    LogPreviewWindowIdentity(L"mapping-lookup", item.hwnd);
     if (!item.hwnd || !IsWindow(item.hwnd)) {
-        Wh_Log(L"Preview mapping rejected: missing/dead raw window");
         return nullptr;
     }
     if (item.pid && PidFromHwnd(item.hwnd) != item.pid) {
-        Wh_Log(L"Preview mapping rejected: raw PID changed");
         return nullptr;
     }
-    // Hosted apps can expose the content child to the taskbar while focus
-    // tracking sees its frame. Validate the captured child above, then use
-    // the same root as focus tracking. Recency validates that root against
-    // its own stored PID (which can differ from the child's process).
-    // Both DataContext and repeater lookup share this normalization, so
-    // duplicate detection and their consistency check also compare roots.
-    return ResolveHostedPreviewWindow(item.hwnd);
+    return item.hwnd;
 }
 
 // True if two WinRT objects are the same COM identity (different projections
@@ -4859,7 +4669,6 @@ HWND ResolveHwndForThumbnailView(FrameworkElement thumbView,
     try {
         // DataContext is often the TaskItemThumbnail model object.
         auto dc = thumbView.DataContext();
-        Wh_Log(L"Preview DataContext: view=%p model=%p", winrt::get_abi(thumbView), winrt::get_abi(dc));
         if (dc) {
             if (HWND h = ResolveHwndFromThumbnailModel(dc, outTaskGroup)) {
                 return h;
@@ -4867,7 +4676,6 @@ HWND ResolveHwndForThumbnailView(FrameworkElement thumbView,
         }
     } catch (...) {
     }
-    Wh_Log(L"Preview DataContext: unresolved view=%p", winrt::get_abi(thumbView));
     return nullptr;
 }
 
@@ -5499,9 +5307,6 @@ void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
     if (!dispatcherAnchor || g_unloading.load()) {
         return;
     }
-    Wh_Log(L"Preview refresh request: anchor=%p tid=%u depth=%d pending=%d",
-           winrt::get_abi(dispatcherAnchor), GetCurrentThreadId(),
-           g_thumbRelayoutDepth, g_previewFlyoutRefreshPending);
     if (g_thumbRelayoutDepth > 0) {
         g_previewFlyoutRefreshNeeded = true;
         return;
@@ -5522,7 +5327,6 @@ void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
                 dispatcher,
                 winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
                 [weak]() {
-                Wh_Log(L"Preview refresh callback: tid=%u", GetCurrentThreadId());
                 g_previewFlyoutRefreshPending = false;
                 try {
                     if (g_unloading.load()) {
@@ -5542,7 +5346,6 @@ void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
                         el = PickLiveFlyoutThumbOnThisDispatcher();
                     }
                     if (!el) {
-                        Wh_Log(L"Preview refresh skipped: no live in-repeater anchor");
                         return;
                     }
                     g_thumbRelayoutDepth = 1;
@@ -5559,12 +5362,10 @@ void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
                         g_previewFlyoutRefreshFollowUps = 0;
                     }
                 } catch (...) {
-                    Wh_Log(L"Preview refresh callback exception: %08X", winrt::to_hresult());
                     g_thumbRelayoutDepth = 0;
                     g_previewFlyoutRefreshFollowUps = 0;
                 }
             })) {
-            Wh_Log(L"Preview refresh dispatch rejected");
             g_previewFlyoutRefreshPending = false;
         }
     } catch (...) {
@@ -5845,8 +5646,6 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
 
     // Product rule: only multi-window flyouts (group card does not count).
     if (siblings.size() <= 1) {
-        Wh_Log(L"Preview refresh skipped: allViews=%zu windowCards=%zu repeater=%d",
-               allViews.size(), siblings.size(), usedRepeater);
         for (auto& s : siblings) {
             ClearThumbnailHighlight(s);
         }
@@ -6750,7 +6549,6 @@ void* WINAPI TaskGroup_Thumbnails_Hook(void* pThis, void* param1) {
                 winrt::put_abi(obj));
         if (obj) {
             g_TaskGroup_Thumbnails = obj;
-            Wh_Log(L"Preview collection captured: collection=%p tid=%u", winrt::get_abi(obj), GetCurrentThreadId());
         }
     } catch (...) {
     }
@@ -6798,20 +6596,17 @@ HWND HwndFromThumbnailsGetAt(int index) {
         return nullptr;
     }
     if (!thumbnails) {
-        Wh_Log(L"Preview GetAt: index=%d no captured collection", index);
         return nullptr;
     }
     try {
         auto* thumbnailsPtr = winrt::get_abi(thumbnails);
         const int size = TaskItemThumbnail_Size_Original(&thumbnailsPtr);
-        Wh_Log(L"Preview GetAt: collection=%p index=%d size=%d", thumbnailsPtr, index, size);
         if (index >= size) {
             return nullptr;
         }
         winrt::com_ptr<IUnknown> item;
         TaskItemThumbnail_GetAt_Original(&thumbnailsPtr, item.put_void(),
                                          index);
-        Wh_Log(L"Preview GetAt: index=%d item=%p", index, item.get());
         if (!item) {
             return nullptr;
         }
@@ -6822,8 +6617,6 @@ HWND HwndFromThumbnailsGetAt(int index) {
                 if (!t) {
                     continue;
                 }
-                Wh_Log(L"Preview GetAt compare: index=%d item=%p model=%p rawHwnd=%p storedPid=%u",
-                       index, item.get(), winrt::get_abi(t), iter.hwnd, iter.pid);
                 if (winrt::get_abi(t) == item.get()) {
                     return HwndFromMappingEntry(iter);
                 }
@@ -6832,7 +6625,6 @@ HWND HwndFromThumbnailsGetAt(int index) {
         }
     } catch (...) {
     }
-    Wh_Log(L"Preview GetAt unresolved: index=%d", index);
     return nullptr;
 }
 
@@ -6841,14 +6633,12 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
     // Drop the previous target's collection before this retarget. Refresh
     // also runs from OnApplyTemplate / decay / click, and a matching window
     // count used to bind the last app's HWNDs with no DataContext to check.
-    Wh_Log(L"Preview target begin: model=%p tid=%u", pThis, GetCurrentThreadId());
     g_TaskGroup_Thumbnails = {};
     g_inHoverFlyoutModel_TargetItemKey = true;
     struct ResetInTargetKey {
         ~ResetInTargetKey() { g_inHoverFlyoutModel_TargetItemKey = false; }
     } resetInTarget;
     HoverFlyoutModel_TargetItemKey_Original(pThis, param1);
-    Wh_Log(L"Preview target end: model=%p tid=%u", pThis, GetCurrentThreadId());
     if (g_unloading.load() || !SettingsSnap()->previewHighlightEnabled) {
         return;
     }
@@ -6897,7 +6687,7 @@ bool HookTaskbarDllSymbols() {
             {LR"(public: virtual struct HWND__ * __cdecl CImmersiveTaskItem::GetThumbnailWindow(void))"},
             &CImmersiveTaskItem_GetThumbnailWindow,
             nullptr,
-            true, // Optional diagnostic symbol; never prevents mod loading.
+            true, // Optional: unsupported immersive previews stay unmarked.
         },
         {
             {LR"(const CImmersiveTaskItem::`vftable')"},
@@ -7159,7 +6949,6 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         return;
     }
 
-    LogPreviewFocusIdentity(confirmHwnd);
     const ULONGLONG now = GetTickCount64();
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -7426,7 +7215,6 @@ void HandleForegroundChanged(HWND hWnd) {
     ProcessImagePathCacheScope pathCacheScope;
 
     hWnd = NormalizeFocusHwnd(hWnd);
-    ObserveHostedFrame(hWnd);
 
     if (IsTransientForeground(hWnd)) {
         // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.
@@ -7758,8 +7546,6 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             } else if (wParam == kPreviewMinFocusTimerId) {
                 KillTimer(hWnd, kPreviewMinFocusTimerId);
                 OnPreviewMinFocusTimerElapsed();
-            } else if (wParam == kHostedWindowTimerId) {
-                PollHostedFrames();
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
             } else if (wParam == kFullRebindTimerId) {
@@ -7769,7 +7555,6 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             }
             return 0;
         case WM_DESTROY:
-            KillTimer(hWnd, kHostedWindowTimerId);
             KillTimer(hWnd, kMinFocusTimerId);
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
@@ -8276,8 +8061,6 @@ void Wh_ModUninit() {
 
     // Stop the worker first so it cannot TryRunAsync after the UI drain.
     StopWinEventHookThread();
-    g_pendingHostedFrames.clear();
-
     {
         std::lock_guard<std::mutex> lock(g_buttonResolveMutex);
         g_buttonResolveQueue.clear();
@@ -8290,10 +8073,6 @@ void Wh_ModUninit() {
             RevokeIconPanelLayoutWatchesOnThisDispatcher();
         })) {
         Wh_Log(L"ERROR: UI cleanup did not finish on every dispatcher");
-    }
-    {
-        std::lock_guard<std::mutex> lock(g_hostedWindowMutex);
-        g_hostedWindowLinks.clear();
     }
     {
         std::lock_guard<std::mutex> lock(g_layoutWatchMutex);

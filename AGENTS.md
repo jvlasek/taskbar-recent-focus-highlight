@@ -932,61 +932,19 @@ queries solely for logging. `tests/uwspy/record_windhawk.py` wraps the existing
 collector for manual sessions without test apps or UWPSpy. It probes startup,
 checks collector health, and saves timestamped evidence until Ctrl+C.
 
-## Thumbnail window normalization (0.10.7)
+## Thumbnail identity (0.10.11)
 
-HwndFromMappingEntry validates the captured raw HWND/PID before calling
-NormalizeFocusHwnd. Both DataContext and repeater routes therefore return the
-same root identity used by focus tracking and by duplicate/consistency checks.
-Only WS_CHILD windows walk GA_ROOT; top-level owned windows stay distinct.
-IsWindowRecentForPreviewLocked validates the resulting root with the PID stored
-in its recency entry, not the child PID. Do not merge by app ID, process or title.
-Regression checks: `python tests/run-preview-identity-tests.py`.
+At construction, immersive thumbnail mappings use the optional symbol-resolved
+CImmersiveTaskItem::GetThumbnailWindow with the live ITaskItem interface pointer.
+On the tested build this provides the same ApplicationFrameWindow tracked by
+focus, even before the content HWND exists. Ordinary window task items keep the
+existing GetWindow lookup. The captured HWND/PID is validated on later reads.
+Missing immersive thumbnail getter returns no match; do not substitute the app
+content HWND. Taskbar icon identity still uses GetAppWindow for app metadata.
 
-## Flyout diagnostics (0.10.8)
-
-This diagnostic release preserves matching behavior. With Mod logs enabled,
-`Preview window` records raw/frame HWNDs, PIDs, classes, style, parent/root and
-owner at focus confirmation and thumbnail lookup. Frame child enumeration is
-bounded to 32 diagnostic observations, never used for matching. Mapping creation,
-DataContext, collection capture, GetAt comparisons and refresh requests/callbacks
-are logged to distinguish missing relationships from missing refreshes.
-
-Use `python tests/uwspy/record_windhawk.py`. Start recording before opening the
-first Calculator; focus/type into it, minimize it, launch a second, then inspect
-the flyout. Move away and reopen the flyout without selecting either window.
-Stop with Ctrl+C and keep both Calculators open for inspection. These extra
-observations can affect timing; this is not a fix for detachment or stale lookup.
-
-## Hosted preview association (0.10.9)
-
-When an ApplicationFrameWindow gains focus, inspect its direct children for an
-attached CoreWindow. If not attached yet, the existing focus worker polls every
-50ms for at most five seconds per pending frame (32 pending frames maximum).
-Stop the timer when no observations remain. Only observed WS_CHILD / GA_ROOT
-relationships are stored, capped at 256; dead/PID-changed links are pruned.
-
-Thumbnail lookup validates the raw captured HWND/PID, then prefers its current
-root. A directly observed hosted relationship can be reused after detachment
-only while both child and frame still match their stored PIDs. A newly observed
-parent replaces the old link. No title, app-ID, PID-only, or construction-order
-matching. Recency still validates the frame independently. This does not solve
-missing thumbnail models/collections, nor guarantee capture if attachment and
-minimization happen entirely between polls. Unknown relationships fail closed.
-
-Pending observations belong to the focus thread; its window destruction kills
-the timer. Uninit joins it before clearing pending state, and clears links after
-UI cleanup/drain. No extra worker, callback registration, or unload wait.
-`tests/run-preview-identity-tests.py` covers delayed attachment, detachment,
-reparenting, expiry, PID changes, and unchanged top-level window identities.
-Live launch/minimize-three-times and GIMP flyout validation are still required.
-
-## Thumbnail getter comparison (0.10.10)
-
-Diagnostic only: at thumbnail construction, log the existing GetAppWindow
-lookup result alongside the optional symbol-resolved immersive
-GetThumbnailWindow result. The latter receives the verified ITaskItem pointer;
-GetAppWindow uses its separate interface projection. Log interface availability
-and HWND/class/PID/parent/root for both. Keep caching the existing lookup result.
-No saved raw pointer is dereferenced later, no new timer/hook callback is added,
-and a missing diagnostic symbol does not prevent loading. Repeat manual
-Calculator launch/minimize recording with Mod logs enabled.
+This replaces the 0.10.7–0.10.10 preview workarounds and diagnostics: no thumbnail
+root normalization, hosted association cache, attachment polling/timer, or
+frame-child enumeration remains. Existing async identity logs and the manual
+recorder remain. Regression test: `python tests/run-preview-identity-tests.py`.
+Live Calculator launch/minimize/relaunch cycles and GIMP multi-window testing
+are required before calling this build validated in Explorer.

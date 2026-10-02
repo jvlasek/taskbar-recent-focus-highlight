@@ -62,3 +62,17 @@ explains why another getter is worth comparing; it does not prove the runtime
 reason for those zeros.
 
 Installed taskbar.dll SHA-256: 5DCEEA036939ACB4E43B801A7A63530F328EDAD164741E6529D3D32E9B1C5866.
+
+## Live comparison and implementation follow-up
+
+The 0.10.10 recordings manual-20261002-095646-169397 and
+manual-20261002-095741-875862 show GetAppWindow returning null during model
+construction while GetThumbnailWindow returns a live ApplicationFrameWindow.
+In the latter run the returned handles 0860100, 09220AA and 14A0198 exactly
+match recorded Calculator focus confirmations. Later flyout lookup fails
+because the diagnostic build still caches the app getter's null result.
+
+0.10.11 uses GetThumbnailWindow only for immersive thumbnail capture and removes
+the 0.10.7–0.10.10 normalization/cache/polling workarounds and temporary flyout
+diagnostics. App identity remains on GetAppWindow. Controlled getter/PID tests
+and the Windhawk 1.7.3 build pass; live validation of 0.10.11 remains outstanding.
