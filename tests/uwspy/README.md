@@ -216,3 +216,37 @@ Version 0.10.6 `Identity` messages show running transitions and each request's
 queue, worker, result, delivery, and acceptance. `sameTarget=0`, `live=0`, or
 `timely=0` explain rejection; `published=0` can mean supersession or unload.
 A successful probe verifies the collector, not that mod logging is enabled.
+
+### Combined foreground + Windhawk recording
+
+From the repository root, run:
+
+```powershell
+python .\tests\uwspy\record_focus.py
+```
+
+This automatically builds `foreground_observer.c` using Windhawk's bundled
+compiler when needed, then starts the standalone observer and the same Windhawk
+collector used above. Wait for **Both recordings ready**. Enable Mod logs and
+close other debug viewers/recorders first. Use existing Calculator windows to
+avoid the remapped launch key's occasional browser activation.
+
+One **Ctrl+C** in this terminal stops both children. The observer stops cleanly
+when the launcher closes its input pipe; it needs no second console. The existing
+Windhawk collector is stopped and its reader drained as in `record_windhawk.py`.
+Startup/runtime failures also clean up both. `--seconds 10` provides an automatic
+stop; `--compiler`, `--dbgview`, and `--output` override the defaults.
+
+The printed `captures/focus-...` evidence directory contains `windhawk.log`,
+`windhawk.jsonl`, `foreground.jsonl`, and `foreground-stderr.log`. Foreground
+records carry UTC time and system uptime milliseconds. `EVENT` includes the
+notified HWND and original 32-bit WinEvent timestamp; `SAMPLE` observes foreground
+and keyboard focus every 50 ms but writes only changes (plus the initial state).
+Both include current foreground, PID/TID, class, root, and GUI-thread focus data.
+`READY`/`STOP` mark the observer lifetime. No titles, key contents, injection,
+activation, or application modifications are involved. Queries are sequential
+snapshots, not atomic; sampling can miss transitions shorter than 50 ms.
+
+Compare event arrival with sampled state and the mod's temporary activation logs.
+A missing event alone does not establish whether Windows omitted it or a listener
+missed delivery. A successful recording is not a test of the mod's correctness.

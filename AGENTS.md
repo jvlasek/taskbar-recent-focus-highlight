@@ -967,3 +967,8 @@ Record with Mod logs enabled and `python tests/uwspy/record_windhawk.py`.
 Click a flashing Calculator, keep it focused a few seconds, inspect the flyout,
 then switch away and focus that same Calculator again. Stop with Ctrl+C and
 compare both activations. The taskbar icon's 8-second minimum is independent.
+
+For independent evidence, `python tests/uwspy/record_focus.py` starts both the
+standalone C foreground observer and Windhawk capture, with one Ctrl+C stopping
+both. See `tests/uwspy/README.md`. The observer is external diagnostic tooling;
+do not move its 50 ms foreground sampling into the mod as a workaround.
