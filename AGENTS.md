@@ -974,3 +974,24 @@ has one log line. Existing identity and preview-result logs remain.
 Use `python tests/uwspy/record_focus.py` for independent foreground + Windhawk
 recording with one Ctrl+C. Its standalone 50 ms observer is diagnostic only.
 Run `python tests/run-foreground-recheck-tests.py` for controlled timer scenarios.
+
+## Real-input highlight regression harness
+
+`tests/uwspy/highlight_harness.py` owns the scenario; UWPSpy remains an inspection
+dependency. `highlight_uia.ps1` is a read-only UIA geometry/hit-test helper.
+Use exact AppId for discovery, physical UIA bounds for input, and independently
+observed foreground HWND/PID for card association. Do not infer HWND identity
+from the mod's own recency logs. Ambiguous geometry, changed targets, unexpected
+foreground and recycled handles must stop/classify the run, not be guessed away.
+Never interpret root-relative XAML coordinates as desktop coordinates.
+
+Background/minimized/attention fixtures are controlled Win32 cases. Real
+Calculator launches can activate at startup, so calibration is explicit and
+must not be described as never-focused launch coverage. Digits are sent only
+after verifying an owned foreground window. The tests leave their windows open.
+Separated-button and guided desktop rounds have narrower assertions documented
+in tests/uwspy/README.md; they do not prove snap-group handling or desktop-history
+restoration. Tests: `python -m unittest discover -s tests/uwspy -p
+test_highlight_harness.py -v`. No mod version increase is needed for harness-only
+changes. Live input runs require user preparation; do not disrupt their desktop
+merely to turn an unverified scenario into a claimed pass.

@@ -10,6 +10,7 @@ static bool ready;
 static UINT taskbarCreated;
 static HICON badge;
 static wchar_t identity = L'A';
+static std::wstring instanceLabel;
 constexpr UINT Badge = WM_APP + 10, Focus = WM_APP + 11, Ready = WM_APP + 12;
 HICON MakeBadge(int number) {
     HDC screen = GetDC(nullptr), colorDC = CreateCompatibleDC(screen), maskDC = CreateCompatibleDC(screen);
@@ -74,10 +75,25 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show) {
     cls.hIcon=LoadIcon(nullptr,IDI_APPLICATION);cls.hCursor=LoadCursor(nullptr,IDC_ARROW);cls.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);
     RegisterClass(&cls);
     auto title=std::wstring(L"UWPSpy Test ")+identity;
+    // Optional unique label; all instances still share the executable's AppId.
+    int argc=0; auto argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+    bool minimized=false, attention=false, background=false;
+    for(int i=1;i<argc;++i) {
+        if(wcscmp(argv[i],L"--minimized")==0)minimized=true;
+        else if(wcscmp(argv[i],L"--attention")==0)attention=true;
+        else if(wcscmp(argv[i],L"--background")==0)background=true;
+        else if(wcscmp(argv[i],L"--label")==0 && i+1<argc)instanceLabel=argv[++i];
+    }
+    if(argv)LocalFree(argv);
+    if(!instanceLabel.empty())title+=L" "+instanceLabel;
     HWND hwnd=CreateWindow(cls.lpszClassName,title.c_str(),WS_OVERLAPPEDWINDOW,
         100+(identity-L'A')*55,150+(identity-L'A')*40,480,220,nullptr,nullptr,instance,nullptr);
     if(!hwnd)return 1;
-    ShowWindow(hwnd,show);
+    ShowWindow(hwnd,minimized ? SW_SHOWMINNOACTIVE : background ? SW_SHOWNOACTIVATE : show);
+    if(attention) {
+        FLASHWINFO flash{sizeof(flash),hwnd,FLASHW_TRAY|FLASHW_TIMERNOFG,0,0};
+        FlashWindowEx(&flash);
+    }
     MSG msg;while(GetMessage(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessage(&msg);}
     if(badge)DestroyIcon(badge);if(taskbar)taskbar->Release();CoUninitialize();return 0;
 }

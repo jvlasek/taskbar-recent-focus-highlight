@@ -409,3 +409,8 @@ has one log line. Existing identity and preview-result logs remain.
 Use `python tests/uwspy/record_focus.py` for independent foreground + Windhawk
 recording with one Ctrl+C. Its standalone 50 ms observer is diagnostic only.
 Run `python tests/run-foreground-recheck-tests.py` for controlled timer scenarios.
+
+The [highlight harness](tests/uwspy/README.md#highlight-and-thumbnail-activation-harness)
+adds real-input Win32/Calculator scenarios with automatic taskbar discovery,
+screenshots, independent foreground recording, hover/activation assertions,
+and guided grouping/desktop variants. Full interactive validation is pending.

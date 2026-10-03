@@ -1,5 +1,95 @@
 # Taskbar badge/recency test harness
 
+## Highlight and thumbnail activation harness
+
+`highlight_harness.py` discovers the test group's taskbar button by exact AppId
+through UWPSpy and Windows UI Automation, then uses real mouse hover/click input.
+Other desktop apps can remain open. Coordinates come from live UIA physical
+screen bounds; XAML root-relative bounds are never used directly as mouse
+coordinates. Ambiguous roots, mismatched geometry, occlusion and changed hit
+targets stop the run. No fixed taskbar slot or English Calculator title is used.
+
+Attach UWPSpy to Explorer yourself and leave its inspectors open. Use combined
+taskbar buttons for the flyout tests. Enable this mod, set preview count to 3
+(or pass the actual value with `--top`, less than `--count`), and use nonzero
+intensity/fill. Default assertions expect Plate + title background (`plateTitle`);
+use `--preview-style other` for titleBar/titleBg/plate membership-only checks.
+`--focus-seconds` must exceed BOTH configured focus thresholds; keep decay long
+enough for the run. Settings are never changed by the harness.
+
+From this directory, after building the updated fixture with `build.ps1`:
+
+```powershell
+python .\highlight_harness.py --app win32 --launch attention --windhawk-log
+python .\highlight_harness.py --app calculator --windhawk-log
+```
+
+Run these separately. Close the previous run's A test windows or Calculators
+yourself first; the harness leaves its windows open for inspection and never
+terminates existing applications. Calculator mode requires no pre-existing
+Calculator windows, because otherwise the group contains unrelated cards.
+Four windows are created by default. Press Enter at the preparation prompt,
+then leave mouse/keyboard alone. Hold Escape to abort; Ctrl+C also works when
+the console has focus. Input is never sent to a Calculator until its foreground
+HWND belongs to the discovered test set and its PID still matches.
+
+The Win32 variants `--launch background`, `--launch minimized`, and
+`--launch attention` distinguish background display, minimized display and
+minimized display requesting taskbar attention. All share one AppId to form a
+multi-window group. The first flyout must have no highlights before activation.
+Calculator uses real packaged-app launches, then minimizes the discovered
+windows. Windows may have activated them at launch: this mode does NOT claim
+to test a guaranteed never-focused launch or force Calculator attention.
+
+Calibration clicks each card and associates it with the actual foreground HWND,
+independently of the mod's identity mapping. Calculator receives 111/222/333/444
+only after activation, so screenshots can corroborate card identity. Then each
+cycle hovers a card for five seconds, verifies no recency promotion, activates
+it, and checks the resulting membership. The pointer stays on the card while
+the post-hover inspection runs; returning to the taskbar would change the
+interaction being tested. This deliberately exercises the delayed-click gap in
+0.10.13 and may fail there. Warm-up also checks the first activation of initially
+untracked Win32 windows. Later Calculator cycles exercise already tracked ones.
+
+Each activated app must have icon glow after the configured hold. Combined
+flyouts assert top-N window membership; `plateTitle` also asserts which window
+gets rank 1's plate. Exact rank-2/rank-3 colour intensity and pixel aesthetics
+are not judged. Screenshots/XAML and labelled steps go to `run.jsonl`; the
+independent foreground observer always writes `foreground.jsonl`. Optional
+Windhawk logs use the existing collector. Classification follows the badge
+harness: pass, fail, disrupted input/focus, or inconclusive discovery/evidence.
+The UIA helper has bounded process timeouts. Hold intervals check both actual
+foreground and delivered events; the standalone observer retains additional
+samples for diagnosis. This cannot guarantee detection of every sub-sample
+external interference.
+
+Additional modes:
+
+```powershell
+# Set Windows taskbar combining to Never manually first.
+python .\highlight_harness.py --app win32 --grouping separated
+# Guided move of all test windows to a different virtual desktop between rounds.
+python .\highlight_harness.py --app win32 --desktop-rounds 2
+```
+
+Separated mode checks actual activation and that all same-app buttons get icon
+glow; there is no multi-window flyout to assert. Desktop rounds record and
+require distinct desktop GUIDs, rediscover the buttons, and establish fresh
+history. They test operation on another desktop, not yet return-to-desktop
+history restoration or windows split across desktops. Snap-group preview cards
+are not supported by this scenario; unexpected extra cards are inconclusive.
+For secondary taskbar duplicates, provide `--tree` (UWPSpy tree) and
+`--taskbar-hwnd` (native taskbar HWND, decimal or 0x-prefixed).
+
+Validation: fixture built with VS 2022; seven offline assertion/geometry/input
+guard tests passed; read-only taskbar discovery was checked on the real desktop.
+Full input-driven runs still require live validation. No Explorer restart,
+injection, mod toggle, taskbar setting change or desktop creation is automated.
+
+```powershell
+python -m unittest discover -s . -p test_highlight_harness.py -v
+```
+
 This suite belongs to **whawk-lru**. UWPSpy provides inspection/IPC and its
 reusable Python client; the native test apps, scenario controller, regression
 fixtures, and transport tests live here.
