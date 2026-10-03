@@ -84,6 +84,20 @@ interaction being tested. This deliberately exercises the delayed-click gap in
 0.10.13 and may fail there. Warm-up also checks the first activation of initially
 untracked Win32 windows. Later Calculator cycles exercise already tracked ones.
 
+Explorer can recreate every thumbnail view whenever the flyout opens. For the
+controlled Win32 fixtures, exact unique native window titles associate the new
+cards with owned HWNDs; the click must then activate that independently identified
+HWND. Neither card order nor recycled XAML handles are a window identity. This
+is test-only matching, not a change to the mod's identity rules. Duplicate or
+missing titles make the test inconclusive. IPC calls still use fresh handle and
+generation references.
+
+Known Calculator harness limitation: its identical window titles cannot use
+this fixture oracle. If Explorer recreates its views, current Calculator tests
+still stop as inconclusive rather than guessing an ordinal/window association.
+The numbered screenshots help manual inspection but are not automatic identity
+recognition. Calculator regression coverage is therefore not complete yet.
+
 Each activated app must have icon glow after the configured hold. Combined
 flyouts assert top-N window membership; `plateTitle` also asserts which window
 gets rank 1's plate. Exact rank-2/rank-3 colour intensity and pixel aesthetics

@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
-from highlight_harness import pair_cards, highlighted, Run, Failure, Disrupted, Inconclusive, FlyoutNotReady, absolute_coordinate, move_mouse, Input, thumbnail_names, screen_cards
+from highlight_harness import pair_cards, highlighted, Run, Failure, Disrupted, Inconclusive, FlyoutNotReady, absolute_coordinate, move_mouse, Input, thumbnail_names, screen_cards, bind_unique_test_titles, card_key
 import ctypes as C
 
 
@@ -15,6 +15,27 @@ def card(handle, x=0, nodes=None):
 
 
 class Geometry(unittest.TestCase):
+    def test_recreated_and_reordered_fixture_cards_keep_window_identity(self):
+        a,b=card(101),card(202)
+        a['ref']['automation_name']='UWPSpy Test A Highlight 1 - 2 running windows'
+        b['ref']['automation_name']='UWPSpy Test A Highlight 2 - 2 running windows'
+        titles={111:'UWPSpy Test A Highlight 1',222:'UWPSpy Test A Highlight 2'}
+        bind_unique_test_titles([a,b],'A - 2 running windows',titles)
+        key=card_key(a)
+        a['ref'].update(handle='303',generation='999')
+        bind_unique_test_titles([b,a],'A - 2 running windows',titles)
+        self.assertEqual(card_key(a),key)
+        self.assertEqual(b['expected_hwnd'],222)
+        run=Run.__new__(Run);run.a=SimpleNamespace(top=1,grouping='combined',preview_style='plateTitle')
+        run.mapping={key:111};run.history=[111];run.log=Mock()
+        a['nodes']=[node('WhRecentFocusThumbNative')]
+        run.assertions([(b,None),(a,None)],True)
+        b['nodes']=a['nodes'];a['nodes']=[node()]
+        with self.assertRaises(Failure):run.assertions([(b,None),(a,None)],True)
+
+    def test_duplicate_test_titles_are_not_guessed(self):
+        with self.assertRaises(Inconclusive):
+            bind_unique_test_titles([card(1)],'A - 2 running windows',{1:'same',2:'same'})
     @patch('highlight_harness.pid',return_value=123)
     @patch('highlight_harness.move_mouse')
     @patch('highlight_harness.U')

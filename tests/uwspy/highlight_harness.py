@@ -116,6 +116,31 @@ def thumbnail_names(group, titles):
     return names
 
 
+def bind_unique_test_titles(cards, group, window_titles):
+    """Test oracle only: controlled unique captions, never production mod matching."""
+    suffix=group.removesuffix(' pinned').rsplit(' - ',1)
+    if len(suffix)!=2: raise Inconclusive('missing group suffix for fixture title matching')
+    names={}
+    for hwnd,title in window_titles.items():
+        if not title: raise Inconclusive('test window has an empty title')
+        name=title+' - '+suffix[1]
+        if name in names: raise Inconclusive('test window titles are not unique')
+        names[name]=hwnd
+    seen=set()
+    for card in cards:
+        hwnd=names.get(card['ref']['automation_name'].removesuffix(' pinned'))
+        if hwnd is None or hwnd in seen:
+            raise Inconclusive('fixture thumbnail titles do not uniquely cover owned windows')
+        seen.add(hwnd);card['expected_hwnd']=hwnd
+
+
+def card_key(card):
+    # IPC references remain generation-scoped for calls, but are not persistent
+    # app-window identities: Explorer recreates these views on every opening.
+    if 'expected_hwnd' in card: return ('window',card['expected_hwnd'])
+    return (card['ref']['handle'],card['ref']['generation'])
+
+
 class FlyoutNotReady(Inconclusive): pass
 
 
@@ -325,18 +350,21 @@ class Run:
     def snapshot(self):
         if self.a.grouping=='separated': return self.flyout()
         inventory=self.elements('Taskbar.TaskItemThumbnailView')
-        titles=[]
+        titles={}
         for hwnd,process in self.owned.items():
             if pid(hwnd)!=process: raise Disrupted('test HWND recycled during discovery')
             title=C.create_unicode_buffer(1024);U.GetWindowTextW(hwnd,title,len(title))
-            titles.append(title.value)
-        names=thumbnail_names(self.group_name,titles)
+            titles[hwnd]=title.value
+        names=thumbnail_names(self.group_name,titles.values())
         cards=[c for c in inventory if c['ref']['automation_name'].removesuffix(' pinned') in names]
         self.log('thumbnail_discovery',expected=self.a.count,group=self.group_name,
                  matched=len(cards),
                  xaml=[dict(ref=c['ref'],rectangle=c['nodes'][0].get('rectangle')) for c in inventory])
         if len(cards)!=self.a.count:
             raise FlyoutNotReady(f'expected {self.a.count} thumbnails; XAML matched {len(cards)} of {len(inventory)}; see thumbnail_discovery')
+        if self.a.app=='win32':
+            bind_unique_test_titles(cards,self.group_name,titles)
+            self.log('fixture_card_identity',bindings=[dict(ref=c['ref'],hwnd=c['expected_hwnd']) for c in cards])
         pairs=screen_cards(cards)
         for c,_ in pairs: self.capture(c)
         return pairs
@@ -349,8 +377,8 @@ class Run:
             return
         expected=set(self.history[:self.a.top]); seen=set()
         for card,_ in pairs:
-            key=(card['ref']['handle'],card['ref']['generation'])
-            hwnd=self.mapping.get(key); actual=highlighted(card['nodes'])
+            key=card_key(card)
+            hwnd=card.get('expected_hwnd',self.mapping.get(key)); actual=highlighted(card['nodes'])
             self.log('highlight',card=key,hwnd=hwnd,expected=hwnd in expected,observed=actual)
             if hwnd: seen.add(hwnd)
             if hwnd in expected and not actual: raise Failure(f'recent window {hwnd:#x} has no preview highlight')
@@ -362,13 +390,15 @@ class Run:
         if not expected.issubset(seen): raise Inconclusive('thumbnail identities changed; refusing stale correspondence')
 
     def activate(self, pair, ordinal):
-        card,row=pair; key=(card['ref']['handle'],card['ref']['generation'])
+        card,row=pair; key=card_key(card)
         self.point(row,click=True)
         deadline=time.monotonic()+3
         while int(U.GetForegroundWindow() or 0) not in self.owned:
             if time.monotonic()>deadline: raise Disrupted('thumbnail click did not activate a test window')
             time.sleep(.02)
         hwnd=int(U.GetForegroundWindow())
+        if 'expected_hwnd' in card and card['expected_hwnd']!=hwnd:
+            raise Disrupted('thumbnail click did not activate its independently identified fixture window')
         if key in self.mapping and self.mapping[key]!=hwnd: raise Disrupted('thumbnail activated a different window')
         if hwnd in self.mapping.values() and self.mapping.get(key)!=hwnd: raise Inconclusive('two cards resolved to one window')
         self.mapping[key]=hwnd
