@@ -73,26 +73,39 @@ def image_name(hwnd):
 
 
 def windows(app, processes=()):
+    if app=='calculator':
+        return calculator_windows()
+    if app!='win32':
+        raise ValueError(f'unsupported app: {app}')
     result = {}
     @ENUM
     def visit(hwnd, unused):
         cls = C.create_unicode_buffer(256); U.GetClassNameW(hwnd, cls, 256)
         if app == 'win32':
             match = cls.value == 'UWPSpyTestChild' and (image_name(hwnd)=='a.exe' if processes is None else pid(hwnd) in processes)
-        else:
-            match = image_name(hwnd) == 'calculatorapp.exe'
-            if cls.value == 'ApplicationFrameWindow':
-                children = []
-                @ENUM
-                def child(h, unused):
-                    if image_name(h) == 'calculatorapp.exe': children.append(h)
-                    return True
-                U.EnumChildWindows(hwnd, child, 0)
-                match = bool(children)
         if match: result[int(hwnd)] = pid(hwnd)
         return True
     U.EnumWindows(visit, 0)
     return result
+
+
+def build_calculator_probe(compiler):
+    source=HERE/'calculator_windows.cpp'; binary=HERE/'bin'/'CalculatorWindows.exe'
+    if not binary.exists() or binary.stat().st_mtime<source.stat().st_mtime:
+        binary.parent.mkdir(exist_ok=True)
+        print('Building Calculator discovery helper...',flush=True)
+        subprocess.run([str(compiler),'-std=c++17','-O2','-Wall','-Wextra','-Werror',str(source),
+                        '-lole32','-lshell32','-luuid','-luser32','-o',str(binary)],
+                       check=True,timeout=60,creationflags=subprocess.CREATE_NO_WINDOW)
+
+
+def calculator_windows():
+    try:
+        result=subprocess.run([str(HERE/'bin'/'CalculatorWindows.exe')],capture_output=True,
+                              timeout=5,check=True,creationflags=subprocess.CREATE_NO_WINDOW)
+    except subprocess.TimeoutExpired as e:
+        raise Inconclusive('Calculator window discovery timed out reading shell properties') from e
+    return {int(row['hwnd']):int(row['pid']) for row in json.loads(result.stdout)}
 
 
 def rect(node):
@@ -420,7 +433,9 @@ class Run:
         self.wait(.4)
 
     def setup(self):
+        print(f'Starting {self.a.app} highlight test. Preparing recording and window discovery...',flush=True)
         self.log('configuration',arguments={k:str(v) for k,v in vars(self.a).items()})
+        if self.a.app=='calculator': build_calculator_probe(self.a.compiler)
         if self.a.app=='win32' and windows('win32',None):
             raise Inconclusive('Existing A test windows found. Close previous A test windows before rerunning; no new windows were launched.')
         self.monitor=ForegroundMonitor()
@@ -431,6 +446,7 @@ class Run:
             raise Inconclusive('Existing Calculator windows found. Close them yourself before this isolated Calculator run; other apps can stay open.')
         baseline=int(U.GetForegroundWindow() or 0); launch_start=time.monotonic()
         for n in range(self.a.count):
+            print(f'Launching {self.a.app} window {n+1}/{self.a.count}...',flush=True)
             if self.a.app=='win32':
                 command=[str(HERE/'bin'/'A.exe'),'--label',f'Highlight {n+1}','--background']
                 if self.a.launch in ('minimized','attention'): command.append('--minimized')
@@ -439,10 +455,19 @@ class Run:
             else:
                 subprocess.Popen(['calc.exe']).wait(timeout=10)
             deadline=time.monotonic()+15
+            next_progress=time.monotonic()+2
             while True:
                 found=windows(self.a.app,[p.pid for p in self.children])
-                if len(found)==n+1: self.owned=found; break
-                if time.monotonic()>deadline: raise Inconclusive('new test window was not discovered')
+                if len(found)==n+1:
+                    self.owned=found
+                    self.log('windows_discovered',windows=found)
+                    print(f'Found {len(found)}/{self.a.count} test windows.',flush=True)
+                    break
+                if time.monotonic()>=next_progress:
+                    print(f'Waiting for window {n+1}/{self.a.count}: discovered {len(found)} so far...',flush=True)
+                    self.log('window_discovery_wait',expected=n+1,windows=found)
+                    next_progress=time.monotonic()+2
+                if time.monotonic()>deadline: raise Inconclusive(f'new test window was not discovered (expected {n+1}, found {len(found)}); see window_discovery_wait')
                 time.sleep(.15)
             if self.a.app=='calculator':
                 # Windows may ignore minimized startup for packaged apps. Do not claim

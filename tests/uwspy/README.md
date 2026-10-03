@@ -45,6 +45,13 @@ Run these separately. Close the previous run's A test windows or Calculators
 yourself first; the harness leaves its windows open for inspection and never
 terminates existing applications. Calculator mode requires no pre-existing
 Calculator windows, because otherwise the group contains unrelated cards.
+Calculator can remain pinned. Discovery checks the hosted frame's exact shell
+AppUserModelID rather than requiring a Calculator child window beneath it.
+`calculator_windows.cpp` is built automatically with the configured compiler;
+its read-only property query runs in a separate process with a five-second
+timeout. Modern unhosted Calculator windows use their process identity.
+The console reports preparation, each launch, and discovery progress while
+waiting, with discovered HWND/PID pairs recorded in `run.jsonl`.
 Four windows are created by default. Press Enter at the preparation prompt,
 then leave mouse/keyboard alone. Hold Escape to abort; Ctrl+C also works when
 the console has focus. Input is never sent to a Calculator until its foreground

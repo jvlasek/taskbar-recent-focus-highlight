@@ -4,6 +4,8 @@ from unittest.mock import Mock, patch
 from types import SimpleNamespace
 from highlight_harness import pair_cards, highlighted, Run, Failure, Disrupted, Inconclusive, FlyoutNotReady, absolute_coordinate, move_mouse, Input, thumbnail_names, screen_cards, bind_unique_test_titles, card_key
 import ctypes as C
+import subprocess
+from highlight_harness import calculator_windows, windows
 
 
 def node(name='', rectangle='(0,0) - (100,150)', **props):
@@ -15,6 +17,24 @@ def card(handle, x=0, nodes=None):
 
 
 class Geometry(unittest.TestCase):
+    @patch('highlight_harness.subprocess.run')
+    def test_calculator_probe_preserves_frame_identity(self, probe):
+        probe.return_value.stdout=b'[{"hwnd":4666,"pid":20120},{"hwnd":4888,"pid":20120}]'
+        self.assertEqual(windows('calculator'),{4666:20120,4888:20120})
+        self.assertEqual(probe.call_args.kwargs['timeout'],5)
+
+    @patch('highlight_harness.subprocess.run')
+    def test_calculator_probe_timeout_is_inconclusive(self, probe):
+        probe.side_effect=subprocess.TimeoutExpired('probe',5)
+        with self.assertRaisesRegex(Inconclusive,'discovery timed out'):
+            calculator_windows()
+
+    @patch('highlight_harness.subprocess.run')
+    def test_failed_calculator_probe_is_not_an_empty_window_set(self, probe):
+        probe.side_effect=subprocess.CalledProcessError(1,'probe')
+        with self.assertRaises(subprocess.CalledProcessError):
+            calculator_windows()
+
     def test_recreated_and_reordered_fixture_cards_keep_window_identity(self):
         a,b=card(101),card(202)
         a['ref']['automation_name']='UWPSpy Test A Highlight 1 - 2 running windows'
