@@ -950,25 +950,27 @@ Live Calculator launch/minimize/relaunch cycles and GIMP multi-window testing
 are required before calling this build validated in Explorer.
 
 
-## Temporary first-activation diagnostics (0.10.12)
+## Bounded foreground recovery (0.10.13)
 
-Search `TEMP_PREVIEW_ACTIVATION` in the source to remove this instrumentation
-once the Calculator first-activation issue is understood. It logs foreground
-arrival/normalization/acceptance, identity rejection reasons, preview scheduling
-and confirmation exits, and app-vs-thumbnail HWNDs for actual task-item clicks.
-Exit line numbers refer to this exact diagnostic source. Existing confirmation
-logs identify successful stamps. The comparison getter does not select a new
-click target; recency, timers, filtering and rendering behavior are unchanged.
-Remove the temporary comparison helper, its declaration/call, marked log lines,
-and this section after diagnosis. No cache, timer or retry machinery is added.
-Logging and the extra getter can affect timing; this is not a fix or validation.
+An independent observer verified a Calculator activation which changed foreground
+and keyboard focus without a matching foreground event reaching either listener.
+After a foreground event for this Explorer's taskbar/flyout surfaces, the focus
+worker samples foreground every 100 ms for at most two seconds. Repeated shell
+signals do not extend an active deadline. On the first non-transient window,
+it stops and feeds that HWND through normal focus handling. App and preview
+thresholds, exclusions, identity matching and per-desktop rules remain in force.
+A normal app event cancels recovery before processing; desktop switch, shutdown,
+and window destruction also cancel it. Stale timer messages after cancellation
+are ignored. There is no idle polling and no additional XAML subscription.
 
-Record with Mod logs enabled and `python tests/uwspy/record_windhawk.py`.
-Click a flashing Calculator, keep it focused a few seconds, inspect the flyout,
-then switch away and focus that same Calculator again. Stop with Ctrl+C and
-compare both activations. The taskbar icon's 8-second minimum is independent.
+This is bounded recovery, not a guarantee for an activation delayed beyond the
+window or without a preceding shell signal. Validate first activation, normal
+activation, long flyout dwell, positive preview minimum, and disable/unload.
+The explicit native preview-click path now uses GetWindowForThumbnailTaskItem,
+matching captured preview identity; icon metadata still uses GetAppWindow.
+Temporary 0.10.12 activation diagnostics are removed. The reconciliation itself
+has one log line. Existing identity and preview-result logs remain.
 
-For independent evidence, `python tests/uwspy/record_focus.py` starts both the
-standalone C foreground observer and Windhawk capture, with one Ctrl+C stopping
-both. See `tests/uwspy/README.md`. The observer is external diagnostic tooling;
-do not move its 50 ms foreground sampling into the mod as a workaround.
+Use `python tests/uwspy/record_focus.py` for independent foreground + Windhawk
+recording with one Ctrl+C. Its standalone 50 ms observer is diagnostic only.
+Run `python tests/run-foreground-recheck-tests.py` for controlled timer scenarios.
