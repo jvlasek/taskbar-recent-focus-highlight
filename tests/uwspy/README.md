@@ -80,6 +80,10 @@ multi-window group. The first flyout must have no highlights before activation.
 Calculator uses real packaged-app launches, then minimizes the discovered
 windows. Windows may have activated them at launch: this mode does NOT claim
 to test a guaranteed never-focused launch or force Calculator attention.
+By default each launch gets two seconds before minimizing. This is only an
+initialization allowance, not proof that content has rendered. Use
+`--calculator-startup-seconds 0` to retain the early-minimize stress case,
+which can produce blank previews and a very short initial flyout.
 
 Calibration clicks each card and associates it with the actual foreground HWND,
 independently of the mod's identity mapping. Calculator receives 111/222/333/444
@@ -99,11 +103,23 @@ is test-only matching, not a change to the mod's identity rules. Duplicate or
 missing titles make the test inconclusive. IPC calls still use fresh handle and
 generation references.
 
-Known Calculator harness limitation: its identical window titles cannot use
-this fixture oracle. If Explorer recreates its views, current Calculator tests
-still stop as inconclusive rather than guessing an ordinal/window association.
-The numbered screenshots help manual inspection but are not automatic identity
-recognition. Calculator regression coverage is therefore not complete yet.
+Calculator combined-mode tests use a different, retrospective check. Calibration
+activates every owned HWND to establish controlled recency. Each later step
+captures the flyout, hovers without changing foreground, captures again, and
+clicks the same card. The resulting foreground HWND identifies the clicked
+card; its saved PRE-click highlight and rank-1 plate are checked against history
+before recording that activation. No persistent XAML identity, title matching,
+mod log mapping, or screenshot recognition is required across reopenings.
+Within a single hover, changed card identities stop the run and changed
+membership/rank-1 plate fails it. PID checks reject recycled window handles.
+
+Every owned window must be activated during calibration and checked in each
+cycle. Alternating sweep directions exercise both recent and unranked windows;
+position selects an action but never supplies window identity. Reordering that
+leaves coverage incomplete is inconclusive. This verifies one clicked card's
+pre-click state per step, not all siblings' HWND associations simultaneously,
+and does not assert the first startup activation before calibration. Numbered
+screenshots remain manual evidence. Win32 retains full-flyout membership checks.
 
 Each activated app must have icon glow after the configured hold. Combined
 flyouts assert top-N window membership; `plateTitle` also asserts which window

@@ -17,6 +17,49 @@ def card(handle, x=0, nodes=None):
 
 
 class Geometry(unittest.TestCase):
+    def preview_run(self):
+        run=Run.__new__(Run)
+        run.a=SimpleNamespace(top=2,preview_style='plateTitle')
+        run.history=[11,22,33];run.owned={11:1,22:1,33:1};run.log=Mock()
+        return run
+
+    def test_retrospective_uses_preclick_history_despite_new_card_ids(self):
+        run=self.preview_run()
+        run.check_clicked_preview(card(999,nodes=[node('WhRecentFocusThumbNative')]),11)
+        run.check_clicked_preview(card(888,nodes=[node('WhRecentFocusThumbTitleBg')]),22)
+        run.check_clicked_preview(card(777),33)
+        self.assertEqual(run.history,[11,22,33])
+
+    def test_retrospective_detects_missing_extra_and_wrong_plate(self):
+        run=self.preview_run()
+        for c,hwnd in [(card(1),11),(card(2,nodes=[node('WhRecentFocusThumbTitleBg')]),33),
+                       (card(3,nodes=[node('WhRecentFocusThumbNative')]),22),
+                       (card(4,nodes=[node('WhRecentFocusThumbTitleBg')]),11)]:
+            with self.assertRaises(Failure):run.check_clicked_preview(c,hwnd)
+
+    def test_duplicate_activations_cannot_pass_window_coverage(self):
+        run=self.preview_run()
+        with self.assertRaises(Inconclusive):run.require_coverage({11,22},'calibration')
+        run.require_coverage({11,22,33},'cycle')
+
+    @patch('highlight_harness.U')
+    def test_calculator_round_recreated_cards_and_bidirectional_sweeps(self,user):
+        run=self.preview_run();run.a.count=3;run.a.cycles=2;run.a.hover_seconds=5
+        run.step=Mock();run.point=Mock();run.wait=Mock();run.flyout=Mock()
+        serial=[0]
+        def opened():
+            serial[0]+=10
+            pairs=[(card(serial[0]+i),{'rect':[0,0,10,10]}) for i in range(3)]
+            run.snapshot=Mock(return_value=pairs)
+            return pairs
+        run.flyout.side_effect=opened
+        calls=[]
+        def activate(pair,n,check_previous=False):
+            calls.append((n,check_previous));return [11,22,33][n]
+        run.activate=Mock(side_effect=activate)
+        run.calculator_round(0)
+        self.assertEqual(calls,[(0,False),(1,False),(2,False),(2,True),(1,True),(0,True),(0,True),(1,True),(2,True)])
+
     @patch('highlight_harness.subprocess.run')
     def test_calculator_probe_preserves_frame_identity(self, probe):
         probe.return_value.stdout=b'[{"hwnd":4666,"pid":20120},{"hwnd":4888,"pid":20120}]'

@@ -402,20 +402,81 @@ class Run:
                     raise Failure('preview rank 1 plate is on the wrong window (or native plate unavailable)')
         if not expected.issubset(seen): raise Inconclusive('thumbnail identities changed; refusing stale correspondence')
 
-    def activate(self, pair, ordinal):
+    def check_clicked_preview(self, card, hwnd):
+        # Called after identifying the activated HWND, before updating history.
+        # The card is the snapshot from BEFORE that click, not a repainted card.
+        expected=hwnd in self.history[:self.a.top]
+        actual=highlighted(card['nodes'])
+        self.log('retrospective_highlight',hwnd=hwnd,history=list(self.history),
+                 card=card_key(card),expected=expected,observed=actual)
+        if expected!=actual:
+            raise Failure(f'pre-click preview membership wrong for {hwnd:#x}')
+        if expected and self.a.preview_style=='plateTitle':
+            plate=any(n.get('name')=='WhRecentFocusThumbNative' for n in card['nodes'])
+            if plate!=(hwnd==self.history[0]):
+                raise Failure('pre-click preview rank 1 plate is on the wrong window')
+
+    def require_coverage(self, seen, phase):
+        missing=set(self.owned)-seen
+        self.log('window_coverage',phase=phase,seen=sorted(seen),missing=sorted(missing))
+        if missing:
+            raise Inconclusive(f'{phase}: not every test window was activated; thumbnail order may have changed')
+
+    def calculator_round(self, desktop):
+        # Startup focus can have ranked any of these apps already. Establish a
+        # complete controlled history before asserting pre-click membership.
+        seen=set()
+        for n in range(self.a.count):
+            self.step(f'{desktop}-calibrate-{n+1}')
+            seen.add(self.activate(self.flyout()[n],n))
+        self.require_coverage(seen,'calibration')
+        for cycle in range(self.a.cycles):
+            seen=set()
+            # Reverse the previous sweep so we exercise recent AND unranked
+            # windows, instead of repeatedly activating only the oldest one.
+            order=reversed(range(self.a.count)) if cycle%2==0 else range(self.a.count)
+            for n in order:
+                self.step(f'{desktop}-{cycle}-hover-{n+1}')
+                pairs=self.flyout()
+                card,row=pairs[n]
+                before=int(U.GetForegroundWindow() or 0)
+                self.point(row); self.wait(self.a.hover_seconds,{before})
+                fresh=self.snapshot()
+                # Identities need remain stable only during this one open flyout.
+                old={card_key(c):c for c,_ in pairs}
+                new={card_key(c):c for c,_ in fresh}
+                if len(old)!=len(pairs) or len(new)!=len(fresh) or old.keys()!=new.keys():
+                    raise Inconclusive('thumbnail identities changed during hover')
+                for key in old:
+                    def state(c):
+                        return (highlighted(c['nodes']),any(x.get('name')=='WhRecentFocusThumbNative' for x in c['nodes']))
+                    if state(old[key])!=state(new[key]):
+                        raise Failure('preview membership or rank-1 plate changed during hover')
+                target=next(pair for pair in fresh if card_key(pair[0])==card_key(card))
+                self.step(f'{desktop}-{cycle}-activate-{n+1}')
+                seen.add(self.activate(target,n,check_previous=True))
+            self.require_coverage(seen,f'cycle {cycle+1}')
+
+    def activate(self, pair, ordinal, check_previous=False):
         card,row=pair; key=card_key(card)
+        if int(U.GetForegroundWindow() or 0) in self.owned:
+            raise Disrupted('test window already foreground before thumbnail click')
         self.point(row,click=True)
         deadline=time.monotonic()+3
         while int(U.GetForegroundWindow() or 0) not in self.owned:
             if time.monotonic()>deadline: raise Disrupted('thumbnail click did not activate a test window')
             time.sleep(.02)
         hwnd=int(U.GetForegroundWindow())
+        if hwnd not in self.owned or pid(hwnd)!=self.owned[hwnd]:
+            raise Disrupted('activated test window identity changed')
         if 'expected_hwnd' in card and card['expected_hwnd']!=hwnd:
             raise Disrupted('thumbnail click did not activate its independently identified fixture window')
-        if key in self.mapping and self.mapping[key]!=hwnd: raise Disrupted('thumbnail activated a different window')
-        if hwnd in self.mapping.values() and self.mapping.get(key)!=hwnd: raise Inconclusive('two cards resolved to one window')
-        self.mapping[key]=hwnd
+        if self.a.app!='calculator':
+            if key in self.mapping and self.mapping[key]!=hwnd: raise Disrupted('thumbnail activated a different window')
+            if hwnd in self.mapping.values() and self.mapping.get(key)!=hwnd: raise Inconclusive('two cards resolved to one window')
+            self.mapping[key]=hwnd
         self.log('activation',card=key,hwnd=hwnd)
+        if check_previous: self.check_clicked_preview(card,hwnd)
         if self.a.app=='calculator':
             for vk in [0x1B]+[ord(str((ordinal%9)+1))]*3:
                 if U.GetForegroundWindow()!=hwnd or pid(hwnd)!=self.owned[hwnd]: raise Disrupted('focus/identity changed before Calculator input')
@@ -431,6 +492,7 @@ class Run:
         if U.GetForegroundWindow()!=hwnd: raise Disrupted('focus changed during post-activation inspection')
         U.ShowWindowAsync(hwnd,6)
         self.wait(.4)
+        return hwnd
 
     def setup(self):
         print(f'Starting {self.a.app} highlight test. Preparing recording and window discovery...',flush=True)
@@ -470,6 +532,9 @@ class Run:
                 if time.monotonic()>deadline: raise Inconclusive(f'new test window was not discovered (expected {n+1}, found {len(found)}); see window_discovery_wait')
                 time.sleep(.15)
             if self.a.app=='calculator':
+                if self.a.calculator_startup_seconds:
+                    print(f'Allowing Calculator {self.a.calculator_startup_seconds:g}s to initialize before minimizing...',flush=True)
+                    self.wait(self.a.calculator_startup_seconds)
                 # Windows may ignore minimized startup for packaged apps. Do not claim
                 # these were never activated: Calculator always has a warm-up phase.
                 for hwnd in found: U.ShowWindowAsync(hwnd,6)
@@ -493,6 +558,9 @@ class Run:
                 self.step(f'{desktop}-initial-hover')
                 pairs=self.flyout()
                 if self.a.app=='win32' and desktop==0: self.assertions(pairs,exact=True)
+                if self.a.app=='calculator' and self.a.grouping=='combined':
+                    self.calculator_round(desktop)
+                    continue
                 # Calibrate card -> actual foreground independently of mod logs.
                 for n in range(self.a.count):
                     self.step(f'{desktop}-calibrate-{n+1}')
@@ -510,6 +578,8 @@ class Run:
                         self.activate(pairs[n],n)
                         self.assertions(self.flyout(),exact=True)
             status='pass'; reason='foreground, icon presence and per-window preview membership held'
+            if self.a.app=='calculator' and self.a.grouping=='combined':
+                reason='foreground, icon presence, hover stability and pre-click preview checks held for every test window in each cycle'
         except Failure as e: status='fail'; reason=str(e)
         except (Disrupted,KeyboardInterrupt) as e: status='disrupted'; reason=str(e) or 'interrupted'
         except Exception as e: status='inconclusive'; reason=repr(e)
@@ -541,11 +611,12 @@ def main():
     p.add_argument('--focus-seconds',type=float,default=10,help='exceed BOTH app and preview thresholds')
     p.add_argument('--hover-seconds',type=float,default=5)
     p.add_argument('--flyout-seconds',type=float,default=1)
+    p.add_argument('--calculator-startup-seconds',type=float,default=2,help='delay before minimizing each Calculator; 0 exercises early-minimize/blank previews, not a rendering-readiness guarantee')
     p.add_argument('--windhawk-log',action='store_true')
     p.add_argument('--output',type=Path,default=HERE/'captures')
     p.add_argument('--compiler',type=Path,default=Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Windhawk/Compiler/bin/clang++.exe')
     a=p.parse_args()
-    if not 2<=a.count<=9 or not 1<=a.top<a.count or min(a.cycles,a.desktop_rounds,a.focus_seconds,a.hover_seconds,a.flyout_seconds)<=0:
+    if not 0<=a.calculator_startup_seconds<=60 or not 2<=a.count<=9 or not 1<=a.top<a.count or min(a.cycles,a.desktop_rounds,a.focus_seconds,a.hover_seconds,a.flyout_seconds)<=0:
         p.error('require 2..9 windows, 1 <= top < count, and positive timings/counts')
     if not a.endpoint:
         choices=endpoints()

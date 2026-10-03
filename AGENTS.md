@@ -996,3 +996,13 @@ restoration. Tests: `python -m unittest discover -s tests/uwspy -p
 test_highlight_harness.py -v`. No mod version increase is needed for harness-only
 changes. Live input runs require user preparation; do not disrupt their desktop
 merely to turn an unverified scenario into a claimed pass.
+
+Calculator combined-mode harness checks are retrospective: capture before
+click, identify the target from the actual foreground HWND/PID, check saved
+membership and rank-1 plate against pre-click history, then update history.
+Never carry Calculator XAML card identities across flyout reopenings or use
+the mod's mappings as the test oracle. Calibration and each cycle must cover
+every owned HWND. Hover checks require stable cards within that opening.
+These are per-click checks, not simultaneous sibling identity validation.
+`--calculator-startup-seconds` defaults to 2; use 0 for early-minimize/blank
+preview stress. The delay is not a guarantee of content readiness.
