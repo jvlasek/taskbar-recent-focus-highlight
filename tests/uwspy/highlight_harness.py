@@ -32,6 +32,11 @@ U.mouse_event.argtypes = [W.DWORD, W.DWORD, W.DWORD, W.DWORD, C.c_size_t]
 U.keybd_event.argtypes = [W.BYTE, W.BYTE, W.DWORD, C.c_size_t]
 U.GetAsyncKeyState.argtypes = [C.c_int]
 U.GetAsyncKeyState.restype = C.c_short
+U.MonitorFromPoint.argtypes = [W.POINT,W.DWORD]
+U.MonitorFromPoint.restype = W.HANDLE
+class MonitorInfo(C.Structure):
+    _fields_=[('size',W.DWORD),('monitor',W.RECT),('work',W.RECT),('flags',W.DWORD)]
+U.GetMonitorInfoW.argtypes = [W.HANDLE,C.POINTER(MonitorInfo)]
 K = C.WinDLL('kernel32', use_last_error=True)
 K.OpenProcess.argtypes = [W.DWORD, W.BOOL, W.DWORD]
 K.OpenProcess.restype = W.HANDLE
@@ -62,7 +67,7 @@ def windows(app, processes=()):
     def visit(hwnd, unused):
         cls = C.create_unicode_buffer(256); U.GetClassNameW(hwnd, cls, 256)
         if app == 'win32':
-            match = cls.value == 'UWPSpyTestChild' and pid(hwnd) in processes
+            match = cls.value == 'UWPSpyTestChild' and (image_name(hwnd)=='a.exe' if processes is None else pid(hwnd) in processes)
         else:
             match = image_name(hwnd) == 'calculatorapp.exe'
             if cls.value == 'ApplicationFrameWindow':
@@ -89,6 +94,9 @@ def desktop_id():
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops') as key:
         value,_=winreg.QueryValueEx(key,'CurrentVirtualDesktop')
         return bytes(value).hex()
+
+
+class FlyoutNotReady(Inconclusive): pass
 
 
 def pair_cards(cards, rows):
@@ -222,17 +230,41 @@ class Run:
             pairs=pair_cards(cards,rows)
             for c,_ in pairs: self.capture(c)
             return pairs
+        button,row=self.button()
+        self.leave_button(row)
+        # Moving out may dismiss an old flyout. Rediscover in case layout changed.
         button,row=self.button(); self.point(row)
         self.wait(self.a.flyout_seconds)
         self.group_name=row['name']
-        return self.snapshot()
+        deadline=time.monotonic()+5
+        while True:
+            try: return self.snapshot()
+            except FlyoutNotReady:
+                if time.monotonic()>=deadline: raise
+                self.wait(.2)
+
+    def leave_button(self, row):
+        l,t,r,b=row['rect']
+        monitor=U.MonitorFromPoint(W.POINT(round((l+r)/2),round((t+b)/2)),2)
+        info=MonitorInfo();info.size=C.sizeof(info)
+        if not monitor or not U.GetMonitorInfoW(monitor,C.byref(info)):
+            raise Inconclusive('cannot find taskbar monitor work area')
+        x=(info.work.left+info.work.right)//2; y=(info.work.top+info.work.bottom)//2
+        if l<=x<r and t<=y<b: raise Inconclusive('no safe hover reset point')
+        if not U.SetCursorPos(x,y): raise Disrupted('hover reset rejected')
+        self.log('input',action='hover-reset',point=[x,y])
+        self.wait(.35)
 
     def snapshot(self):
         if self.a.grouping=='separated': return self.flyout()
-        cards=self.elements('Taskbar.TaskItemThumbnailView')
-        cards=[c for c in cards if c['ref']['automation_name'].removesuffix(' pinned') == self.group_name.removesuffix(' pinned')]
+        inventory=self.elements('Taskbar.TaskItemThumbnailView')
+        cards=[c for c in inventory if c['ref']['automation_name'].removesuffix(' pinned') == self.group_name.removesuffix(' pinned')]
         rows=[r for r in self.uia() if 'TaskItemThumbnail' in r['class']]
-        if len(cards)!=self.a.count: raise Inconclusive('expected test group thumbnail count not found')
+        self.log('thumbnail_discovery',expected=self.a.count,group=self.group_name,
+                 matched=len(cards),uia_count=len(rows),
+                 xaml=[dict(ref=c['ref'],rectangle=c['nodes'][0].get('rectangle')) for c in inventory])
+        if len(cards)!=self.a.count or len(rows)!=self.a.count:
+            raise FlyoutNotReady(f'expected {self.a.count} thumbnails; XAML matched {len(cards)} of {len(inventory)}, UIA found {len(rows)}; see thumbnail_discovery')
         pairs=pair_cards(cards,rows)
         for c,_ in pairs: self.capture(c)
         return pairs
@@ -287,6 +319,8 @@ class Run:
 
     def setup(self):
         self.log('configuration',arguments={k:str(v) for k,v in vars(self.a).items()})
+        if self.a.app=='win32' and windows('win32',None):
+            raise Inconclusive('Existing A test windows found. Close previous A test windows before rerunning; no new windows were launched.')
         self.monitor=ForegroundMonitor()
         self.observer=ForegroundLog(self.output); self.observer.start(build_observer(self.a.compiler))
         if self.a.windhawk_log:

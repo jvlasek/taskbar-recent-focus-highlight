@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
-from highlight_harness import pair_cards, highlighted, Run, Failure, Disrupted, Inconclusive
+from highlight_harness import pair_cards, highlighted, Run, Failure, Disrupted, Inconclusive, FlyoutNotReady
 
 
 def node(name='', rectangle='(0,0) - (100,150)', **props):
@@ -14,6 +14,30 @@ def card(handle, x=0, nodes=None):
 
 
 class Geometry(unittest.TestCase):
+    def test_flyout_reenters_and_waits_for_realization(self):
+        run=Run.__new__(Run);run.a=SimpleNamespace(grouping='combined',flyout_seconds=1)
+        row=dict(name='A - 4 running windows')
+        run.button=Mock(return_value=({},row)); run.leave_button=Mock();run.point=Mock();run.wait=Mock()
+        run.snapshot=Mock(side_effect=[FlyoutNotReady('not yet'),['ready']])
+        self.assertEqual(run.flyout(),['ready'])
+        run.leave_button.assert_called_once_with(row)
+        self.assertEqual(run.button.call_count,2)
+        self.assertEqual(run.snapshot.call_count,2)
+
+    def test_flyout_does_not_retry_identity_ambiguity(self):
+        run=Run.__new__(Run);run.a=SimpleNamespace(grouping='combined',flyout_seconds=1)
+        run.button=Mock(return_value=({},dict(name='A')));run.leave_button=Mock();run.point=Mock();run.wait=Mock()
+        run.snapshot=Mock(side_effect=Inconclusive('ambiguous geometry'))
+        with self.assertRaises(Inconclusive):run.flyout()
+        run.snapshot.assert_called_once()
+
+    @patch('highlight_harness.windows',return_value={123:456})
+    @patch('highlight_harness.subprocess.Popen')
+    def test_existing_fixture_rejected_before_launch(self, launch, windows):
+        run=Run.__new__(Run);run.a=SimpleNamespace(app='win32');run.log=Mock()
+        with self.assertRaisesRegex(Inconclusive,'Existing A test windows'):run.setup()
+        launch.assert_not_called()
+
     def test_negative_monitor_and_scaling(self):
         a,b=card(1),card(2,110)
         r1=dict(root=10,rect=[-1200,200,-1050,425]);r2=dict(root=10,rect=[-1035,200,-885,425])

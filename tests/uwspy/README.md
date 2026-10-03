@@ -33,6 +33,14 @@ then leave mouse/keyboard alone. Hold Escape to abort; Ctrl+C also works when
 the console has focus. Input is never sent to a Calculator until its foreground
 HWND belongs to the discovered test set and its PID still matches.
 
+Previous A fixture windows are rejected before launching a new Win32 run.
+Flyout opening moves the pointer into the monitor work area, then rediscovers
+and re-enters the button. It waits for matching thumbnails for up to five
+seconds after the initial hover delay (individual inspection calls also take
+time). Post-hover snapshots do not reset the pointer. `thumbnail_discovery`
+records unfiltered XAML names, matches and UIA counts to distinguish a missing
+flyout from a recognition mismatch.
+
 The Win32 variants `--launch background`, `--launch minimized`, and
 `--launch attention` distinguish background display, minimized display and
 minimized display requesting taskbar attention. All share one AppId to form a
