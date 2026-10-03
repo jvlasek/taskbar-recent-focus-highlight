@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
-from highlight_harness import pair_cards, highlighted, Run, Failure, Disrupted, Inconclusive, FlyoutNotReady, absolute_coordinate, move_mouse, Input
+from highlight_harness import pair_cards, highlighted, Run, Failure, Disrupted, Inconclusive, FlyoutNotReady, absolute_coordinate, move_mouse, Input, thumbnail_names, screen_cards
 import ctypes as C
 
 
@@ -15,6 +15,36 @@ def card(handle, x=0, nodes=None):
 
 
 class Geometry(unittest.TestCase):
+    @patch('highlight_harness.pid',return_value=123)
+    @patch('highlight_harness.move_mouse')
+    @patch('highlight_harness.U')
+    def test_ipc_geometry_rechecked_before_click(self,user,move,process):
+        run=Run.__new__(Run);run.explorer=123;run.check=Mock();run.log=Mock();run.client=Mock()
+        user.GetAncestor.return_value=10
+        def class_name(hwnd,buffer,size): buffer.value='ThumbnailDeviceHelperWnd'
+        user.GetClassNameW.side_effect=class_name
+        row=dict(rect=[0,0,100,100],ipc=dict(tree='1',handle='2',generation='3'))
+        run.client.call.return_value={'screen_rect':[10,0,110,100]}
+        with self.assertRaisesRegex(Disrupted,'moved before click'):run.point(row,True)
+        user.mouse_event.assert_not_called()
+        run.client.call.return_value={'screen_rect':row['rect']}
+        run.point(row,True)
+        self.assertEqual(user.mouse_event.call_count,2)
+
+    def test_ipc_screen_coordinates_and_identity(self):
+        a,b=card(1),card(2)
+        a['screen_rect']=[-300,120,0,350];b['screen_rect']=[0,120,300,350]
+        pairs=screen_cards([b,a])
+        self.assertEqual(pairs[0][1],dict(rect=a['screen_rect'],ipc=a['ref']))
+        self.assertEqual(pairs[1][0],b)
+        b['screen_rect']=a['screen_rect']
+        with self.assertRaises(Inconclusive):screen_cards([a,b])
+        with self.assertRaisesRegex(Inconclusive,'screen_rect'):screen_cards([card(3)])
+    def test_card_names_use_owned_window_titles(self):
+        names=thumbnail_names('A - 4 running windows',['UWPSpy Test A Highlight 1','UWPSpy Test A Highlight 2'])
+        self.assertIn('UWPSpy Test A Highlight 1 - 4 running windows',names)
+        self.assertNotIn('Unrelated - 4 running windows',names)
+        self.assertIn('Calculator - 4 running windows',thumbnail_names('Calculator - 4 running windows pinned',['Calculator']))
     def test_absolute_input_negative_origin(self):
         self.assertEqual(absolute_coordinate(-1920,-1920,3840),8)
         self.assertTrue(32768<=absolute_coordinate(0,-1920,3840)<32800)

@@ -20,6 +20,7 @@ from windhawk_log import WindhawkLog, default_collector
 HERE = Path(__file__).resolve().parent
 CALC_ID = 'Appid: Microsoft.WindowsCalculator_8wekyb3d8bbwe!App'
 U.GetCursorPos.argtypes = [C.POINTER(W.POINT)]
+U.GetWindowTextW.argtypes = [W.HWND,W.LPWSTR,C.c_int]
 U.GetSystemMetrics.argtypes = [C.c_int]
 class MouseInput(C.Structure):
     _fields_=[('dx',W.LONG),('dy',W.LONG),('data',W.DWORD),('flags',W.DWORD),
@@ -106,6 +107,15 @@ def desktop_id():
         return bytes(value).hex()
 
 
+def thumbnail_names(group, titles):
+    group=group.removesuffix(' pinned')
+    names={group}
+    if ' - ' in group:
+        suffix=group.rsplit(' - ',1)[1]
+        names.update(title+' - '+suffix for title in titles if title)
+    return names
+
+
 class FlyoutNotReady(Inconclusive): pass
 
 
@@ -161,6 +171,19 @@ def highlighted(nodes):
                float(property_value(n,'Opacity','1')) > 0 for n in nodes)
 
 
+def screen_cards(cards):
+    pairs=[]; seen=set()
+    for card in cards:
+        bounds=card.get('screen_rect')
+        if not bounds:
+            raise Inconclusive('Inspector lacks screen_rect. Load the rebuilt UWPSpy inspector, then attach again; see README.')
+        if len(bounds)!=4 or bounds[2]<=bounds[0] or bounds[3]<=bounds[1] or tuple(bounds) in seen:
+            raise Inconclusive('invalid or overlapping duplicate thumbnail screen bounds')
+        seen.add(tuple(bounds))
+        pairs.append((card,dict(rect=bounds,ipc={k:card['ref'][k] for k in ('tree','handle','generation')})))
+    return sorted(pairs,key=lambda pair:(pair[1]['rect'][0],pair[1]['rect'][1]))
+
+
 class Run:
     def __init__(self, args):
         self.a=args; self.client=Client(args.endpoint)
@@ -210,7 +233,7 @@ class Run:
         for ref in self.client.find(type=kind):
             if self.a.tree and ref['tree']!=self.a.tree: continue
             data=self.client.call('get',**{k:ref[k] for k in ('tree','handle','generation')})
-            if button_layout_eligible(data['nodes']): result.append(dict(ref=ref,nodes=data['nodes']))
+            if button_layout_eligible(data['nodes']): result.append(dict(ref=ref,nodes=data['nodes'],screen_rect=data.get('screen_rect')))
         return result
 
     def reference(self, card):
@@ -246,13 +269,24 @@ class Run:
         time.sleep(.08)
         hit=U.WindowFromPoint(W.POINT(x,y))
         root=int(U.GetAncestor(hit,2) or 0)
-        if root!=row['root']: raise Disrupted('target is occluded or moved; refusing input')
+        if 'ipc' in row:
+            cls=C.create_unicode_buffer(256);U.GetClassNameW(root,cls,len(cls))
+            if pid(root)!=self.explorer or cls.value not in ('Shell_TrayWnd','Shell_SecondaryTrayWnd','XamlExplorerHostIslandWindow','TaskListThumbnailWnd','ThumbnailDeviceHelperWnd','Xaml_WindowedPopupClass'):
+                raise Disrupted('thumbnail screen target is occluded; refusing input')
+        elif root!=row['root']: raise Disrupted('target is occluded or moved; refusing input')
         self.log('input',action='click' if click else 'hover',point=[x,y],root=root)
         if click:
-            hit=self.uia((x,y))
-            if not hit or any(hit[k]!=row[k] for k in ('name','id','class','rect')):
-                raise Disrupted('automation target changed before click')
+            if 'ipc' in row:
+                fresh=self.client.call('get',**row['ipc'])
+                if fresh.get('screen_rect')!=row['rect']:
+                    raise Disrupted('thumbnail moved before click')
+            else:
+                hit=self.uia((x,y))
+                if not hit or any(hit[k]!=row[k] for k in ('name','id','class','rect')):
+                    raise Disrupted('automation target changed before click')
             self.check()
+            if int(U.GetAncestor(U.WindowFromPoint(W.POINT(x,y)),2) or 0)!=root:
+                raise Disrupted('target became occluded during inspection')
             U.mouse_event(2,0,0,0,0)
             U.mouse_event(4,0,0,0,0)
 
@@ -291,14 +325,19 @@ class Run:
     def snapshot(self):
         if self.a.grouping=='separated': return self.flyout()
         inventory=self.elements('Taskbar.TaskItemThumbnailView')
-        cards=[c for c in inventory if c['ref']['automation_name'].removesuffix(' pinned') == self.group_name.removesuffix(' pinned')]
-        rows=[r for r in self.uia() if 'TaskItemThumbnail' in r['class']]
+        titles=[]
+        for hwnd,process in self.owned.items():
+            if pid(hwnd)!=process: raise Disrupted('test HWND recycled during discovery')
+            title=C.create_unicode_buffer(1024);U.GetWindowTextW(hwnd,title,len(title))
+            titles.append(title.value)
+        names=thumbnail_names(self.group_name,titles)
+        cards=[c for c in inventory if c['ref']['automation_name'].removesuffix(' pinned') in names]
         self.log('thumbnail_discovery',expected=self.a.count,group=self.group_name,
-                 matched=len(cards),uia_count=len(rows),
+                 matched=len(cards),
                  xaml=[dict(ref=c['ref'],rectangle=c['nodes'][0].get('rectangle')) for c in inventory])
-        if len(cards)!=self.a.count or len(rows)!=self.a.count:
-            raise FlyoutNotReady(f'expected {self.a.count} thumbnails; XAML matched {len(cards)} of {len(inventory)}, UIA found {len(rows)}; see thumbnail_discovery')
-        pairs=pair_cards(cards,rows)
+        if len(cards)!=self.a.count:
+            raise FlyoutNotReady(f'expected {self.a.count} thumbnails; XAML matched {len(cards)} of {len(inventory)}; see thumbnail_discovery')
+        pairs=screen_cards(cards)
         for c,_ in pairs: self.capture(c)
         return pairs
 

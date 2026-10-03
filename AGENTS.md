@@ -979,7 +979,8 @@ Run `python tests/run-foreground-recheck-tests.py` for controlled timer scenario
 
 `tests/uwspy/highlight_harness.py` owns the scenario; UWPSpy remains an inspection
 dependency. `highlight_uia.ps1` is a read-only UIA geometry/hit-test helper.
-Use exact AppId for discovery, physical UIA bounds for input, and independently
+Use exact AppId for discovery, physical UIA bounds for taskbar buttons and
+UWPSpy IPC `screen_rect` (the screenshot helper) for thumbnail input, and independently
 observed foreground HWND/PID for card association. Do not infer HWND identity
 from the mod's own recency logs. Ambiguous geometry, changed targets, unexpected
 foreground and recycled handles must stop/classify the run, not be guessed away.

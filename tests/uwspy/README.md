@@ -4,10 +4,27 @@
 
 `highlight_harness.py` discovers the test group's taskbar button by exact AppId
 through UWPSpy and Windows UI Automation, then uses real mouse hover/click input.
-Other desktop apps can remain open. Coordinates come from live UIA physical
-screen bounds; XAML root-relative bounds are never used directly as mouse
+Other desktop apps can remain open. Taskbar-button coordinates come from UIA;
+thumbnail coordinates come directly from UWPSpy's optional `screen_rect` IPC
+field, calculated by its existing screenshot helper. XAML root-relative bounds are never used directly as mouse
 coordinates. Ambiguous roots, mismatched geometry, occlusion and changed hit
 targets stop the run. No fixed taskbar slot or English Calculator title is used.
+
+The thumbnail harness requires the rebuilt UWPSpy inspector with `screen_rect`.
+The development build is staged at
+`../UWPSpy/watcher/x64/ScreenBounds/UWPSpyLauncher.exe` relative to the whawk-lru
+repository root. Close old inspectors, restart Explorer yourself if the old injected DLL
+remains loaded, and attach using that launcher. No Windhawk mod rebuild is
+needed. The script reports an explicit missing-field error for an older inspector.
+The normal `x64/Release/UWPSpy.dll` could not be replaced while loaded, so it
+still contains the older build; use the staged launcher for this test.
+
+The inspector change is in UWPSpy's `MainDlg.cpp`, in `ExecuteIpc` immediately
+after adding the `dump` response. It returns `[left, top, right, bottom] physical
+pixels from `GetElementScreenRect`; unavailable geometry does not break text
+exports. This reuses the screenshot geometry instead of inferring flyout bounds
+from UIA. The UWPSpy worktree already contains earlier uncommitted IPC work;
+those unrelated changes have not been committed by this harness fix.
 
 Attach UWPSpy to Explorer yourself and leave its inspectors open. Use combined
 taskbar buttons for the flyout tests. Enable this mod, set preview count to 3
@@ -42,8 +59,12 @@ Flyout opening moves the pointer into the monitor work area, then rediscovers
 and re-enters the button. It waits for matching thumbnails for up to five
 seconds after the initial hover delay (individual inspection calls also take
 time). Post-hover snapshots do not reset the pointer. `thumbnail_discovery`
-records unfiltered XAML names, matches and UIA counts to distinguish a missing
+records unfiltered XAML names and match counts to distinguish a missing
 flyout from a recognition mismatch.
+Thumbnail names may use each owned window's title instead of the group's app
+name. Discovery accepts those exact titles with the group's suffix, then still
+verifies actual foreground HWND/PID after clicking. A matching title is not
+treated as proof of which HWND received focus.
 
 The Win32 variants `--launch background`, `--launch minimized`, and
 `--launch attention` distinguish background display, minimized display and
