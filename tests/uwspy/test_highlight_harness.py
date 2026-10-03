@@ -2,7 +2,8 @@
 import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
-from highlight_harness import pair_cards, highlighted, Run, Failure, Disrupted, Inconclusive, FlyoutNotReady
+from highlight_harness import pair_cards, highlighted, Run, Failure, Disrupted, Inconclusive, FlyoutNotReady, absolute_coordinate, move_mouse, Input
+import ctypes as C
 
 
 def node(name='', rectangle='(0,0) - (100,150)', **props):
@@ -14,6 +15,18 @@ def card(handle, x=0, nodes=None):
 
 
 class Geometry(unittest.TestCase):
+    def test_absolute_input_negative_origin(self):
+        self.assertEqual(absolute_coordinate(-1920,-1920,3840),8)
+        self.assertTrue(32768<=absolute_coordinate(0,-1920,3840)<32800)
+        with self.assertRaises(Disrupted):absolute_coordinate(1920,-1920,3840)
+        self.assertEqual(C.sizeof(Input),40 if C.sizeof(C.c_void_p)==8 else 28)
+
+    @patch('highlight_harness.U')
+    def test_rejected_input_stops(self,user):
+        user.GetSystemMetrics.side_effect=[0,0,1920,1080]
+        user.SendInput.return_value=0
+        with self.assertRaisesRegex(Disrupted,'input rejected'):move_mouse(50,50)
+
     def test_flyout_reenters_and_waits_for_realization(self):
         run=Run.__new__(Run);run.a=SimpleNamespace(grouping='combined',flyout_seconds=1)
         row=dict(name='A - 4 running windows')
@@ -72,15 +85,17 @@ class Geometry(unittest.TestCase):
             run.assertions([(card(1,nodes=[node('WhRecentFocusThumbTitleBg')]),None),
                             (card(2,nodes=[node('WhRecentFocusThumbNative')]),None)],True)
 
+    @patch('highlight_harness.move_mouse')
     @patch('highlight_harness.U')
-    def test_changed_same_root_target_receives_no_click(self, user):
+    def test_changed_same_root_target_receives_no_click(self, user, move):
         run=Run.__new__(Run);run.check=Mock();run.log=Mock();run.uia=Mock(return_value=None)
         user.SetCursorPos.return_value=1;user.GetAncestor.return_value=10
         with self.assertRaises(Disrupted):run.point(dict(root=10,rect=[0,0,100,100]),True)
         user.mouse_event.assert_not_called()
 
+    @patch('highlight_harness.move_mouse')
     @patch('highlight_harness.U')
-    def test_occluded_target_receives_no_click(self, user):
+    def test_occluded_target_receives_no_click(self, user, move):
         run=Run.__new__(Run);run.check=Mock();run.log=Mock()
         user.SetCursorPos.return_value=1;user.GetAncestor.return_value=99
         with self.assertRaises(Disrupted):run.point(dict(root=10,rect=[0,0,100,100]),True)

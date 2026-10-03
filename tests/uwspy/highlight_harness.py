@@ -19,7 +19,17 @@ from windhawk_log import WindhawkLog, default_collector
 
 HERE = Path(__file__).resolve().parent
 CALC_ID = 'Appid: Microsoft.WindowsCalculator_8wekyb3d8bbwe!App'
-U.SetCursorPos.argtypes = [C.c_int, C.c_int]
+U.GetCursorPos.argtypes = [C.POINTER(W.POINT)]
+U.GetSystemMetrics.argtypes = [C.c_int]
+class MouseInput(C.Structure):
+    _fields_=[('dx',W.LONG),('dy',W.LONG),('data',W.DWORD),('flags',W.DWORD),
+              ('time',W.DWORD),('extra',C.c_size_t)]
+class InputUnion(C.Union):
+    _fields_=[('mouse',MouseInput)]
+class Input(C.Structure):
+    _fields_=[('type',W.DWORD),('payload',InputUnion)]
+U.SendInput.argtypes = [W.UINT,C.POINTER(Input),C.c_int]
+U.SendInput.restype = W.UINT
 U.WindowFromPoint.argtypes = [W.POINT]
 U.WindowFromPoint.restype = W.HWND
 U.GetAncestor.argtypes = [W.HWND, W.UINT]
@@ -97,6 +107,26 @@ def desktop_id():
 
 
 class FlyoutNotReady(Inconclusive): pass
+
+
+def absolute_coordinate(value, origin, extent):
+    if extent<=0 or not origin<=value<origin+extent:
+        raise Disrupted('mouse target outside virtual desktop')
+    # Center of the physical pixel in SendInput's 0..65535 virtual-desktop range.
+    return min(65535, int(((value-origin)+.5)*65536/extent))
+
+
+def move_mouse(x,y):
+    left,top,width,height=(U.GetSystemMetrics(i) for i in (76,77,78,79))
+    event=Input();event.type=0
+    event.payload.mouse=MouseInput(absolute_coordinate(x,left,width),
+        absolute_coordinate(y,top,height),0,0x8000|0x4000|0x2000|0x0001,0,0)
+    if U.SendInput(1,C.byref(event),C.sizeof(event))!=1:
+        raise Disrupted('mouse movement input rejected')
+    time.sleep(.04)
+    actual=W.POINT()
+    if not U.GetCursorPos(C.byref(actual)) or abs(actual.x-x)>1 or abs(actual.y-y)>1:
+        raise Disrupted('mouse movement did not reach target (or external input intervened)')
 
 
 def pair_cards(cards, rows):
@@ -209,7 +239,10 @@ class Run:
     def point(self, row, click=False):
         self.check()
         l,t,r,b=row['rect']; x,y=round((l+r)/2),round((t+b)/2)
-        if not U.SetCursorPos(x,y): raise Disrupted('cursor move rejected')
+        # Real input inside the button as well as crossing its boundary: Explorer
+        # did not open previews reliably from SetCursorPos repositioning alone.
+        move_mouse(max(round(l)+1,x-3),y)
+        move_mouse(x,y)
         time.sleep(.08)
         hit=U.WindowFromPoint(W.POINT(x,y))
         root=int(U.GetAncestor(hit,2) or 0)
@@ -251,7 +284,7 @@ class Run:
             raise Inconclusive('cannot find taskbar monitor work area')
         x=(info.work.left+info.work.right)//2; y=(info.work.top+info.work.bottom)//2
         if l<=x<r and t<=y<b: raise Inconclusive('no safe hover reset point')
-        if not U.SetCursorPos(x,y): raise Disrupted('hover reset rejected')
+        move_mouse(x,y)
         self.log('input',action='hover-reset',point=[x,y])
         self.wait(.35)
 

@@ -34,6 +34,10 @@ the console has focus. Input is never sent to a Calculator until its foreground
 HWND belongs to the discovered test set and its PID still matches.
 
 Previous A fixture windows are rejected before launching a new Win32 run.
+Pointer movement uses `SendInput` with absolute virtual-desktop coordinates,
+including a short movement inside the button, and verifies the resulting cursor
+position. `SetCursorPos` alone did not reliably trigger Explorer's hover preview
+in live testing. Rejected movement or a displaced cursor interrupts the run.
 Flyout opening moves the pointer into the monitor work area, then rediscovers
 and re-enters the button. It waits for matching thumbnails for up to five
 seconds after the initial hover delay (individual inspection calls also take
