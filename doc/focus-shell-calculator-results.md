@@ -42,3 +42,30 @@ validate a positive preview minimum or duplicate-event deadline timing.
 It also does not establish disable/unload, desktop switching, deliberate
 right-click/close controls, or full cross-build coverage. Native diagnostics
 remain pending those checks. No source behavior changed for this analysis.
+
+## Positive delay and right-click follow-up, 21:26
+
+Evidence: `tests/uwspy/captures/focus-20261004-212625-787718`.
+The short Calculator foreground episodes during launch at 21:26:29–30 produce
+candidates but no Calculator preview confirmation. The positive delay filters
+these episodes as intended.
+
+At 21:26:54.515, Calculator `0x1BD0112` becomes a candidate; the shell duplicate
+arrives at .527 and preview confirmation at 21:26:55.507, approximately one
+second after the initial event. It does not restart a full second at the duplicate.
+
+The second activation at 21:27:14.062 names `0x1340196`. Both the observer's
+shell callback and its .072 sample show that frame actually foreground and
+its CoreWindow `0x91622` holding keyboard focus. No foreground WinEvent for
+this transition is recorded. The mod starts its candidate at .064 and confirms
+at 21:27:15.055, approximately one second later. Brave becomes foreground at
+21:27:17.875. The user reports a right-click produced a highlight; this second
+interaction has ExtendedUIClick without SwitchToItem and is consistent with
+that report, though the recorder does not log mouse buttons. The resulting
+promotion has independent foreground/focus evidence, not just a click signal.
+
+The user reports hover alone does not highlight; recorded flyout refreshes
+retain existing recency ticks rather than adding further Calculator confirmations.
+This run supports positive-delay handling and foreground validation for the
+reported right-click interaction. It does not prove that every context-menu
+interaction activates its owner, or complete unload/desktop-switch coverage.
