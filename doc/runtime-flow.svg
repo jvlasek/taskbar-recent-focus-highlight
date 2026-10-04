@@ -6,7 +6,7 @@
 <rect width="1480" height="1440" fill="#f6f8fc"/>
 
 <text x="40" y="46" class="heading">Taskbar Recent Focus Highlight</text>
-<text x="40" y="76" class="small">Two recency paths · experimental mod 0.10.15 · architecture checked 2026-10-04</text>
+<text x="40" y="76" class="small">Two recency paths · mod 0.11.0 · architecture checked 2026-10-04</text>
 <rect x="40" y="102" width="680" height="110" rx="12" fill="#fff" stroke="#cbd5e1"/>
 <text x="60" y="134" class="heading">Foreground event</text>
 <text x="60" y="163" class="body">EVENT_SYSTEM_FOREGROUND → focus thread</text>

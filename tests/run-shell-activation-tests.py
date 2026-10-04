@@ -82,6 +82,8 @@ int main() {
 }
 '''.replace('// HELPERS', helpers).replace('// DUPLICATE', duplicate)
 
+assert 'TEMP_FOCUS_TRACE' not in source
+assert 'TraceExtendedClick' not in source
 assert 'ForegroundRecheck' not in source
 assert 'g_foregroundRecheckDeadline' not in source
 worker = function('DWORD WINAPI WinEventHookThread(')

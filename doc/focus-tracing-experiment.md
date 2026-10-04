@@ -1,4 +1,9 @@
-# Native activation tracing experiment
+# Native activation tracing experiment (historical)
+
+The experiment concluded with 0.11.0: shell notifications retained, polling
+and temporary native probes removed. Instructions below describe the diagnostic
+0.10.14/0.10.15 builds, not the current release. Live coverage is recorded in
+[Calculator results](focus-shell-calculator-results.md).
 
 Branch: `codex/focus-activation-tracing`. Experimental mod: **0.10.15**.
 Baseline main: 0.10.13. Version 0.10.14 collected the initial native traces.

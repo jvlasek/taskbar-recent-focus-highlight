@@ -7,13 +7,10 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Experiment branch:** v0.10.15 supplements foreground WinEvents with shell
-activation notifications and removes foreground recovery polling. Native tracing
-is retained for validation. Main remains at v0.10.13. See the
-[testing instructions](doc/focus-tracing-experiment.md); do not submit this
-experimental version to the mod catalog.
-
-**Baseline:** v0.10.13 — targeted Win32 and Calculator live tests passed; [coverage and remaining limits](doc/investigation-notes.md). App ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence.
+**Version:** v0.11.0 — foreground WinEvents plus validated shell activation
+notifications; no foreground recovery polling. Targeted Calculator recordings
+cover missing-event activation and a positive preview delay. See
+[results and coverage limits](doc/focus-shell-calculator-results.md).
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -399,9 +396,9 @@ a fresh automated GIMP validation of this version. See the investigation notes
 for dated evidence and the distinction between startup and calibrated checks.
 
 
-## Shell activation experiment (0.10.15)
+## Shell activation notifications (0.11.0)
 
-On this branch, foreground WinEvents and shell activation notifications feed
+Foreground WinEvents and shell activation notifications feed
 one foreground validation path on the focus worker. Only WINDOWACTIVATED and
 RUDEAPPACTIVATED are accepted; null or stale/background targets are ignored.
 Creation and attention notifications do not confer recency. Identity tracking
@@ -415,11 +412,10 @@ fails, and deregisters before destruction on normal shutdown or WinEvent setup
 failure. WM_CLOSE cannot destroy this worker-owned notification window.
 
 The 0.10.13 two-second foreground polling recovery and its timer are removed;
-there is no polling fallback in this experiment. Existing minimum-focus timers
-and transient-focus grace remain. Temporary native traces remain for comparison
-but never promote windows. The standalone observer's sampling is diagnostic.
+there is no polling fallback in this implementation. Existing minimum-focus timers
+and transient-focus grace remain. Temporary native traces and their three private hooks are removed. The standalone observer's sampling is diagnostic.
 
-Run `python tests/run-shell-activation-tests.py`. Live first-click Calculator,
-Win32, non-activation controls, desktop changes and unload tests are still
-required before merging. See doc/focus-tracing-experiment.md. The reason for
+Run `python tests/run-shell-activation-tests.py`. Live Calculator first-click and positive-delay checks passed on 0.10.15.
+Fresh Win32, desktop-switch and unload checks of 0.11.0 remain unverified;
+see doc/focus-shell-calculator-results.md for the precise coverage. The reason for
 missing Calculator foreground WinEvents remains unknown.
