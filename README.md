@@ -7,9 +7,11 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Experiment branch:** v0.10.14 adds temporary native activation tracing, not a
-behavioral fix. Main remains at v0.10.13. See the [tracing instructions](doc/focus-tracing-experiment.md)
-before testing; do not submit this diagnostic version to the mod catalog.
+**Experiment branch:** v0.10.15 supplements foreground WinEvents with shell
+activation notifications and removes foreground recovery polling. Native tracing
+is retained for validation. Main remains at v0.10.13. See the
+[testing instructions](doc/focus-tracing-experiment.md); do not submit this
+experimental version to the mod catalog.
 
 **Baseline:** v0.10.13 — targeted Win32 and Calculator live tests passed; [coverage and remaining limits](doc/investigation-notes.md). App ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence.
 
@@ -397,34 +399,27 @@ a fresh automated GIMP validation of this version. See the investigation notes
 for dated evidence and the distinction between startup and calibrated checks.
 
 
-## Bounded foreground recovery (0.10.13)
+## Shell activation experiment (0.10.15)
 
-An independent observer verified a Calculator activation which changed foreground
-and keyboard focus without a matching foreground event reaching either listener.
-After a foreground event for this Explorer's taskbar/flyout surfaces, the focus
-worker samples foreground every 100 ms for at most two seconds. Repeated shell
-signals do not extend an active deadline. On the first non-transient window,
-it stops and feeds that HWND through normal focus handling. App and preview
-thresholds, exclusions, identity matching and per-desktop rules remain in force.
-A normal app event cancels recovery before processing; desktop switch, shutdown,
-and window destruction also cancel it. Stale timer messages after cancellation
-are ignored. There is no idle polling and no additional XAML subscription.
+On this branch, foreground WinEvents and shell activation notifications feed
+one foreground validation path on the focus worker. Only WINDOWACTIVATED and
+RUDEAPPACTIVATED are accepted; null or stale/background targets are ignored.
+Creation and attention notifications do not confer recency. Identity tracking
+remains separate and unchanged. Both app and preview minimum-focus deadlines
+survive duplicate notifications for the same pending window.
 
-This is bounded recovery, not a guarantee for an activation delayed beyond the
-window or without a preceding shell signal. Validate first activation, normal
-activation, long flyout dwell, positive preview minimum, and disable/unload.
-The explicit native preview-click path now uses GetWindowForThumbnailTaskItem,
-matching captured preview identity; icon metadata still uses GetAppWindow.
-Temporary 0.10.12 activation diagnostics are removed. The reconciliation itself
-has one log line. Existing identity and preview-result logs remain.
+The worker owns a hidden, never-shown WS_POPUP window with TOOLWINDOW and
+NOACTIVATE extended styles, replacing its message-only window. It registers
+SHELLHOOK before reporting successful startup, fails startup if registration
+fails, and deregisters before destruction on normal shutdown or WinEvent setup
+failure. WM_CLOSE cannot destroy this worker-owned notification window.
 
-Use `python tests/uwspy/record_focus.py` for independent foreground + Windhawk
-recording with one Ctrl+C. Its standalone 50 ms observer is diagnostic only.
-Run `python tests/run-foreground-recheck-tests.py` for controlled timer scenarios.
+The 0.10.13 two-second foreground polling recovery and its timer are removed;
+there is no polling fallback in this experiment. Existing minimum-focus timers
+and transient-focus grace remain. Temporary native traces remain for comparison
+but never promote windows. The standalone observer's sampling is diagnostic.
 
-The [highlight harness](tests/uwspy/README.md#highlight-and-thumbnail-activation-harness)
-adds real-input Win32/Calculator scenarios with automatic taskbar discovery,
-screenshots, independent foreground recording, hover/activation assertions,
-and guided grouping/desktop variants. Combined-mode Win32 and Calculator runs
-passed; broader grouping/desktop, multi-monitor, theme and current-version
-unload coverage remains unverified. See [the evidence summary](doc/investigation-notes.md).
+Run `python tests/run-shell-activation-tests.py`. Live first-click Calculator,
+Win32, non-activation controls, desktop changes and unload tests are still
+required before merging. See doc/focus-tracing-experiment.md. The reason for
+missing Calculator foreground WinEvents remains unknown.

@@ -2,12 +2,11 @@
 
 ## Active experiment: codex/focus-activation-tracing
 
-Version 0.10.14 is diagnostics only, based on 0.10.13. All temporary native
-probes use `TEMP_FOCUS_TRACE` markers. See doc/focus-tracing-experiment.md.
-Keep original return values/call counts, do not stamp recency from probes, and
-do not query a task item after calling the original. Do not merge or push this
-experiment unless the user requests it. The architecture SVG describes the
-0.10.13 baseline; it is intentionally not a picture of the temporary probes.
+Version 0.10.15 tests shell activation notifications without the bounded
+foreground polling recovery. Temporary native probes retain TEMP_FOCUS_TRACE
+markers and must not mutate recency. See doc/focus-tracing-experiment.md.
+Do not merge or push this experiment unless the user requests it. The runtime
+SVG describes the experimental event sources; temporary probes are omitted.
 
 For the runtime overview and investigation evidence, see
 [`doc/investigation-notes.md`](doc/investigation-notes.md) and
@@ -23,7 +22,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.10.13). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.10.15 experiment). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -227,7 +226,7 @@ created, fall back to our overlay plate.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Focus thread (message-only HWND + GetMessage loop)          │
+│ Focus thread (hidden desktop HWND + GetMessage loop)          │
 │  • SetWinEventHook FOREGROUND + DESKTOPSWITCH OUTOFCONTEXT  │
 │  • App min-focus timer + preview min-focus timer + decay    │
 │  • g_desktopMaps[desktopGuid] app + window recency          │
@@ -967,30 +966,31 @@ for evidence and coverage limits. GIMP has earlier manual coverage, not a fresh
 automated validation of this version. Do not infer complete build coverage.
 
 
-## Bounded foreground recovery (0.10.13)
+## Shell activation experiment (0.10.15)
 
-An independent observer verified a Calculator activation which changed foreground
-and keyboard focus without a matching foreground event reaching either listener.
-After a foreground event for this Explorer's taskbar/flyout surfaces, the focus
-worker samples foreground every 100 ms for at most two seconds. Repeated shell
-signals do not extend an active deadline. On the first non-transient window,
-it stops and feeds that HWND through normal focus handling. App and preview
-thresholds, exclusions, identity matching and per-desktop rules remain in force.
-A normal app event cancels recovery before processing; desktop switch, shutdown,
-and window destruction also cancel it. Stale timer messages after cancellation
-are ignored. There is no idle polling and no additional XAML subscription.
+On this branch, foreground WinEvents and shell activation notifications feed
+one foreground validation path on the focus worker. Only WINDOWACTIVATED and
+RUDEAPPACTIVATED are accepted; null or stale/background targets are ignored.
+Creation and attention notifications do not confer recency. Identity tracking
+remains separate and unchanged. Both app and preview minimum-focus deadlines
+survive duplicate notifications for the same pending window.
 
-This is bounded recovery, not a guarantee for an activation delayed beyond the
-window or without a preceding shell signal. Validate first activation, normal
-activation, long flyout dwell, positive preview minimum, and disable/unload.
-The explicit native preview-click path now uses GetWindowForThumbnailTaskItem,
-matching captured preview identity; icon metadata still uses GetAppWindow.
-Temporary 0.10.12 activation diagnostics are removed. The reconciliation itself
-has one log line. Existing identity and preview-result logs remain.
+The worker owns a hidden, never-shown WS_POPUP window with TOOLWINDOW and
+NOACTIVATE extended styles, replacing its message-only window. It registers
+SHELLHOOK before reporting successful startup, fails startup if registration
+fails, and deregisters before destruction on normal shutdown or WinEvent setup
+failure. WM_CLOSE cannot destroy this worker-owned notification window.
 
-Use `python tests/uwspy/record_focus.py` for independent foreground + Windhawk
-recording with one Ctrl+C. Its standalone 50 ms observer is diagnostic only.
-Run `python tests/run-foreground-recheck-tests.py` for controlled timer scenarios.
+The 0.10.13 two-second foreground polling recovery and its timer are removed;
+there is no polling fallback in this experiment. Existing minimum-focus timers
+and transient-focus grace remain. Temporary native traces remain for comparison
+but never promote windows. The standalone observer's sampling is diagnostic.
+
+Run `python tests/run-shell-activation-tests.py`. Live first-click Calculator,
+Win32, non-activation controls, desktop changes and unload tests are still
+required before merging. See doc/focus-tracing-experiment.md. The reason for
+missing Calculator foreground WinEvents remains unknown.
+
 
 ## Real-input highlight regression harness
 

@@ -1,9 +1,37 @@
 # Native activation tracing experiment
 
-Branch: `codex/focus-activation-tracing`. Diagnostic mod: **0.10.14**.
-Baseline main: 0.10.13. No intended changes to focus thresholds, click
-confirmation, identity matching, or the existing bounded recovery behavior.
+Branch: `codex/focus-activation-tracing`. Experimental mod: **0.10.15**.
+Baseline main: 0.10.13. Version 0.10.14 collected the initial native traces.
+Version 0.10.15 adds shell activation notifications and removes the bounded
+foreground polling recovery. Thresholds and identity rules remain unchanged;
+duplicate notifications preserve the pending preview deadline.
 Do not publish this version to the Windhawk catalog.
+
+## Validate the event-driven replacement
+
+Load 0.10.15 and use the same `python .\record_focus.py` recorder below.
+A startup log must say `Shell activation notifications registered (no foreground polling)`.
+Registration failure fails focus-worker startup; there is no silent polling fallback.
+
+1. Launch Calculator in the background, including the keyboard/minimize case.
+   Merely launching or flashing must not earn recency. Leave the flyout open
+   for more than five seconds, then activate a previously unused window once.
+   Leave it focused past the preview minimum; reopen and check its highlight.
+   Repeat with several windows. This is the missing-event regression case.
+2. Repeat with ordinary Win32 windows. Verify app and preview thresholds
+   independently; closely spaced duplicate events must not extend the wait.
+3. Hover only, right-click/dismiss, and close a disposable thumbnail; note the
+   action order. No background window may gain recency merely from these actions.
+   Close can legitimately activate another window: compare actual foreground.
+4. Test Alt-Tab, keyboard thumbnail invocation and virtual desktop switching.
+5. Disable/re-enable, then repeat activation. Test unload with the flyout open
+   using the established delayed/manual procedure; do not disrupt unrelated work.
+
+The temporary native probes remain only to correlate results. Shell registration
+uses RegisterShellHookWindow, whose Microsoft documentation notes desktop scope
+and a compatibility caveat; this is measured coverage, not a promise across builds:
+https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registershellhookwindow
+
 
 ## What is recorded
 
@@ -36,7 +64,7 @@ to indicate completed activation merely because its name contains “activate”
 ## Run
 
 1. Copy the branch's `.wh.cpp` into your local Windhawk editor and compile/load
-   it. Verify **0.10.14**. The current recovery remains enabled as the control;
+   it. Verify **0.10.15**. Foreground recovery polling is removed;
    this experiment has no new settings.
 2. Enable **Mod logs** and close other debug collectors. From `tests/uwspy`:
 
@@ -67,7 +95,7 @@ shell activation. `SAMPLE` reflects actual state. Use `tick_ms` versus native
 Nested calls have separate sequence numbers and a shared thread ID. The
 recorder does not capture screenshots.
 
-## Questions before changing behavior
+## Original questions for 0.10.14
 
 - Does the failing thumbnail interaction reach ExtendedUIClick/SwitchToItem
   while bypassing HandleClick?
@@ -78,11 +106,12 @@ recorder does not capture screenshots.
 - Which signal covers both app and preview recency, including keyboard
   activation? Would it remove the need for bounded recovery or cover one route?
 
-Do not remove recovery or promote windows merely because a probe fired.
-Choose a fix after comparing timelines. A later merge should remove temporary
+The Calculator and Win32 timelines supported the 0.10.15 shell experiment.
+Do not promote windows merely because a native probe fired.
+A later merge should remove temporary
 probes or explicitly retain selected diagnostics, with fresh checks.
 
-## Validation
+## Historical validation: 0.10.14
 
 Full Windhawk 1.7.3 compile/link passed. The observer compiled with warnings as
 errors. `tests/run-focus-trace-tests.py` exercised the actual probe wrappers:
@@ -95,3 +124,17 @@ The read-only observer smoke test registered all three channels and stopped
 cleanly on stdin EOF. Preview identity, asynchronous identity and bounded
 foreground-recovery regression suites passed, as did all 24 highlight-harness
 checks. No test input was sent to applications during these checks.
+
+## Validation: 0.10.15
+
+Full Windhawk 1.7.3 optimized x64 compile/link passed. Production-helper tests
+pass for shell filtering, stale/background/null targets, normalization, unload
+guard, duplicate preview deadlines and sibling transitions. Registration order
+and cleanup paths have source assertions, not a simulated Windows lifecycle.
+Existing native trace, preview identity and async identity suites pass.
+The old recovery helper tests were replaced because that implementation is gone.
+
+The mod logs `TEMP_FOCUS_TRACE shell-notification` for activation messages;
+compare its target and foreground snapshot with the independent observer.
+Live Explorer delivery, positive-threshold timing and disable/unload still need
+the user-run checks above. No experimental DLL was injected by the agent.

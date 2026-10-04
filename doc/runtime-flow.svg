@@ -6,15 +6,15 @@
 <rect width="1480" height="1440" fill="#f6f8fc"/>
 
 <text x="40" y="46" class="heading">Taskbar Recent Focus Highlight</text>
-<text x="40" y="76" class="small">Two recency paths · mod 0.10.13 · architecture checked 2026-10-04</text>
+<text x="40" y="76" class="small">Two recency paths · experimental mod 0.10.15 · architecture checked 2026-10-04</text>
 <rect x="40" y="102" width="680" height="110" rx="12" fill="#fff" stroke="#cbd5e1"/>
 <text x="60" y="134" class="heading">Foreground event</text>
 <text x="60" y="163" class="body">EVENT_SYSTEM_FOREGROUND → focus thread</text>
-<text x="60" y="188" class="body">Actual focused HWND supplies the candidate window.</text>
+<text x="60" y="188" class="body">Reject stale targets; validate actual foreground.</text>
 <rect x="760" y="102" width="680" height="110" rx="12" fill="#fff" stroke="#cbd5e1"/>
-<text x="780" y="134" class="heading">Bounded missing-event recovery</text>
-<text x="780" y="163" class="body">After shell foreground: sample every 100 ms, at most 2 s.</text>
-<text x="780" y="188" class="body">First non-transient foreground → normal focus handling.</text>
+<text x="780" y="134" class="heading">Shell activation notification</text>
+<text x="780" y="163" class="body">WINDOWACTIVATED / RUDEAPPACTIVATED.</text>
+<text x="780" y="188" class="body">Same foreground validation; no recovery polling.</text>
 <path class="wire" d="M380 212 V234 H650 V252"/>
 <path class="wire" d="M1100 212 V234 H830 V252"/>
 <rect x="300" y="252" width="880" height="110" rx="12" fill="#eef2ff" stroke="#a5b4fc"/>
