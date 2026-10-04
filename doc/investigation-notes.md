@@ -4,6 +4,11 @@ Updated 2026-10-04. Describes mod **0.10.13**, with the Calculator test harness
 at commit `23fac66`. This is a findings and evidence summary, not a claim of
 compatibility with every Explorer build or taskbar theme.
 
+Follow-up: the [focus hook static audit](focus-hook-static-analysis.md) found a
+distinct XAML thumbnail click route not covered by the current HandleClick
+hook, and candidate native activation notifications. These are investigative
+findings, not implemented changes or an explanation of the missing WinEvent.
+
 ![Runtime flow: taskbar icons and flyout previews](runtime-flow.svg)
 
 The diagram is an overview. Settings, exclusions, handle validation, decay and
