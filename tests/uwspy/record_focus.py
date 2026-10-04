@@ -45,7 +45,11 @@ class ForegroundLog:
                 for line in self.process.stdout:
                     stream.write(line)
                     stream.flush()
-                    if json.loads(line).get('kind') == 'READY':
+                    record = json.loads(line)
+                    if record.get('kind') == 'READY':
+                        print('Observer ready: foreground events, keyboard-focus events, '
+                              f'shell activation={record.get("shell_activation_events", False)}, '
+                              f'foreground sampling={record.get("sample_ms")} ms.', flush=True)
                         self.ready.set()
         except Exception as error:
             self.error = f'Foreground reader failed: {error}'

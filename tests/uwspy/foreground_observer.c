@@ -9,6 +9,7 @@
 #include <string.h>
 
 static DWORD main_thread;
+static UINT shell_message;
 
 typedef struct {
     HWND foreground, active, focus, focus_root;
@@ -87,6 +88,21 @@ static void CALLBACK on_foreground(HWINEVENTHOOK hook, DWORD event, HWND hwnd,
     write_state(read_state());
 }
 
+/* TEMP_FOCUS_TRACE: a hidden top-level window receives shell notifications;
+ * it is never shown or activated. This is separate from WinEvent delivery. */
+static LRESULT CALLBACK shell_proc(HWND hwnd, UINT message, WPARAM wparam,
+                                   LPARAM lparam) {
+    if (shell_message && message == shell_message &&
+        (wparam == HSHELL_WINDOWACTIVATED || wparam == HSHELL_RUDEAPPACTIVATED)) {
+        header("SHELL");
+        printf(",\"event\":%llu,\"window\":", (unsigned long long)wparam);
+        window_info((HWND)lparam);
+        write_state(read_state());
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
 static DWORD WINAPI wait_for_stop(void* unused) {
     char byte;
     DWORD received;
@@ -105,6 +121,11 @@ int main(int argc, char** argv) {
     MSG msg;
     State previous = {0};
     HANDLE stop_thread = NULL;
+    HWINEVENTHOOK focus_hook = NULL;
+    HWND shell_window = NULL;
+    BOOL shell_registered = FALSE;
+    HINSTANCE instance = GetModuleHandleW(NULL);
+    WNDCLASSW shell_class = {0};
     int status = 0;
     main_thread = GetCurrentThreadId();
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -112,9 +133,26 @@ int main(int argc, char** argv) {
     SetConsoleCtrlHandler(on_control, TRUE);
     HWINEVENTHOOK hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND,
         EVENT_SYSTEM_FOREGROUND, NULL, on_foreground, 0, 0, WINEVENT_OUTOFCONTEXT);
+    focus_hook = SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS,
+        NULL, on_foreground, 0, 0, WINEVENT_OUTOFCONTEXT);
     UINT_PTR timer = SetTimer(NULL, 0, 50, NULL);
-    if (!hook || !timer) {
+    if (!hook || !focus_hook || !timer) {
         fprintf(stderr, "Observer hook/timer setup failed: %lu\n", (unsigned long)GetLastError());
+        status = 1;
+        goto cleanup;
+    }
+    shell_message = RegisterWindowMessageW(L"SHELLHOOK");
+    shell_class.lpfnWndProc = shell_proc;
+    shell_class.hInstance = instance;
+    shell_class.lpszClassName = L"WhRecentFocusTraceObserver";
+    if (shell_message && RegisterClassW(&shell_class)) {
+        shell_window = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            shell_class.lpszClassName, L"", WS_POPUP, 0, 0, 0, 0,
+            NULL, NULL, instance, NULL);
+        if (shell_window) shell_registered = RegisterShellHookWindow(shell_window);
+    }
+    if (!shell_registered) {
+        fprintf(stderr, "Shell activation channel unavailable: %lu\n", (unsigned long)GetLastError());
         status = 1;
         goto cleanup;
     }
@@ -123,7 +161,7 @@ int main(int argc, char** argv) {
         if (!stop_thread) { status = 1; goto cleanup; }
     }
     header("READY");
-    printf(",\"sample_ms\":50}\n");
+    printf(",\"sample_ms\":50,\"foreground_events\":true,\"keyboard_focus_events\":true,\"shell_activation_events\":true}\n");
     previous = read_state();
     header("SAMPLE");
     write_state(previous);
@@ -145,6 +183,10 @@ int main(int argc, char** argv) {
         DispatchMessageW(&msg);
     }
 cleanup:
+    if (shell_registered) DeregisterShellHookWindow(shell_window);
+    if (shell_window) DestroyWindow(shell_window);
+    if (shell_class.lpszClassName) UnregisterClassW(shell_class.lpszClassName, instance);
+    if (focus_hook) UnhookWinEvent(focus_hook);
     if (hook) UnhookWinEvent(hook);
     if (timer) KillTimer(NULL, timer);
     if (stop_thread) {

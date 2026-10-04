@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.10.13
+// @version         0.10.14
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -3645,6 +3645,75 @@ CTaskListWnd_HandleClick_t CTaskListWnd_HandleClick_Original;
 HWND GetWindowFromTaskItem(void* taskItem);
 auto GetWindowForThumbnailTaskItem(void* taskItem) -> HWND;
 
+// TEMP_FOCUS_TRACE_BEGIN: diagnostic experiment only. Remove this block, its
+// hooks and call sites together after comparing native activation notifications.
+// Never stamp recency here. Capture HWND/PID while the task item is live; the
+// exit log reuses value data and never queries the task item after the call.
+struct FocusTraceSnapshot {
+    ULONGLONG sequence = 0;
+    HWND hwnd = nullptr;
+    DWORD pid = 0;
+};
+std::atomic<ULONGLONG> g_focusTraceSequence{0};
+
+void LogFocusTrace(PCWSTR route, PCWSTR phase,
+                   const FocusTraceSnapshot& snapshot) {
+    if (!snapshot.sequence || g_unloading.load()) return;
+    HWND foreground = GetForegroundWindow();
+    DWORD foregroundPid = 0;
+    DWORD foregroundTid = GetWindowThreadProcessId(foreground, &foregroundPid);
+    GUITHREADINFO gui{sizeof(gui)};
+    BOOL guiOk = foregroundTid && GetGUIThreadInfo(foregroundTid, &gui);
+    Wh_Log(L"TEMP_FOCUS_TRACE route=%s phase=%s seq=%llu tick=%llu tid=%u target=%p pid=%u targetLive=%d foreground=%p foregroundPid=%u foregroundTid=%u guiOk=%d active=%p focus=%p",
+           route, phase, snapshot.sequence, GetTickCount64(), GetCurrentThreadId(),
+           snapshot.hwnd, snapshot.pid,
+           HwndMatchesStoredPid(snapshot.hwnd, snapshot.pid), foreground,
+           foregroundPid, foregroundTid, guiOk, gui.hwndActive, gui.hwndFocus);
+}
+
+FocusTraceSnapshot BeginFocusTrace(PCWSTR route, void* taskItem) {
+    FocusTraceSnapshot snapshot;
+    if (g_unloading.load()) return snapshot;
+    snapshot.sequence = ++g_focusTraceSequence;
+    try {
+        snapshot.hwnd = GetWindowForThumbnailTaskItem(taskItem);
+        snapshot.pid = PidFromHwnd(snapshot.hwnd);
+    } catch (...) {
+        Wh_Log(L"TEMP_FOCUS_TRACE getter exception route=%s seq=%llu", route,
+               snapshot.sequence);
+    }
+    LogFocusTrace(route, L"enter", snapshot);
+    return snapshot;
+}
+
+using TraceExtendedClick_t = HRESULT(WINAPI*)(void*, void*, void*, void*);
+TraceExtendedClick_t TraceExtendedClick_Original;
+HRESULT WINAPI TraceExtendedClick_Hook(void* self, void* group, void* item,
+                                      void* options) {
+    auto snapshot = BeginFocusTrace(L"HandleExtendedUIClick", item);
+    HRESULT result = TraceExtendedClick_Original(self, group, item, options);
+    LogFocusTrace(L"HandleExtendedUIClick", L"exit", snapshot);
+    Wh_Log(L"TEMP_FOCUS_TRACE result seq=%llu hr=%08X", snapshot.sequence, result);
+    return result;
+}
+
+using TraceSwitchToItem_t = void(WINAPI*)(void*, void*);
+TraceSwitchToItem_t TraceSwitchToItem_Original;
+void WINAPI TraceSwitchToItem_Hook(void* self, void* item) {
+    auto snapshot = BeginFocusTrace(L"SwitchToItem", item);
+    TraceSwitchToItem_Original(self, item);
+    LogFocusTrace(L"SwitchToItem", L"exit", snapshot);
+}
+
+using TraceTaskActivated_t = void(WINAPI*)(void*, void*, void*);
+TraceTaskActivated_t TraceTaskActivated_Original;
+void WINAPI TraceTaskActivated_Hook(void* self, void* group, void* item) {
+    auto snapshot = BeginFocusTrace(L"HandleTaskActivated", item);
+    TraceTaskActivated_Original(self, group, item);
+    LogFocusTrace(L"HandleTaskActivated", L"exit", snapshot);
+}
+// TEMP_FOCUS_TRACE_END
+
 HRESULT WINAPI CTaskListWnd_HandleClick_Hook(void* pThis,
                                              void* taskGroup,
                                              void* taskItem,
@@ -3654,10 +3723,13 @@ HRESULT WINAPI CTaskListWnd_HandleClick_Hook(void* pThis,
         g_clickSentinel_TaskItem = taskItem;
         return S_OK;
     }
+    // TEMP_FOCUS_TRACE: exclude our synthetic identity-capture clicks above.
+    auto trace = BeginFocusTrace(L"HandleClick", taskItem);
     const HRESULT hr = CTaskListWnd_HandleClick_Original
                            ? CTaskListWnd_HandleClick_Original(
                                  pThis, taskGroup, taskItem, launcherOptions)
                            : E_FAIL;
+    LogFocusTrace(L"HandleClick", L"exit", trace);  // TEMP_FOCUS_TRACE
     // Thumbnail (or grouped-icon) click is an explicit "this window".
     // Confirm on the focus thread — ResolveAppIdentity + preview apply must
     // not run inline on the taskbar UI thread inside HandleClick.
@@ -6720,6 +6792,19 @@ bool HookTaskbarDllSymbols() {
             &CTaskListWnd_HandleClick_Original,
             CTaskListWnd_HandleClick_Hook,
         },
+        // TEMP_FOCUS_TRACE: optional observation only; no activation changes.
+        {
+            {LR"(public: virtual long __cdecl CTaskListWnd::HandleExtendedUIClick(struct ITaskGroup *,struct ITaskItem *,struct winrt::Windows::System::LauncherOptions const &))"},
+            &TraceExtendedClick_Original, TraceExtendedClick_Hook, true,
+        },
+        {
+            {LR"(public: virtual void __cdecl CTaskListWnd::SwitchToItem(struct ITaskItem *))"},
+            &TraceSwitchToItem_Original, TraceSwitchToItem_Hook, true,
+        },
+        {
+            {LR"(protected: void __cdecl CTaskBand::_HandleTaskActivated(struct ITaskGroup *,struct ITaskItem *))"},
+            &TraceTaskActivated_Original, TraceTaskActivated_Hook, true,
+        },
         {
             {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::WindowsUdk::UI::Shell::implementation::TaskItem,struct winrt::WindowsUdk::UI::Shell::ITaskItem>::ReportClicked(void *))"},
             &TaskItem_ReportClicked_Original,
@@ -6771,6 +6856,16 @@ bool HookTaskbarDllSymbols() {
     const bool previewHooksReady =
         TaskItemThumbnail_TaskItemThumbnail_Original != nullptr ||
         TaskItemThumbnail_TaskItemThumbnail_2_Original != nullptr;
+    // TEMP_FOCUS_TRACE: record optional probe coverage, not assumed success.
+    Wh_Log(L"TEMP_FOCUS_TRACE coverage extendedClick=%d switchToItem=%d taskActivated=%d",
+           TraceExtendedClick_Original != nullptr,
+           TraceSwitchToItem_Original != nullptr,
+           TraceTaskActivated_Original != nullptr);
+    // TEMP_FOCUS_TRACE: record optional probe coverage, not assumed success.
+    Wh_Log(L"TEMP_FOCUS_TRACE coverage extendedClick=%d switchToItem=%d taskActivated=%d",
+           TraceExtendedClick_Original != nullptr,
+           TraceSwitchToItem_Original != nullptr,
+           TraceTaskActivated_Original != nullptr);
     if (previewHooksReady) {
         Wh_Log(L"Hooked taskbar.dll identity + thumbnail model symbols");
     } else {

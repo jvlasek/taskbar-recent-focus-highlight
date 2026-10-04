@@ -1,5 +1,12 @@
 # Taskbar badge/recency test harness
 
+On `codex/focus-activation-tracing`, `record_focus.py` also records
+`EVENT_OBJECT_FOCUS` (event 32773) and shell activation (`SHELL`, event 4 or
+32772). `EVENT` with event 3 remains foreground; `SAMPLE` remains actual-state
+sampling. See [the experiment instructions](../../doc/focus-tracing-experiment.md).
+Observer startup requires all three notification channels. The hidden shell
+receiver is never shown/activated; Ctrl+C cleans up both recorder processes.
+
 ## Highlight and thumbnail activation harness
 
 `highlight_harness.py` discovers the test group's taskbar button by exact AppId

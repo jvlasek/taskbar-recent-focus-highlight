@@ -7,7 +7,11 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.13 — targeted Win32 and Calculator live tests passed; [coverage and remaining limits](doc/investigation-notes.md). App ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence.
+**Experiment branch:** v0.10.14 adds temporary native activation tracing, not a
+behavioral fix. Main remains at v0.10.13. See the [tracing instructions](doc/focus-tracing-experiment.md)
+before testing; do not submit this diagnostic version to the mod catalog.
+
+**Baseline:** v0.10.13 — targeted Win32 and Calculator live tests passed; [coverage and remaining limits](doc/investigation-notes.md). App ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence.
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
