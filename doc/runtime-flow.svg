@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="1440" viewBox="0 0 1480 1440" role="img" aria-labelledby="title description">
+<title id="title">Taskbar Recent Focus Highlight — runtime flow</title>
+<desc id="description">Shared foreground tracking feeds independent app and window recency. Taskbar identity uses an asynchronous metadata cache. Flyout identity captures the presented HWND using GetThumbnailWindow for immersive apps. All XAML painting stays on its UI dispatcher.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#64748b"/></marker></defs>
+<style>text{font-family:Segoe UI,Arial,sans-serif;fill:#172b43} .heading{font-size:23px;font-weight:700}.body{font-size:18px}.small{font-size:16px;fill:#475569}.tag{font-size:15px;font-weight:700;letter-spacing:1px}.wire{fill:none;stroke:#64748b;stroke-width:2;marker-end:url(#arrow)}</style>
+<rect width="1480" height="1440" fill="#f6f8fc"/>
+
+<text x="40" y="46" class="heading">Taskbar Recent Focus Highlight</text>
+<text x="40" y="76" class="small">Two recency paths · mod 0.10.13 · architecture checked 2026-10-04</text>
+<rect x="40" y="102" width="680" height="110" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="60" y="134" class="heading">Foreground event</text>
+<text x="60" y="163" class="body">EVENT_SYSTEM_FOREGROUND → focus thread</text>
+<text x="60" y="188" class="body">Actual focused HWND supplies the candidate window.</text>
+<rect x="760" y="102" width="680" height="110" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="780" y="134" class="heading">Bounded missing-event recovery</text>
+<text x="780" y="163" class="body">After shell foreground: sample every 100 ms, at most 2 s.</text>
+<text x="780" y="188" class="body">First non-transient foreground → normal focus handling.</text>
+<path class="wire" d="M380 212 V234 H650 V252"/>
+<path class="wire" d="M1100 212 V234 H830 V252"/>
+<rect x="300" y="252" width="880" height="110" rx="12" fill="#eef2ff" stroke="#a5b4fc"/>
+<text x="320" y="284" class="heading">Shared focus worker · HandleForegroundChanged</text>
+<text x="320" y="313" class="body">Normalize HWND → ResolveAppIdentity → exclusions + current desktop.</text>
+<text x="320" y="338" class="body">Separate pending app and preview timers; transient shell focus gets bounded grace.</text>
+<rect x="24" y="407" width="704" height="804" rx="18" fill="#edf7ff"/>
+<rect x="752" y="407" width="704" height="804" rx="18" fill="#edf9f4"/>
+<text x="44" y="440" class="tag">TASKBAR ICONS · WHICH APPS?</text>
+<text x="772" y="440" class="tag">FLYOUT PREVIEWS · WHICH WINDOWS?</text>
+<path class="wire" d="M650 362 V390 H380 V458"/>
+<path class="wire" d="M830 362 V390 H1100 V458"/>
+<rect x="44" y="458" width="660" height="130" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="64" y="490" class="heading">App recency · focus worker</text>
+<text x="64" y="519" class="body">App minimum: default 8 s; promotion mode can skip waiting.</text>
+<text x="64" y="544" class="body">Key = full path, or APPID:AUMID for supported UWP hosts.</text>
+<text x="64" y="569" class="body">Per-desktop history → eligible app top N + decay.</text>
+<rect x="776" y="458" width="656" height="130" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="796" y="490" class="heading">Window recency · focus worker</text>
+<text x="796" y="519" class="body">Preview minimum: default 1 s; tracked/click paths may confirm now.</text>
+<text x="796" y="544" class="body">StampWindowRecencyLocked → HWND + PID + tick / sequence.</text>
+<text x="796" y="569" class="body">Per-desktop history; independent of taskbar top N.</text>
+<text x="44" y="622" class="tag">IDENTITY BRIDGE · UI DATA + WORKER METADATA</text>
+<rect x="44" y="642" width="660" height="135" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="64" y="674" class="heading">TaskListButton → native task item / group</text>
+<text x="64" y="703" class="body">UI captures window handles, PIDs and button identity.</text>
+<text x="64" y="728" class="body">GetWindowFromTaskItem: immersive GetAppWindow for metadata.</text>
+<text x="64" y="753" class="body">Clicks and full binds request asynchronous identity resolution.</text>
+<path class="wire" d="M374 777 V802"/>
+<rect x="44" y="802" width="660" height="135" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="64" y="834" class="heading">QueueButtonResolve → focus worker → UI cache</text>
+<text x="64" y="863" class="body">ResolveOneButtonOnFocusThread: process path / AUMID / class.</text>
+<text x="64" y="888" class="body">Validate request serial, result age and live HWND/PID.</text>
+<text x="64" y="913" class="body">Exact HWND / AUMID / path match; missing identity → no glow.</text>
+<text x="776" y="622" class="tag">IDENTITY BRIDGE · LIVE NATIVE TASK ITEM</text>
+<rect x="776" y="642" width="656" height="135" rx="12" fill="#dcfce7" stroke="#22a06b"/>
+<text x="796" y="674" class="heading">Thumbnail constructor → capture presented HWND</text>
+<text x="796" y="703" class="body">AddThumbnailTaskItemMapping → GetWindowForThumbnailTaskItem</text>
+<text x="796" y="728" class="body">Immersive: GetThumbnailWindow(ITaskItem*) → frame HWND</text>
+<text x="796" y="753" class="body">Ordinary: existing window getter. Store model + HWND + PID.</text>
+<path class="wire" d="M1104 777 V802"/>
+<rect x="776" y="802" width="656" height="135" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="796" y="834" class="heading">Flyout opens / template or target changes</text>
+<text x="796" y="863" class="body">RefreshThumbnailFlyout_UIThread matches DataContext first;</text>
+<text x="796" y="888" class="body">current repeater + model collection fill unresolved holes.</text>
+<text x="796" y="913" class="body">Validate HWND/PID; missing getter or match → leave unmarked.</text>
+<path class="wire" d="M374 937 V995"/>
+<path class="wire" d="M1104 937 V995"/>
+<path class="wire" d="M704 524 H716 V971 H650 V995"/>
+<path class="wire" d="M1432 524 H1444 V971 H1375 V995"/>
+<text x="62" y="978" class="small">App ranks + exact button match</text>
+<text x="794" y="978" class="small">Window history + resolved sibling HWNDs</text>
+<rect x="44" y="995" width="660" height="188" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="64" y="1027" class="heading">ApplyAllHighlights_UIThread</text>
+<text x="64" y="1056" class="body">Running buttons only; pinned-only entries do not glow.</text>
+<text x="64" y="1081" class="body">Own WhRecentFocusGlow: Side / Frame / Full.</text>
+<text x="64" y="1106" class="body">UpdateVisualStates repaints cached rank; full binds refresh identity.</text>
+<text x="64" y="1131" class="body">InsertAt even at end; never reorder native badges or rewrite ZIndex.</text>
+<text x="64" y="1156" class="body">Remove own overlays when unranked; preserve other owners.</text>
+<rect x="776" y="995" width="656" height="188" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="796" y="1027" class="heading">Rank within this flyout → paint on UI dispatcher</text>
+<text x="796" y="1056" class="body">Require &gt;1 window card; skip unresolved and snap-group-only cards.</text>
+<text x="796" y="1081" class="body">Sort recent siblings → preview top N; no app-rank requirement.</text>
+<text x="796" y="1106" class="body">Title bar / title tint / plate / plate + title tint.</text>
+<text x="796" y="1131" class="body">Overlays span the card grid; plate restores only our owned brush.</text>
+<text x="796" y="1156" class="body">Hover alone does not promote window recency.</text>
+<rect x="40" y="1230" width="1400" height="90" rx="12" fill="#fff7ed" stroke="#fdba74"/>
+<text x="60" y="1262" class="heading">Additional input: explicit native click</text>
+<text x="60" y="1291" class="body">HandleClick succeeds → same GetWindowForThumbnailTaskItem helper → post HWND/PID → WM_APP_PREVIEW_CLICK → ConfirmPreviewFocusNow.</text>
+<text x="40" y="1352" class="small">THREAD RULE  Native hooks capture live data. The worker handles metadata / recency. XAML changes use the owning UI dispatcher.</text>
+<text x="40" y="1381" class="small">LIFETIME RULE  Stop and join worker → clean and drain UI dispatchers → unload. Result deadlines do not cancel an OS call.</text>
+<text x="40" y="1410" class="small">Read investigation-notes.md for evidence and limits. This diagram omits guard branches; private Explorer hooks are build-dependent.</text>
+</svg>

@@ -197,6 +197,12 @@ and multimonitor coverage is unverified. See [validation details](tests/badge-fi
 
 ## Architecture (why things look the way they do)
 
+See the [runtime flow diagram](doc/runtime-flow.svg) for the taskbar and flyout
+paths, including where `GetThumbnailWindow()` is used. The
+[investigation notes](doc/investigation-notes.md) collect the identity,
+foreground-event and badge-ordering findings, test evidence, and remaining
+limits (updated 2026-10-04).
+
 ### Two different identities (apps)
 
 | Side | What we get | Example |
