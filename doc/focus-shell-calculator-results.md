@@ -69,3 +69,28 @@ retain existing recency ticks rather than adding further Calculator confirmation
 This run supports positive-delay handling and foreground validation for the
 reported right-click interaction. It does not prove that every context-menu
 interaction activates its owner, or complete unload/desktop-switch coverage.
+
+## Win32, desktop and lifecycle follow-up
+
+The diagnostic-build recordings (temporary traces still present) cover:
+
+- `focus-20261004-213534-236251`: two VS Code previews confirm, followed by
+  app confirmation at 21:36:25.273 after the candidate at 21:36:17.281.
+- `focus-20261004-213808-319544`: desktop GUID changes from E9345F8A… to
+  514F471C… at 21:39:04.748, with separate map/rank counts, then returns to
+  E9345F8A… at 21:39:24.447. The user reports expected visuals.
+- `focus-20261004-214031-286817`: three unloads complete, with two intervening
+  successful shell registrations and resumed VS Code preview confirmations.
+
+Final cleaned-build recording `focus-20261004-214505-364695` has no temporary
+trace lines and its source line numbers match 0.11.0. The user reports keeping
+highlighted flyouts open during delayed Windhawk exit and seeing highlights
+removed correctly. Uninitialize starts at 21:45:55.458; the worker exits and
+joins at .460; Uninitialize completes at .464 (about 6 ms). The independent
+observer still sees Explorer PID 56152 and the same flyout HWND 0x50F56 at
+21:46:01.196. STOP is successful; observer stderr is empty.
+
+This supports a successful final-build flyout-open unload without an Explorer
+restart. Windhawk exit unloads all enabled mods. The recording does not include
+restarting Windhawk afterward. This is targeted manual coverage, not exhaustive
+multi-monitor/theme/build coverage or proof of behavior under hung dispatchers.

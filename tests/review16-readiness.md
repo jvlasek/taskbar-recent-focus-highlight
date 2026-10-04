@@ -21,7 +21,8 @@ Final checks:
 All pass. The runtime SVG was regenerated for the release.
 
 Live 0.10.15 evidence: `doc/focus-shell-calculator-results.md`. The release
-removes diagnostics without changing that event/recency path. It still needs
-fresh live final-build Win32, desktop-switch, disable/re-enable and unload
-coverage. Controlled tests are not proof of live Explorer dispatcher behavior.
+removes diagnostics without changing that event/recency path. Additional diagnostic-build Win32, desktop-switch and disable/re-enable
+recordings passed; the final 0.11.0 flyout-open delayed-exit recording also
+passed. See the results document for paths and precise build distinctions.
+Final-build restart after that exit is not captured. Controlled tests are not proof of live Explorer dispatcher behavior.
 Review reply: `reviews/review-response16.md`; does not claim those missing runs.

@@ -52,8 +52,13 @@ highlight-harness checks. The check DLL was not injected by the agent.
 
 The unbounded unload wait remains intentional: returning with live callbacks
 would permit execution in an unloaded DLL. Slow worker APIs or an unresponsive
-dispatcher can still delay unloading. Fresh live unload, virtual-desktop,
-multi-monitor and theme combinations have not all been rerun on 0.11.0.
+dispatcher can still delay unloading. Additional diagnostic-build recordings passed ordinary VS Code activation,
+separate virtual-desktop histories and repeated disable/re-enable. A final
+0.11.0 delayed-exit test with a highlighted flyout open completed Uninitialize
+in about 6 ms; highlights disappeared and the independent observer subsequently
+saw the same Explorer PID and flyout HWND. The final recording does not include
+Windhawk restart afterward. Multi-monitor and theme combinations have not all
+been rerun.
 The exact reason for the missing foreground WinEvent remains unknown.
 
 The [development repository](https://github.com/jvlasek/taskbar-recent-focus-highlight)
