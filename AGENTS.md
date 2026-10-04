@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.9.x). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.10.13). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -96,8 +96,9 @@ Order of preference (icons — **no name fuzzy**):
    that was not running is observed running again). Otherwise
    `lastResolveTick` throttles retries.
    A successful path is not forever: if the button is running and the cached
-   HWND is dead (or `GetProcessImagePath` of that HWND no longer equals
-   `pathUpper`), re-resolve. Explorer reuses a `TaskListButton` when the exe
+   HWND is dead or its PID changes, re-resolve. Periodic worker metadata
+   validation also detects an image-path change; do not query process paths
+   synchronously on the UI thread. Explorer reuses a `TaskListButton` when the exe
    is deleted/renamed and another copy with the same name launches. Do not
    treat a missing file on disk as stale (deleted-but-still-running).
 
@@ -343,7 +344,7 @@ get ranks 1…N. HWND resolve is TaskItem → repeater GetAt (no unique-title).
 | Frame Z-order | Host before the first badge/progress/native thin-pill anchor, otherwise at end | Preserve native order; frame coverage needs visual validation where native anchors precede the glyph |
 | Full Z-order | Host before earliest glyph/badge/progress/thin-pill anchor | Fill behind glyph and native indicators, without moving native children |
 | Button identity | Option C path cache only (HWND / AUMID / path). No automation-name fuzzy. | Wrong glow is worse than none. Catalog review. |
-| Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Each not-running → running episode clears `resolvedWhileRunning` and the empty-resolve cap, then resolves again; `kUnresolvedRetryMs` throttles other retries. Running + dead sample HWND, PID mismatch, or live image-path mismatch also re-resolves. Empty re-resolve does not wipe a known path. `observedRunning` is the last UI `IsRunning` snapshot (sticky until the UI sees false). | UVS must not `ReportClicked`. Explorer reuses the same `TaskListButton` on launch **and** when the exe is replaced by another folder’s copy. A capped empty resolve must not stick across close and relaunch. |
+| Path cache | Full bind / press only. Keyed by `IUnknown*` **and** the live weak_ref. AutomationId on a pinned button is not a finished Win32 identity. Each not-running → running episode clears `resolvedWhileRunning` and the empty-resolve cap, then resolves again; `kUnresolvedRetryMs` throttles other retries. Running + dead sample HWND or PID mismatch also re-resolves. Process-path changes are checked by the focus worker, never synchronously by the UI. An empty result preserves a known path only for the same captured target. `observedRunning` is the last UI `IsRunning` snapshot (sticky until the UI sees false). | UVS must not `ReportClicked`. Explorer reuses the same `TaskListButton` on launch **and** when the exe is replaced by another folder’s copy. A capped empty resolve must not stick across close and relaunch. |
 | UVS vs rebind | Cached paint: **-1** unknown, **0** unranked, **>0** paint if `(rank, generation, accent, edge, panel size)` changed. | `{rank, gen, accent}` alone left the bar on the old side after a taskbar-edge / icon-size relayout. |
 | Native z-order | Move only WhRecentFocusGlow when its style position changes; remove when unranked | Every insertion, including creation at end, uses InsertAt. Append omits deferred-index notification. Never rewrite native order or ZIndex |
 | Rank match | Exact path / HWND / AUMID only. Cached group windows and the sample HWND store the PID captured with the handle; `IdentityMatchesRank` accepts that HWND only while `HwndMatchesStoredPid` still holds. `PathAppearsOnTaskbar` is exact path / AUMID **and** a button last observed running (`observedRunning`, or 400 ms grace after a not-running snapshot). Pinned-only / closed must not occupy a top-N slot. A path-cache row whose button is already dead is erased on the UI thread (`PruneDeadButtonPathCache_UIThread`, from `CollectLiveButtons`) before eligibility; this function does not `weak.get()`. | Two folders of `python.exe` stay distinct; closing a pinned app (or moving the exe on update) frees the slot. Idle apps must not drop because no hover refreshed a tick. A destroyed button must not keep the slot. A recycled group HWND must not light the old button. |
@@ -422,7 +423,7 @@ General keys stay top-level; icon/preview keys are dotted.
 | Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | color mode + hex |
 | Taskbar icons | `icons.glowIntensityRank1..3` | `glowIntensity[3]` |
 | Taskbar icons | `icons.glowThickness` / `icons.glowRoundness` / `icons.glowSize` / `icons.glowLayers` | metrics |
-| Taskbar icons | `icons.glowFillOpacity` | Full / side / edge icon bar strength |
+| Taskbar icons | `icons.glowFillOpacity` | Full / side fill strength (Edge removed) |
 | Taskbar icons | `icons.sizeBoostRank1..3` | `sizeBoostPercent[3]` |
 | Thumbnail previews | `previews.highlightEnabled` | preview master |
 | Thumbnail previews | `previews.highlightCount` | per-flyout top N |
@@ -511,7 +512,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    set. A pinned AutomationId is not a finished Win32 resolve: re-resolve
    once when `IsRunning` becomes true. A known path is not forever either:
    re-resolve when the button is running and the sample HWND is dead or the
-   live image path diverges. Do not wipe a known path on an empty retry for the same captured target, and
+   worker metadata validation finds a different image path. Do not perform that path query on the UI thread. Do not wipe a known path on an empty retry for the same captured target, and
    do not treat `GetFileAttributes` missing as stale. UVS must not paint a
    cached rank when the sample HWND is gone (clear chrome, rank **-1**,
    schedule the full bind). Do **not** write paint rank 0 when
@@ -542,7 +543,7 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    left/right/top: side bar must not cover the native running pill; unranked
    icons keep their dots after relayout; edge bar follows the screen edge
    and is centered on the icon. Hover-storm: ranked glows stay without
-   `ApplyAllHighlights` log spam (debug off). Total Commander + Lister:
+   `ApplyAllHighlights` log spam (Windhawk logging set to None). Total Commander + Lister:
    focusing Lister must glow Lister, not Commander (preview flyout ranks
    Lister windows independently). Two copies of the same exe in different
    folders must not share one icon rank. Disable/unload while a flyout is
@@ -880,7 +881,7 @@ LoadLibraryExW and AfterInit. Atomically claim g_taskbarViewHookAttempted before
 hooking; failures are not retried on subsequent loads of the same view module.
 The init path is serialized before loader hooks activate. The process-image
 cache releases its string allocation at outermost scope exit. Side layers are
-1–2, with only L0/L1 rectangles. Click-path work remains a separate follow-up.
+1–2, with only L0/L1 rectangles. The later 0.10.3 change below completes the asynchronous click-path follow-up.
 
 
 ## Asynchronous button identity (0.10.3 — current resolver)
@@ -952,8 +953,9 @@ This replaces the 0.10.7–0.10.10 preview workarounds and diagnostics: no thumb
 root normalization, hosted association cache, attachment polling/timer, or
 frame-child enumeration remains. Existing async identity logs and the manual
 recorder remain. Regression test: `python tests/run-preview-identity-tests.py`.
-Live Calculator launch/minimize/relaunch cycles and GIMP multi-window testing
-are required before calling this build validated in Explorer.
+Targeted Win32 and Calculator live tests passed; see doc/investigation-notes.md
+for evidence and coverage limits. GIMP has earlier manual coverage, not a fresh
+automated validation of this version. Do not infer complete build coverage.
 
 
 ## Bounded foreground recovery (0.10.13)

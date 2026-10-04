@@ -4541,8 +4541,8 @@ void ClearAllHighlights_UIThread() {
 // Thumbnail preview glow (multi-window flyouts)
 // ---------------------------------------------------------------------------
 
-// Capture only while the constructor supplies a live ITaskItem. Immersive
-// thumbnails use the presented frame, not the content returned by GetAppWindow.
+// Query only while a constructor or native click hook supplies a live ITaskItem.
+// Immersive previews use the presented frame, not GetAppWindow's app content.
 HWND GetWindowForThumbnailTaskItem(void* taskItem) {
     if (!taskItem) {
         return nullptr;

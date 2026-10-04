@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Status:** v0.10.13 (live validation pending) — app ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence
+**Status:** v0.10.13 — targeted Win32 and Calculator live tests passed; [coverage and remaining limits](doc/investigation-notes.md). App ranks + per-flyout thumbnail ranks + per-virtual-desktop lists + 4-edge taskbar bars + UWP AppId + Taskbar Styler coexistence.
 
 For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
 
@@ -387,8 +387,10 @@ This replaces the 0.10.7–0.10.10 preview workarounds and diagnostics: no thumb
 root normalization, hosted association cache, attachment polling/timer, or
 frame-child enumeration remains. Existing async identity logs and the manual
 recorder remain. Regression test: `python tests/run-preview-identity-tests.py`.
-Live Calculator launch/minimize/relaunch cycles and GIMP multi-window testing
-are required before calling this build validated in Explorer.
+Targeted Win32 and Calculator tests have passed, including early minimization.
+Earlier GIMP multi-window behavior was manually reported working; that is not
+a fresh automated GIMP validation of this version. See the investigation notes
+for dated evidence and the distinction between startup and calibrated checks.
 
 
 ## Bounded foreground recovery (0.10.13)
@@ -419,4 +421,6 @@ Run `python tests/run-foreground-recheck-tests.py` for controlled timer scenario
 The [highlight harness](tests/uwspy/README.md#highlight-and-thumbnail-activation-harness)
 adds real-input Win32/Calculator scenarios with automatic taskbar discovery,
 screenshots, independent foreground recording, hover/activation assertions,
-and guided grouping/desktop variants. Full interactive validation is pending.
+and guided grouping/desktop variants. Combined-mode Win32 and Calculator runs
+passed; broader grouping/desktop, multi-monitor, theme and current-version
+unload coverage remains unverified. See [the evidence summary](doc/investigation-notes.md).
