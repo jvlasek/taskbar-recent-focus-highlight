@@ -23,7 +23,7 @@ def wire(points):
     parts.append(f'<path class="wire" d="{points}"/>')
 
 text(40,46,'Taskbar Recent Focus Highlight','heading')
-text(40,76,'Two recency paths · mod 0.11.0 · architecture checked 2026-10-04','small')
+text(40,76,'Two recency paths · mod 0.11.1 · architecture checked 2026-10-05','small')
 box(40,102,680,110,'Foreground event',[
     'EVENT_SYSTEM_FOREGROUND → focus thread',
     'Reject stale targets; validate actual foreground.'])
@@ -59,7 +59,7 @@ box(44,642,660,135,'TaskListButton → native task item / group',[
 wire('M374 777 V802')
 box(44,802,660,135,'QueueButtonResolve → focus worker → UI cache',[
     'ResolveOneButtonOnFocusThread: process path / AUMID / class.',
-    'Validate request serial, result age and live HWND/PID.',
+    'Validate targets; coalesce completion paints per dispatcher.',
     'Exact HWND / AUMID / path match; missing identity → no glow.'])
 
 text(776,622,'IDENTITY BRIDGE · LIVE NATIVE TASK ITEM','tag')

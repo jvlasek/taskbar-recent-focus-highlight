@@ -6,7 +6,7 @@
 <rect width="1480" height="1440" fill="#f6f8fc"/>
 
 <text x="40" y="46" class="heading">Taskbar Recent Focus Highlight</text>
-<text x="40" y="76" class="small">Two recency paths · mod 0.11.0 · architecture checked 2026-10-04</text>
+<text x="40" y="76" class="small">Two recency paths · mod 0.11.1 · architecture checked 2026-10-05</text>
 <rect x="40" y="102" width="680" height="110" rx="12" fill="#fff" stroke="#cbd5e1"/>
 <text x="60" y="134" class="heading">Foreground event</text>
 <text x="60" y="163" class="body">EVENT_SYSTEM_FOREGROUND → focus thread</text>
@@ -47,7 +47,7 @@
 <rect x="44" y="802" width="660" height="135" rx="12" fill="#fff" stroke="#cbd5e1"/>
 <text x="64" y="834" class="heading">QueueButtonResolve → focus worker → UI cache</text>
 <text x="64" y="863" class="body">ResolveOneButtonOnFocusThread: process path / AUMID / class.</text>
-<text x="64" y="888" class="body">Validate request serial, result age and live HWND/PID.</text>
+<text x="64" y="888" class="body">Validate targets; coalesce completion paints per dispatcher.</text>
 <text x="64" y="913" class="body">Exact HWND / AUMID / path match; missing identity → no glow.</text>
 <text x="776" y="622" class="tag">IDENTITY BRIDGE · LIVE NATIVE TASK ITEM</text>
 <rect x="776" y="642" width="656" height="135" rx="12" fill="#dcfce7" stroke="#22a06b"/>

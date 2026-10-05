@@ -40,6 +40,8 @@ struct Entry {
     ULONGLONG lastResolveTick = 0, resolveSerial = 0, resolveQueuedTick = 0;
     std::optional<ButtonResolveData> resolveResult;
 };
+using ButtonPathCacheEntry = Entry;
+bool IsUwpHostPath(const std::wstring& path) { return path == L"APPLICATIONFRAMEHOST.EXE" || path == L"WWAHOST.EXE"; }
 std::mutex g_buttonPathMutex;
 std::unordered_map<void*, Entry> g_buttonPathCache;
 std::atomic<bool> g_unloading{false}, g_taskbandResolveReady{true};
@@ -65,7 +67,7 @@ std::wstring GetProcessImagePath(DWORD) {
 std::wstring GetWindowClassName(HWND) { return L"CLASS"; }
 std::wstring GetWindowAppUserModelId(HWND) { return L"APPID"; }
 void ApplyAllHighlights_UIThread(bool refresh) { assert(!refresh); ++paints; }
-template<class F> bool RunOnUiThread(F f) { f(); return true; }
+bool RequestIdentityCompletionApply() { ApplyAllHighlights_UIThread(false); return true; }
 void* InspectableIdentity(FrameworkElement b) { return b->data.buttonId; }
 bool TaskListButton_IsRunning(FrameworkElement b) { return b->data.running; }
 bool WeakIsSameElement(FrameworkElement a, FrameworkElement b) { return a == b; }
@@ -139,6 +141,26 @@ int main() {
     assert(EnsureButtonPathCached(b, false, false).empty());
     assert(g_buttonResolveQueue.size() == 1);
     worker(); EnsureButtonPathCached(b, false, false);
+    // A surviving member of the same Win32 process/group keeps its path
+    // while refreshing. An unrelated same-PID window must still clear it.
+    auto& retained = g_buttonPathCache[b->data.buttonId];
+    auto sibling = reinterpret_cast<void*>(12);
+    retained.groupWindows.push_back({sibling,42});
+    b->data.hwnd = sibling; b->data.windows = {{sibling,42}};
+    assert(EnsureButtonPathCached(b,true) == L"LATE.EXE");
+    assert(retained.sampleHwnd == sibling);
+    worker(); EnsureButtonPathCached(b,false,false);
+    auto candidate = b->data;
+    assert(CanRetainGroupIdentity(retained,candidate));
+    candidate.running=false; assert(!CanRetainGroupIdentity(retained,candidate));
+    candidate=b->data; candidate.pid=99; assert(!CanRetainGroupIdentity(retained,candidate));
+    candidate=b->data; candidate.hwnd=reinterpret_cast<void*>(13);
+    assert(!CanRetainGroupIdentity(retained,candidate));
+    candidate=b->data; retained.pathUpper=L"APPLICATIONFRAMEHOST.EXE";
+    assert(!CanRetainGroupIdentity(retained,candidate));
+    retained.pathUpper=L"WWAHOST.EXE";
+    assert(!CanRetainGroupIdentity(retained,candidate));
+    retained.pathUpper=L"LATE.EXE";
     // Same address key but different button: do not consume the old result.
     EnsureButtonPathCached(b, true); worker();
     auto recycled = button(1);

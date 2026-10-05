@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Version:** v0.11.0 — foreground WinEvents plus validated shell activation
+**Version:** v0.11.1 — foreground WinEvents plus validated shell activation
 notifications; no foreground recovery polling. Targeted Calculator recordings
 cover missing-event activation and a positive preview delay. See
 [results and coverage limits](doc/focus-shell-calculator-results.md).
@@ -407,9 +407,9 @@ survive duplicate notifications for the same pending window.
 
 The worker owns a hidden, never-shown WS_POPUP window with TOOLWINDOW and
 NOACTIVATE extended styles, replacing its message-only window. It registers
-SHELLHOOK before reporting successful startup, fails startup if registration
-fails, and deregisters before destruction on normal shutdown or WinEvent setup
-failure. WM_CLOSE cannot destroy this worker-owned notification window.
+SHELLHOOK before reporting startup. If registration fails it logs the degraded
+mode and keeps foreground WinEvents; no polling fallback is added. Successful
+registrations are removed before destruction, including WinEvent setup failure. WM_CLOSE cannot destroy this worker-owned notification window.
 
 The 0.10.13 two-second foreground polling recovery and its timer are removed;
 there is no polling fallback in this implementation. Existing minimum-focus timers
@@ -419,3 +419,28 @@ Run `python tests/run-shell-activation-tests.py`. Live Calculator first-click an
 Fresh Win32, desktop-switch and unload checks of 0.11.0 remain unverified;
 see doc/focus-shell-calculator-results.md for the precise coverage. The reason for
 missing Calculator foreground WinEvents remains unknown.
+
+## Review follow-up (0.11.1)
+
+Identity-completion repaints are coalesced per UI dispatcher. Its queued flag
+clears before painting, so results published during a pass may queue another;
+a slow dispatcher retains its own flag independently. Dispatch rejection clears
+the flag for retry. Results remain cached for ordinary full passes if an accepted
+callback never executes. Existing worker-stop-before-dispatcher-drain ordering
+is unchanged.
+
+When a grouped Win32 button changes its sampled HWND, keep its identity while
+refreshing only if the new HWND/PID is a live member of the previously captured
+group, the process matches the old sample, and the cached path is not a shared
+UWP host. Unknown windows, process changes, pinned-only transitions and hosted
+apps still invalidate the old identity. This deliberately does not use PID-only
+matching or guarantee continuity across separate-process groups.
+
+Window titles call InternalGetWindowText directly. Shell registration failure
+preserves the foreground WinEvent path, with a clear degraded-mode log. Missing
+shell events can therefore leave the known Calculator activation gap on such a
+system; there is no claim of equivalent coverage in degraded mode.
+
+Checks: `tests/run-identity-repaint-tests.py`, `tests/run-async-identity-tests.py`
+and `tests/run-shell-activation-tests.py`. Live grouped-window close/remaining
+icon behavior still needs validation on 0.11.1.

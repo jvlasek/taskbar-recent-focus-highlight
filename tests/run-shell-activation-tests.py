@@ -15,6 +15,9 @@ helpers = '\n'.join(function(s) for s in (
 start = source.index('    if (sameAppPending) {', source.index('void HandleForegroundChanged('))
 end = source.index('\n    CancelMinFocusTimer();', start)
 duplicate = source[start:end]
+registration_start = source.index('    g_shellHookMessage = RegisterWindowMessageW')
+registration_end = source.index('    g_hookThreadHwnd.store(hwnd', registration_start)
+registration = source[registration_start:registration_end]
 fixture = r'''
 #include <algorithm>
 #include <atomic>
@@ -55,12 +58,28 @@ void SchedulePreviewConfirm(bool) {++scheduled;}
 void EnsurePendingAppTimer() {++appEnsures;}
 using UINT = unsigned;
 void Wh_Log(const wchar_t*, ...) {}
+UINT g_shellHookMessage=0, messageId=1234;
+bool registrationSucceeds=true;
+int registrations=0;
+UINT RegisterWindowMessageW(const wchar_t*) {return messageId;}
+bool RegisterShellHookWindow(HWND) {++registrations; return registrationSucceeds;}
+UINT GetLastError() {return 5;}
+bool RegisterForTest(HWND hwnd) {
+// REGISTRATION
+return shellHookRegistered;
+}
 // HELPERS
 void Duplicate(bool hwndChanged,bool windowAlreadyTracked) {
     bool sameAppPending=true;
     // DUPLICATE
 }
 int main() {
+    assert(RegisterForTest(1) && g_shellHookMessage==1234);
+    registrationSucceeds=false;
+    assert(!RegisterForTest(1) && g_shellHookMessage==0);
+    HandleForegroundNotification(1); assert(handled==1); // WinEvent survives failure
+    handled=0; messageId=0; int before=registrations;
+    assert(!RegisterForTest(1) && g_shellHookMessage==0 && registrations==before);
     HandleForegroundNotification(2); assert(handled==0); // background or stale event
     HandleShellActivation(1,1); HandleShellActivation(32774,1); // create / flash
     HandleShellActivation(4,0); HandleShellActivation(4,2); assert(handled==0);
@@ -80,7 +99,7 @@ int main() {
     g_pendingFocus.previewConfirmed=false; settings.previewHighlightEnabled=false;
     Duplicate(false,false); assert(g_pendingFocus.previewConfirmed && canceled==1);
 }
-'''.replace('// HELPERS', helpers).replace('// DUPLICATE', duplicate)
+'''.replace('// HELPERS', helpers).replace('// DUPLICATE', duplicate).replace('// REGISTRATION', registration)
 
 assert 'TEMP_FOCUS_TRACE' not in source
 assert 'TraceExtendedClick' not in source
@@ -89,6 +108,7 @@ assert 'g_foregroundRecheckDeadline' not in source
 worker = function('DWORD WINAPI WinEventHookThread(')
 assert 'WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE' in worker and 'HWND_MESSAGE' not in worker
 assert worker.index('RegisterShellHookWindow(hwnd)') < worker.index('g_hookThreadHwnd.store(hwnd')
+assert worker.count('if (shellHookRegistered)') == 2
 assert worker.count('DeregisterShellHookWindow(hwnd)') == 2  # WinEvent failure + normal exit
 assert 'HandleForegroundNotification(reinterpret_cast<HWND>(wParam))' in function('LRESULT CALLBACK HookThreadWndProc(')
 
