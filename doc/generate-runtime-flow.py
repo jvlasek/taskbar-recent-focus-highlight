@@ -23,13 +23,13 @@ def wire(points):
     parts.append(f'<path class="wire" d="{points}"/>')
 
 text(40,46,'Taskbar Recent Focus Highlight','heading')
-text(40,76,'Two recency paths · mod 0.11.1 · architecture checked 2026-10-05','small')
+text(40,76,'Two recency paths · mod 0.11.1 · architecture checked 2026-10-06','small')
 box(40,102,680,110,'Foreground event',[
     'EVENT_SYSTEM_FOREGROUND → focus thread',
-    'Reject stale targets; validate actual foreground.'])
+    'HandleForegroundNotification validates actual foreground.'])
 box(760,102,680,110,'Shell activation notification',[
     'WINDOWACTIVATED / RUDEAPPACTIVATED.',
-    'Same foreground validation; no recovery polling.'])
+    'Same validation; registration failure leaves WinEvents only.'])
 wire('M380 212 V234 H650 V252')
 wire('M1100 212 V234 H830 V252')
 box(300,252,880,110,'Shared focus worker · HandleForegroundChanged',[

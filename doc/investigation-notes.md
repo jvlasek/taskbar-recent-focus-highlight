@@ -1,13 +1,15 @@
 # What we learned: identities, previews, and regression testing
 
-Updated 2026-10-04. Describes mod **0.10.13**, with the Calculator test harness
-at commit `23fac66`. This is a findings and evidence summary, not a claim of
+Updated 2026-10-06. Describes mod **0.11.1**. Historical Calculator harness
+results below were recorded at commit `23fac66`. This is a findings and evidence
+summary, not a claim of
 compatibility with every Explorer build or taskbar theme.
 
 Follow-up: the [focus hook static audit](focus-hook-static-analysis.md) found a
 distinct XAML thumbnail click route not covered by the current HandleClick
-hook, and candidate native activation notifications. These are investigative
-findings, not implemented changes or an explanation of the missing WinEvent.
+hook, and candidate native activation notifications. Since 0.11.0, shell
+activation notifications supplement foreground WinEvents. The missing
+WinEvent's cause remains unknown; HandleClick alone does not cover every route.
 
 ![Runtime flow: taskbar icons and flyout previews](runtime-flow.svg)
 
@@ -69,7 +71,30 @@ foreground WinEvents. We captured Calculator becoming foreground without a
 matching event reaching either that observer or the mod. Native attention
 flashing clearing is not proof that our recency code received a notification.
 
-Version 0.10.13 adds bounded recovery after relevant Explorer shell foreground
+### Current runtime: shell activation plus foreground WinEvents
+
+Since 0.11.0, the focus worker owns a hidden, never-shown desktop WS_POPUP
+window with TOOLWINDOW and NOACTIVATE styles, registered for SHELLHOOK.
+Only WINDOWACTIVATED and RUDEAPPACTIVATED are accepted. Shell notifications
+and foreground WinEvents feed `HandleForegroundNotification`, which rejects
+null targets and compares the normalized target with actual foreground before
+calling `HandleForegroundChanged`. Creation and attention are not recency.
+Duplicate notifications preserve pending minimum-focus deadlines.
+
+There is no foreground recovery polling in the current implementation.
+Minimum-focus timers still allow bounded grace for transient shell foreground.
+If shell registration fails, the mod logs degraded mode and retains foreground
+WinEvents; the known Calculator notification gap can remain in that mode.
+Registration is removed before the worker window is destroyed.
+
+See [shell activation results](focus-shell-calculator-results.md) for targeted
+Calculator first-click and positive-delay checks, diagnostic Win32/desktop
+rounds, and a cleaned 0.11.0 flyout-open unload recording. These do not certify
+every activation route or establish fresh 0.11.1 coverage of every scenario.
+
+### Historical recovery experiment: 0.10.13 (removed in 0.11.0)
+
+Version 0.10.13 added bounded recovery after relevant Explorer shell foreground
 events: sample every 100 ms for at most two seconds; stop on a non-transient
 window and send it through normal focus handling. A normal app foreground
 event cancels recovery. This is not an idle poll, and repeated shell signals
@@ -80,7 +105,7 @@ event and no effective explicit-click confirmation, can still be missed.
 The earlier `focus-20261003-151919-508357` recording demonstrated the delayed
 activation gap. Later passes do not prove this gap has become impossible.
 
-The latest targeted manual recording is especially useful because recovery
+The following historical manual recording is useful because recovery
 actually ran, rather than an ordinary foreground event making it unnecessary:
 
 | Local time, 2026-10-04 | Observation |
@@ -187,6 +212,18 @@ Only value data crosses that queue. Request serials, HWND/PID and result age
 are checked before using results. A result deadline rejects stale work; it
 does **not** cancel an OS call already running on the worker.
 
+In 0.11.1, identity-completion paints are coalesced per UI dispatcher. The
+queued flag clears before painting so a result arriving during the pass can
+queue another; a slow dispatcher retains its independent flag. Rejected
+dispatch clears the flag for retry. Cached results remain available to ordinary
+full passes if an accepted callback never runs.
+
+When a grouped Win32 button changes its sample, cached identity is retained
+during refresh only for a live HWND/PID already captured in the group, from
+the same process as the old sample, and with a non-hosted cached path. Unknown
+members, process changes, hosted apps and pinned-only transitions invalidate
+it. Live grouped close/remaining-window behavior still needs 0.11.1 validation.
+
 Window-title retrieval is diagnostic and must not introduce a synchronous
 message hang into Explorer. A missing title can remain empty; app identity
 and HWND/PID remain separate from that log text.
@@ -202,7 +239,7 @@ Search these names in [the single translation unit](../taskbar-recent-focus-high
 
 | Stage | Functions / hooks |
 |---|---|
-| Foreground and recovery | `HandleForegroundChanged`, `OnForegroundRecheckTimer` |
+| Foreground and shell activation | `HandleShellActivation`, `HandleForegroundNotification`, `HandleForegroundChanged` |
 | App identity and preview history | `ResolveAppIdentity`, `StampWindowRecencyLocked`, `ConfirmPreviewFocusNow` |
 | Button identity work | `QueueButtonResolve`, `ResolveOneButtonOnFocusThread`, `GetWindowFromTaskItem` |
 | Presented-window lookup | `GetWindowForThumbnailTaskItem`, `AddThumbnailTaskItemMapping` |
