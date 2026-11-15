@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.18
+// @version         0.11.19
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -668,17 +668,6 @@ std::unordered_map<void*, ButtonPathCacheEntry> g_buttonPathCache;
 std::atomic<bool> g_taskbandResolveReady{false};
 HMODULE g_taskbarDll = nullptr;
 bool g_taskbarDllLoadedByUs = false;
-
-// XAML TaskItemThumbnail (model) → native task item (optional hooks).
-struct ThumbnailTaskItemMapping {
-    winrt::weak_ref<winrt::Windows::Foundation::IInspectable> thumbnail;
-    void* taskGroup = nullptr;
-    void* taskItem = nullptr;
-    HWND hwnd = nullptr;  // resolved at map time (stable for same-title windows)
-    DWORD pid = 0;        // reject HWND recycle (IsWindow is not enough)
-};
-std::mutex g_thumbnailMapMutex;
-std::vector<ThumbnailTaskItemMapping> g_thumbnailTaskItemMapping;
 
 // Live thumbnail views for unload / re-apply while flyout is open.
 std::mutex g_thumbViewsMutex;
@@ -4914,7 +4903,7 @@ void ClearAllHighlights_UIThread() {
 // Thumbnail preview glow (multi-window flyouts)
 // ---------------------------------------------------------------------------
 
-// Query only while a constructor or native click hook supplies a live ITaskItem.
+// Query only while the native click hook supplies a live ITaskItem.
 // Immersive previews use the presented frame, not GetAppWindow's app content.
 HWND GetWindowForThumbnailTaskItem(void* taskItem) {
     if (!taskItem) {
@@ -4929,112 +4918,6 @@ HWND GetWindowForThumbnailTaskItem(void* taskItem) {
                    : nullptr;
     }
     return GetWindowFromTaskItem(taskItem);
-}
-
-void AddThumbnailTaskItemMapping(
-    winrt::Windows::Foundation::IInspectable thumbnail,
-    void* taskGroup,
-    void* taskItem) {
-    if (!thumbnail || !taskItem) {
-        return;
-    }
-    HWND hwnd = GetWindowForThumbnailTaskItem(taskItem);
-    std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
-    std::erase_if(g_thumbnailTaskItemMapping, [&](const ThumbnailTaskItemMapping& item) {
-        try {
-            auto t = item.thumbnail.get();
-            if (!t || t == thumbnail) {
-                return true;
-            }
-        } catch (...) {
-            return true;
-        }
-        return item.taskGroup == taskGroup && item.taskItem == taskItem;
-    });
-    ThumbnailTaskItemMapping entry;
-    entry.thumbnail = winrt::make_weak(thumbnail);
-    entry.taskGroup = taskGroup;
-    entry.taskItem = taskItem;
-    entry.hwnd = hwnd;
-    entry.pid = hwnd ? PidFromHwnd(hwnd) : 0;
-    g_thumbnailTaskItemMapping.push_back(std::move(entry));
-    // Soft cap
-    if (g_thumbnailTaskItemMapping.size() > 128) {
-        std::erase_if(g_thumbnailTaskItemMapping, [](const ThumbnailTaskItemMapping& item) {
-            try {
-                return !item.thumbnail.get();
-            } catch (...) {
-                return true;
-            }
-        });
-    }
-}
-
-HWND HwndFromMappingEntry(const ThumbnailTaskItemMapping& item) {
-    // HWND was read in the ctor hook while taskItem was live. Do not
-    // dereference the raw ITaskItem* later — thumbnail-reorder only compares
-    // that pointer, and the native object is gone when IsWindow fails.
-    if (!item.hwnd || !IsWindow(item.hwnd)) {
-        return nullptr;
-    }
-    if (item.pid && PidFromHwnd(item.hwnd) != item.pid) {
-        return nullptr;
-    }
-    return item.hwnd;
-}
-
-// True if two WinRT objects are the same COM identity (different projections
-// of the same TaskItemThumbnail still match).
-bool SameInspectableIdentity(winrt::Windows::Foundation::IInspectable const& a,
-                             winrt::Windows::Foundation::IInspectable const& b) {
-    if (!a || !b) {
-        return false;
-    }
-    try {
-        if (a == b) {
-            return true;
-        }
-        if (winrt::get_abi(a) == winrt::get_abi(b)) {
-            return true;
-        }
-        // Canonical COM identity (QI to IUnknown).
-        auto ua = a.as<::IUnknown>();
-        auto ub = b.as<::IUnknown>();
-        return winrt::get_abi(ua) == winrt::get_abi(ub);
-    } catch (...) {
-        return false;
-    }
-}
-
-// Strong resolve: TaskItemThumbnail model (DataContext) → HWND.
-// Returns also taskGroup when found (for index-order fill of siblings).
-HWND ResolveHwndFromThumbnailModel(
-    winrt::Windows::Foundation::IInspectable thumbnail,
-    void** outTaskGroup = nullptr) {
-    if (outTaskGroup) {
-        *outTaskGroup = nullptr;
-    }
-    if (!thumbnail) {
-        return nullptr;
-    }
-    std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
-    for (const auto& item : g_thumbnailTaskItemMapping) {
-        try {
-            auto t = item.thumbnail.get();
-            if (!t) {
-                continue;
-            }
-            if (!SameInspectableIdentity(t, thumbnail)) {
-                continue;
-            }
-            if (outTaskGroup) {
-                *outTaskGroup = item.taskGroup;
-            }
-            return HwndFromMappingEntry(item);
-        } catch (...) {
-        }
-    }
-    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -5115,27 +4998,6 @@ HWND ResolveHwndFromCardViewModel(FrameworkElement const& card) {
     } catch (...) {
         return nullptr;
     }
-}
-
-HWND ResolveHwndForThumbnailView(FrameworkElement thumbView,
-                                 void** outTaskGroup = nullptr) {
-    if (outTaskGroup) {
-        *outTaskGroup = nullptr;
-    }
-    if (!thumbView) {
-        return nullptr;
-    }
-    try {
-        // DataContext is often the TaskItemThumbnail model object.
-        auto dc = thumbView.DataContext();
-        if (dc) {
-            if (HWND h = ResolveHwndFromThumbnailModel(dc, outTaskGroup)) {
-                return h;
-            }
-        }
-    } catch (...) {
-    }
-    return nullptr;
 }
 
 void CollectThumbnailViewsUnder(FrameworkElement root,
@@ -5400,9 +5262,6 @@ std::vector<FrameworkElement> CollectRepeaterThumbnailViews(
     return out;
 }
 
-HWND HwndFromThumbnailsGetAt(int index);
-int ThumbnailsCollectionSize();
-
 void TrackThumbView_UIThread(FrameworkElement thumbView) {
     if (!thumbView) {
         return;
@@ -5524,8 +5383,8 @@ bool IsSnapGroupThumbnailView(FrameworkElement view) {
         try {
             if (Media::VisualTreeHelper::GetChildrenCount(repeater) >= 2) {
                 // A real window card that gained a second icon still has an
-                // HWND. A snap-group card does not.
-                if (ResolveHwndForThumbnailView(view)) {
+                // HWND (from its view model). A snap-group card does not.
+                if (ResolveHwndFromCardViewModel(view)) {
                     return false;
                 }
                 return true;
@@ -6334,9 +6193,7 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     }
     TrackThumbView_UIThread(anyThumb);
 
-    std::vector<int> repeaterSourceIndex;
-    auto repeaterViews =
-        CollectRepeaterThumbnailViews(anyThumb, &repeaterSourceIndex);
+    auto repeaterViews = CollectRepeaterThumbnailViews(anyThumb, nullptr);
     const bool usedRepeater = !repeaterViews.empty();
     auto allViews =
         usedRepeater ? std::move(repeaterViews)
@@ -6350,7 +6207,7 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
 
     // Snap-group cards sit in the same ItemsRepeater as the windows.
     // Never glow those; they are not a window HWND. Compute once — the
-    // lookup walks IconsRepeater and takes the ctor-map mutex.
+    // lookup walks IconsRepeater and resolves the card's view model.
     std::vector<char> isSnap(allViews.size(), 0);
     for (size_t i = 0; i < allViews.size(); ++i) {
         if (IsSnapGroupThumbnailView(allViews[i])) {
@@ -6375,17 +6232,13 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         return;
     }
 
-    // HWND pipeline (this flyout only — not a global window ladder):
-    //   0. ViewModel — Explorer's own card binding (ParentItem.WindowId).
-    //      Per card, cannot shift when cards are removed or recycled.
-    //   1. TaskItem — DataContext ↔ ctor map (COM identity, per card).
-    //      On 26100-era builds the DataContext never matched (0 of 300+
-    //      cards, 2026-11-15); kept as fallback and for comparison logs.
-    //   2. Repeater index + Thumbnails.GetAt — holes only. The collection is
-    //      cleared on TargetItemKey entry and recaptured for this target;
-    //      still skip GetAt if it disagrees with a DataContext HWND.
-    // No unique-title fallback. A card that misses both stays unmarked.
-    enum class ResolveHow : int { None = 0, Repeater, TaskItem, ViewModel };
+    // HWND per card (this flyout only — not a global window ladder): the
+    // card's own view model, ParentItem.WindowId (Explorer's binding). Per
+    // card; cannot shift when cards are removed or recycled. A card without
+    // one stays unmarked. (Before 0.11.19 also a DataContext/ctor-map pass and
+    // a repeater-index + captured Thumbnails pass; the first never matched
+    // on 26100-era builds, the second shifted after a card was closed.)
+    enum class ResolveHow : int { None = 0, ViewModel };
     struct Scored {
         FrameworkElement view{nullptr};
         HWND hwnd = nullptr;
@@ -6393,8 +6246,7 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         ULONGLONG confirmSeq = 0;
         ResolveHow how = ResolveHow::None;
         int rank = 0;  // 1-based flyout rank; 0 = not highlighted
-        HWND viaViewModel = nullptr;  // diagnostics: each resolver's answer
-        HWND viaCtorMap = nullptr;
+        HWND viaViewModel = nullptr;
     };
     std::vector<Scored> scored(siblings.size());
     std::unordered_set<HWND> usedHwnds;
@@ -6432,7 +6284,7 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         scored[i].view = siblings[i];
     }
 
-    // Pass 0: card view model -> ParentItem.WindowId.
+    // Card view model -> ParentItem.WindowId.
     for (size_t i = 0; i < siblings.size(); ++i) {
         HWND hwnd = ResolveHwndFromCardViewModel(siblings[i]);
         scored[i].viaViewModel = hwnd;
@@ -6440,113 +6292,6 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
             stampRecency(i, hwnd);
             scored[i].how = ResolveHow::ViewModel;
             usedHwnds.insert(hwnd);
-        }
-    }
-
-    // Pass 1: DataContext ↔ ctor map, holes only. Always evaluated so the
-    // log can compare it with pass 0.
-    static bool s_loggedDataContextClass = false;
-    for (size_t i = 0; i < siblings.size(); ++i) {
-        HWND hwnd = ResolveHwndForThumbnailView(siblings[i]);
-        scored[i].viaCtorMap = hwnd;
-        if (!hwnd && !s_loggedDataContextClass) {
-            s_loggedDataContextClass = true;
-            try {
-                auto dc = siblings[i].DataContext();
-                Wh_Log(L"Preview resolve: ctor map miss; card DataContext "
-                       L"class=%s",
-                       dc ? winrt::get_class_name(dc).c_str() : L"(null)");
-            } catch (...) {
-            }
-        }
-        if (scored[i].hwnd) {
-            if (hwnd && hwnd != scored[i].hwnd) {
-                Wh_Log(L"Preview resolve: card %zu view model %p != ctor map "
-                       L"%p (using view model)",
-                       i, scored[i].hwnd, hwnd);
-            }
-            continue;
-        }
-        if (hwnd && IsWindow(hwnd) && !usedHwnds.count(hwnd)) {
-            stampRecency(i, hwnd);
-            scored[i].how = ResolveHow::TaskItem;
-            usedHwnds.insert(hwnd);
-        }
-    }
-
-    // Pass 2: repeater index → GetAt → ctor map HWND, holes only.
-    // repeaterSourceIndex is the ItemsSource slot. g_TaskGroup_Thumbnails is
-    // a global captured on TargetItemKey — skip it if it disagrees with a
-    // DataContext HWND on the same card.
-    if (usedRepeater) {
-        const int thumbCount = ThumbnailsCollectionSize();
-        int nSnap = 0;
-        for (char snap : isSnap) {
-            nSnap += snap;
-        }
-        const int nRepeater = static_cast<int>(allViews.size());
-        const int nWindows = nRepeater - nSnap;
-        const bool sizeUnknown = thumbCount < 0;
-        const bool compactSnap =
-            !sizeUnknown && nSnap > 0 && thumbCount == nWindows;
-        const bool sizesAgree =
-            sizeUnknown || thumbCount == nRepeater || compactSnap;
-        bool indexBindTrusted = sizesAgree;
-        if (!sizesAgree) {
-            Wh_Log(L"Preview resolve: repeater/Thumbnails size mismatch "
-                   L"(repeater=%d thumbs=%d snap=%d) — skip index bind",
-                   nRepeater, thumbCount, nSnap);
-        } else if (compactSnap) {
-            Wh_Log(L"Preview resolve: snap-group extra in repeater "
-                   L"(repeater=%d thumbs=%d) — compact GetAt index",
-                   nRepeater, thumbCount);
-        }
-        auto getAtIndexForSibling = [&](size_t siWant) -> int {
-            size_t si = 0;
-            for (size_t ri = 0; ri < allViews.size(); ++ri) {
-                if (ri < isSnap.size() && isSnap[ri]) {
-                    continue;
-                }
-                if (si == siWant) {
-                    const int srcIndex =
-                        (ri < repeaterSourceIndex.size())
-                            ? repeaterSourceIndex[ri]
-                            : static_cast<int>(ri);
-                    return compactSnap ? static_cast<int>(si) : srcIndex;
-                }
-                ++si;
-            }
-            return -1;
-        };
-        if (indexBindTrusted) {
-            for (size_t i = 0; i < siblings.size(); ++i) {
-                if (scored[i].how != ResolveHow::TaskItem &&
-                    scored[i].how != ResolveHow::ViewModel) {
-                    continue;
-                }
-                const int idx = getAtIndexForSibling(i);
-                HWND fromAt = HwndFromThumbnailsGetAt(idx);
-                if (fromAt && fromAt != scored[i].hwnd) {
-                    Wh_Log(L"Preview resolve: Thumbnails collection does not "
-                           L"match this flyout — skip index bind");
-                    indexBindTrusted = false;
-                    break;
-                }
-            }
-        }
-        if (indexBindTrusted) {
-            for (size_t i = 0; i < siblings.size(); ++i) {
-                if (scored[i].hwnd) {
-                    continue;
-                }
-                const int getAtIndex = getAtIndexForSibling(i);
-                HWND hwnd = HwndFromThumbnailsGetAt(getAtIndex);
-                if (hwnd && IsWindow(hwnd) && !usedHwnds.count(hwnd)) {
-                    stampRecency(i, hwnd);
-                    scored[i].how = ResolveHow::Repeater;
-                    usedHwnds.insert(hwnd);
-                }
-            }
         }
     }
 
@@ -6582,25 +6327,14 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     }
 
     {
-        size_t mapCount = 0;
-        {
-            std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
-            mapCount = g_thumbnailTaskItemMapping.size();
-        }
         const size_t painted =
             (std::min)(order.size(), static_cast<size_t>(limit));
-        Wh_Log(L"Preview resolve: %zu siblings, %zu taskitem maps, "
-               L"highlightCount=%d candidates=%zu painted=%zu",
-               siblings.size(), mapCount, limit, order.size(), painted);
+        Wh_Log(L"Preview resolve: %zu siblings, highlightCount=%d "
+               L"candidates=%zu painted=%zu",
+               siblings.size(), limit, order.size(), painted);
         for (size_t i = 0; i < scored.size(); ++i) {
             PCWSTR how = L"none";
             switch (scored[i].how) {
-                case ResolveHow::Repeater:
-                    how = L"repeater";
-                    break;
-                case ResolveHow::TaskItem:
-                    how = L"taskitem";
-                    break;
                 case ResolveHow::ViewModel:
                     how = L"viewmodel";
                     break;
@@ -6614,12 +6348,12 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
             } catch (...) {
             }
             Wh_Log(L"  sibling[%zu]: hwnd=%p tick=%llu how=%s rank=%d%s "
-                   L"vm=%p map=%p name=\"%s\"",
+                   L"vm=%p name=\"%s\"",
                    i, scored[i].hwnd,
                    static_cast<unsigned long long>(scored[i].tick), how,
                    scored[i].rank,
                    scored[i].rank > 0 ? L" [GLOW]" : L"",
-                   scored[i].viaViewModel, scored[i].viaCtorMap, name.c_str());
+                   scored[i].viaViewModel, name.c_str());
         }
     }
 
@@ -7691,183 +7425,9 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
     return true;
 }
 
-// Capture TaskItemThumbnail model → ITaskItem for HWND resolve (optional).
-using TaskItemThumbnail_TaskItemThumbnail_t = void*(WINAPI*)(void* param1,
-                                                             void* param2,
-                                                             void* taskGroup,
-                                                             void* taskItem,
-                                                             void* taskListUi,
-                                                             void* param6,
-                                                             void* param7,
-                                                             bool param8);
-TaskItemThumbnail_TaskItemThumbnail_t
-    TaskItemThumbnail_TaskItemThumbnail_Original;
-void* WINAPI TaskItemThumbnail_TaskItemThumbnail_Hook(void* param1,
-                                                      void* param2,
-                                                      void* taskGroup,
-                                                      void* taskItem,
-                                                      void* taskListUi,
-                                                      void* param6,
-                                                      void* param7,
-                                                      bool param8) {
-    void* result = TaskItemThumbnail_TaskItemThumbnail_Original(
-        param1, param2, taskGroup, taskItem, taskListUi, param6, param7,
-        param8);
-    if (result) {
-        try {
-            winrt::Windows::Foundation::IInspectable obj = nullptr;
-            ((IUnknown*)result + 2)
-                ->QueryInterface(
-                    winrt::guid_of<winrt::Windows::Foundation::IInspectable>(),
-                    winrt::put_abi(obj));
-            AddThumbnailTaskItemMapping(obj, taskGroup, taskItem);
-        } catch (...) {
-        }
-    }
-    return result;
-}
-
-using TaskItemThumbnail_TaskItemThumbnail_2_t =
-    void*(WINAPI*)(void* param1,
-                   void* param2,
-                   void* taskGroup,
-                   void* taskItem,
-                   void* taskListUi,
-                   void* param6,
-                   bool param7);
-TaskItemThumbnail_TaskItemThumbnail_2_t
-    TaskItemThumbnail_TaskItemThumbnail_2_Original;
-void* WINAPI TaskItemThumbnail_TaskItemThumbnail_2_Hook(void* param1,
-                                                        void* param2,
-                                                        void* taskGroup,
-                                                        void* taskItem,
-                                                        void* taskListUi,
-                                                        void* param6,
-                                                        bool param7) {
-    void* result = TaskItemThumbnail_TaskItemThumbnail_2_Original(
-        param1, param2, taskGroup, taskItem, taskListUi, param6, param7);
-    if (result) {
-        try {
-            winrt::Windows::Foundation::IInspectable obj = nullptr;
-            ((IUnknown*)result + 2)
-                ->QueryInterface(
-                    winrt::guid_of<winrt::Windows::Foundation::IInspectable>(),
-                    winrt::put_abi(obj));
-            AddThumbnailTaskItemMapping(obj, taskGroup, taskItem);
-        } catch (...) {
-        }
-    }
-    return result;
-}
-
-thread_local bool g_inHoverFlyoutModel_TargetItemKey = false;
-winrt::weak_ref<winrt::Windows::Foundation::IInspectable>
-    g_TaskGroup_Thumbnails;
-
-using TaskGroup_Thumbnails_t = void*(WINAPI*)(void* pThis, void* param1);
-TaskGroup_Thumbnails_t TaskGroup_Thumbnails_Original;
-void* WINAPI TaskGroup_Thumbnails_Hook(void* pThis, void* param1) {
-    void* result = TaskGroup_Thumbnails_Original(pThis, param1);
-    if (!g_inHoverFlyoutModel_TargetItemKey || !result) {
-        return result;
-    }
-    try {
-        winrt::Windows::Foundation::IInspectable obj = nullptr;
-        (*reinterpret_cast<IUnknown**>(result))
-            ->QueryInterface(
-                winrt::guid_of<winrt::Windows::Foundation::IInspectable>(),
-                winrt::put_abi(obj));
-        if (obj) {
-            g_TaskGroup_Thumbnails = obj;
-        }
-    } catch (...) {
-    }
-    return result;
-}
-
-using TaskItemThumbnail_Size_t = int(WINAPI*)(void* pThis);
-TaskItemThumbnail_Size_t TaskItemThumbnail_Size_Original;
-
-using TaskItemThumbnail_GetAt_t = void*(WINAPI*)(void* pThis,
-                                                 void** result,
-                                                 int index);
-TaskItemThumbnail_GetAt_t TaskItemThumbnail_GetAt_Original;
-
-int ThumbnailsCollectionSize() {
-    if (!TaskItemThumbnail_Size_Original) {
-        return -1;
-    }
-    winrt::Windows::Foundation::IInspectable thumbnails = nullptr;
-    try {
-        thumbnails = g_TaskGroup_Thumbnails.get();
-    } catch (...) {
-        return -1;
-    }
-    if (!thumbnails) {
-        return -1;
-    }
-    try {
-        auto* thumbnailsPtr = winrt::get_abi(thumbnails);
-        return TaskItemThumbnail_Size_Original(&thumbnailsPtr);
-    } catch (...) {
-        return -1;
-    }
-}
-
-HWND HwndFromThumbnailsGetAt(int index) {
-    if (!TaskItemThumbnail_GetAt_Original || !TaskItemThumbnail_Size_Original ||
-        index < 0) {
-        return nullptr;
-    }
-    winrt::Windows::Foundation::IInspectable thumbnails = nullptr;
-    try {
-        thumbnails = g_TaskGroup_Thumbnails.get();
-    } catch (...) {
-        return nullptr;
-    }
-    if (!thumbnails) {
-        return nullptr;
-    }
-    try {
-        auto* thumbnailsPtr = winrt::get_abi(thumbnails);
-        const int size = TaskItemThumbnail_Size_Original(&thumbnailsPtr);
-        if (index >= size) {
-            return nullptr;
-        }
-        winrt::com_ptr<IUnknown> item;
-        TaskItemThumbnail_GetAt_Original(&thumbnailsPtr, item.put_void(),
-                                         index);
-        if (!item) {
-            return nullptr;
-        }
-        std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
-        for (const auto& iter : g_thumbnailTaskItemMapping) {
-            try {
-                auto t = iter.thumbnail.get();
-                if (!t) {
-                    continue;
-                }
-                if (winrt::get_abi(t) == item.get()) {
-                    return HwndFromMappingEntry(iter);
-                }
-            } catch (...) {
-            }
-        }
-    } catch (...) {
-    }
-    return nullptr;
-}
-
 HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
 void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
-    // Drop the previous target's collection before this retarget. Refresh
-    // also runs from OnApplyTemplate / decay / click, and a matching window
-    // count used to bind the last app's HWNDs with no DataContext to check.
-    g_TaskGroup_Thumbnails = {};
-    g_inHoverFlyoutModel_TargetItemKey = true;
-    struct ResetInTargetKey {
-        ~ResetInTargetKey() { g_inHoverFlyoutModel_TargetItemKey = false; }
-    } resetInTarget;
+    // Flyout retargeted to another button: clear and repaint (below).
     HoverFlyoutModel_TargetItemKey_Original(pThis, param1);
     if (g_unloading.load() || !SettingsSnap()->previewHighlightEnabled) {
         return;
@@ -7940,38 +7500,6 @@ bool HookTaskbarDllSymbols() {
             &CTaskListWnd_HandleClick_Original,
             CTaskListWnd_HandleClick_Hook,
         },
-        {
-            // Optional: older XAML thumbnail model ctor.
-            {LR"(public: __cdecl winrt::WindowsUdk::UI::Shell::implementation::TaskItemThumbnail::TaskItemThumbnail(struct winrt::WindowsUdk::UI::Shell::TaskItem const &,struct ITaskGroup *,struct ITaskItem *,struct ITaskListUI *,struct IWICImagingFactory *,struct ITaskListAcc *,bool))"},
-            &TaskItemThumbnail_TaskItemThumbnail_Original,
-            TaskItemThumbnail_TaskItemThumbnail_Hook,
-            true,
-        },
-        {
-            // Optional: newer ctor (e.g. 10.0.26100.8328+).
-            {LR"(public: __cdecl winrt::WindowsUdk::UI::Shell::implementation::TaskItemThumbnail::TaskItemThumbnail(struct winrt::WindowsUdk::UI::Shell::TaskItem const &,struct ITaskGroup *,struct ITaskItem *,struct ITaskListUI *,struct IWICImagingFactory *,bool))"},
-            &TaskItemThumbnail_TaskItemThumbnail_2_Original,
-            TaskItemThumbnail_TaskItemThumbnail_2_Hook,
-            true,
-        },
-        {
-            {LR"(public: struct winrt::Windows::Foundation::Collections::IObservableVector<struct winrt::WindowsUdk::UI::Shell::TaskItemThumbnail> __cdecl winrt::WindowsUdk::UI::Shell::implementation::TaskGroup::Thumbnails(void))"},
-            &TaskGroup_Thumbnails_Original,
-            TaskGroup_Thumbnails_Hook,
-            true,
-        },
-        {
-            {LR"(public: __cdecl winrt::impl::consume_Windows_Foundation_Collections_IVector<struct winrt::Windows::Foundation::Collections::IObservableVector<struct winrt::WindowsUdk::UI::Shell::TaskItemThumbnail>,struct winrt::WindowsUdk::UI::Shell::TaskItemThumbnail>::Size(void)const )"},
-            &TaskItemThumbnail_Size_Original,
-            nullptr,
-            true,
-        },
-        {
-            {LR"(public: __cdecl winrt::impl::consume_Windows_Foundation_Collections_IVector<struct winrt::Windows::Foundation::Collections::IObservableVector<struct winrt::WindowsUdk::UI::Shell::TaskItemThumbnail>,struct winrt::WindowsUdk::UI::Shell::TaskItemThumbnail>::GetAt(unsigned int)const )"},
-            &TaskItemThumbnail_GetAt_Original,
-            nullptr,
-            true,
-        },
     };
 
     if (!HookSymbols(module, taskbarDllHooks, ARRAYSIZE(taskbarDllHooks))) {
@@ -7980,15 +7508,7 @@ bool HookTaskbarDllSymbols() {
     }
 
     g_taskbandResolveReady = true;
-    const bool previewHooksReady =
-        TaskItemThumbnail_TaskItemThumbnail_Original != nullptr ||
-        TaskItemThumbnail_TaskItemThumbnail_2_Original != nullptr;
-    if (previewHooksReady) {
-        Wh_Log(L"Hooked taskbar.dll identity + thumbnail model symbols");
-    } else {
-        Wh_Log(L"Hooked taskbar.dll identity symbols (preview HWND mapping "
-               L"unavailable)");
-    }
+    Wh_Log(L"Hooked taskbar.dll symbols");
     return true;
 }
 
@@ -9406,11 +8926,6 @@ void Wh_ModUninit() {
         std::lock_guard<std::mutex> lock(g_buttonPathMutex);
         g_buttonPathCache.clear();
     }
-    {
-        std::lock_guard<std::mutex> lock(g_thumbnailMapMutex);
-        g_thumbnailTaskItemMapping.clear();
-    }
-    g_TaskGroup_Thumbnails = {};
     {
         std::lock_guard<std::mutex> lock(g_thumbViewsMutex);
         g_trackedThumbViews.clear();

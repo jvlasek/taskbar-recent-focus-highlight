@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.18). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.19). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -150,34 +150,31 @@ in this flyout?”.
 ### Matching a `TaskItemThumbnailView` to an HWND
 
 ```
-TaskItemThumbnail ctor (optional) → map { model, taskGroup, taskItem, hwnd }
-TaskItemThumbnailView::OnApplyTemplate → collect siblings → assign HWNDs → paint
+TaskItemThumbnailView::OnApplyTemplate / put_ThumbnailSource / ElementClearing
+  → collect siblings → each card's view model → HWND → rank → paint
 ```
 
-Resolve order in `RefreshThumbnailFlyout_UIThread`:
+Since 0.11.19 there is one resolver in `RefreshThumbnailFlyout_UIThread`:
+card → `ThumbnailSource` → `TaskItemThumbnailViewModel` → `TaskItemThumbnail`
+→ `ParentItem.WindowId` (`ResolveHwndFromCardViewModel`). Explorer's own
+binding, per card; cannot shift when cards are removed or recycled. UWP gives
+the `ApplicationFrameWindow`, same as focus. Optional symbols; log
+`Preview resolve: view model on/unavailable`. A card without one stays
+unmarked; no unique-title fallback (stash: `stash/preview-unique-title.cpp`).
+Snap-group cards: `IconsRepeater` with 2+ icons **and** no view-model HWND.
 
-0. **ViewModel** (0.11.2) — card → `ThumbnailSource` → `TaskItemThumbnailViewModel`
-   → `TaskItemThumbnail` → `ParentItem.WindowId`. Explorer's own binding, per
-   card; cannot shift when cards are removed or recycled. UWP gives the
-   `ApplicationFrameWindow`, same as focus. Optional symbols; log
-   `Preview resolve: view model on/unavailable`. `put_ThumbnailSource` hook
-   schedules a coalesced refresh when a card is rebound. Card removal (window
-   closed from the flyout) fires neither, so 0.11.3 subscribes the flyout
-   `ItemsRepeater.ElementClearing` (once per repeater, UI thread) and revokes
-   it per dispatcher in `Wh_ModUninit` (`RevokeRepeaterWatchesOnThisDispatcher`).
-1. **TaskItem** — `DataContext` ↔ ctor map (COM identity, per card). Exact;
-   cannot bind another flyout’s HWNDs. **Never matched on the 2026-11-15
-   capture** (0 of 300+ cards): kept as fallback and always evaluated so the
-   log can report `view model … != ctor map`.
-2. **Repeater index** — `ItemsRepeater.TryGetElement(i)` + `Thumbnails.GetAt(i)`
-   + ctor map, **holes only**. `g_TaskGroup_Thumbnails` is a global captured
-   on `TargetItemKey`. **Clear it on the way in** to that hook so it is
-   non-null only for the current target. Skip GetAt if sizes disagree, or if a
-   DataContext HWND on the same card disagrees with GetAt. Snap-group extra
-   in the repeater: compact to window ordinal. Compute `IsSnapGroupThumbnailView`
-   once per flyout (it walks the tree + ctor map).
-3. **No unique-title.** Holes stay unmarked. Stash:
-   `stash/preview-unique-title.cpp`.
+Repaint triggers: `put_ThumbnailSource` (card rebound) schedules a coalesced
+refresh; card removal (window closed from the flyout) fires neither, so the
+flyout `ItemsRepeater.ElementClearing` is subscribed once per repeater (UI
+thread) and revoked per dispatcher in `Wh_ModUninit`
+(`RevokeRepeaterWatchesOnThisDispatcher`); `HoverFlyoutModel::TargetItemKey`
+clears and repaints on retarget.
+
+Removed in 0.11.19 (history): the `TaskItemThumbnail` constructor hooks and
+their DataContext ↔ model map (never matched on 26100-era builds — the card
+DataContext is null), and the repeater-index + captured `TaskGroup::Thumbnails`
+`GetAt` pass (shifted after a card was closed: wrong card painted until the
+flyout reopened, 2026-11-15).
 
 Do **not** assign HWNDs by group construction order or `EnumWindows`.
 `AutomationProperties.PositionInSet` is not refreshed on thumbnail reorder;

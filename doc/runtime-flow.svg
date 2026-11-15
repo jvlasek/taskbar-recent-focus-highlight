@@ -49,18 +49,18 @@
 <text x="64" y="863" class="body">ResolveOneButtonOnFocusThread: process path / AUMID / class.</text>
 <text x="64" y="888" class="body">Validate targets; coalesce completion paints per dispatcher.</text>
 <text x="64" y="913" class="body">Exact HWND / AUMID / path match; missing identity → no glow.</text>
-<text x="776" y="622" class="tag">IDENTITY BRIDGE · LIVE NATIVE TASK ITEM</text>
+<text x="776" y="622" class="tag">IDENTITY BRIDGE · EXPLORER VIEW MODEL</text>
 <rect x="776" y="642" width="656" height="135" rx="12" fill="#dcfce7" stroke="#22a06b"/>
-<text x="796" y="674" class="heading">Thumbnail constructor → capture presented HWND</text>
-<text x="796" y="703" class="body">AddThumbnailTaskItemMapping → GetWindowForThumbnailTaskItem</text>
-<text x="796" y="728" class="body">Immersive: GetThumbnailWindow(ITaskItem*) → frame HWND</text>
-<text x="796" y="753" class="body">Ordinary: existing window getter. Store model + HWND + PID.</text>
+<text x="796" y="674" class="heading">Card view model → presented HWND</text>
+<text x="796" y="703" class="body">ThumbnailSource → TaskItemThumbnail → ParentItem.WindowId</text>
+<text x="796" y="728" class="body">Immersive: ApplicationFrameWindow (same HWND as focus)</text>
+<text x="796" y="753" class="body">Per card; no constructor map, no index correspondence.</text>
 <path class="wire" d="M1104 777 V802"/>
 <rect x="776" y="802" width="656" height="135" rx="12" fill="#fff" stroke="#cbd5e1"/>
 <text x="796" y="834" class="heading">Flyout opens / template or target changes</text>
-<text x="796" y="863" class="body">RefreshThumbnailFlyout_UIThread: card view model -&gt; WindowId first;</text>
-<text x="796" y="888" class="body">then DataContext map, then repeater + model collection fill holes.</text>
-<text x="796" y="913" class="body">Validate HWND/PID; missing getter or match → leave unmarked.</text>
+<text x="796" y="863" class="body">RefreshThumbnailFlyout_UIThread: each card -&gt; its view model HWND.</text>
+<text x="796" y="888" class="body">Rebind (put_ThumbnailSource) / removal (ElementClearing) repaint.</text>
+<text x="796" y="913" class="body">No view-model HWND → leave unmarked.</text>
 <path class="wire" d="M374 937 V995"/>
 <path class="wire" d="M1104 937 V995"/>
 <path class="wire" d="M704 524 H716 V971 H650 V995"/>

@@ -7,7 +7,7 @@ def function(signature):
     start = source.index(signature)
     return source[start:source.index('\n}', start)+2]
 helpers = '\n'.join(function(x) for x in (
-    'HWND GetWindowForThumbnailTaskItem(', 'HWND HwndFromMappingEntry(',
+    'HWND GetWindowForThumbnailTaskItem(',
     'bool IsWindowRecentForPreviewLocked('))
 cpp = r'''
 #include <cassert>
@@ -19,7 +19,6 @@ std::map<HWND,DWORD> windows;
 bool IsWindow(HWND h) { return windows.count(h); }
 DWORD PidFromHwnd(HWND h) { return IsWindow(h) ? windows.at(h) : 0; }
 bool HwndMatchesStoredPid(HWND h, DWORD p) { return p && PidFromHwnd(h)==p; }
-struct ThumbnailTaskItemMapping { HWND hwnd; DWORD pid; };
 struct Recent { ULONGLONG lastConfirmedTick; DWORD pid; };
 struct DesktopRecencyState { std::map<HWND,Recent> windowFocusMap; };
 struct Settings { int previewDecayMinutes=15; } settings;
@@ -52,8 +51,7 @@ int main() {
     assert(appQueries==0 && thumbnailQueries==2);
     DesktopRecencyState desk;
     desk.windowFocusMap[a]={900,10}; desk.windowFocusMap[b]={950,10};
-    ThumbnailTaskItemMapping saved{b,10}; ULONGLONG tick=0;
-    assert(HwndFromMappingEntry(saved)==b);
+    ULONGLONG tick=0;
     assert(IsWindowRecentForPreviewLocked(desk,b,&tick) && tick==950);
     // Missing getter or missing native HWND fails closed, never app fallback.
     CImmersiveTaskItem_GetThumbnailWindow=nullptr;
@@ -67,10 +65,7 @@ int main() {
     assert(GetWindowForThumbnailTaskItem(&desktop)==b && appQueries==2);
     assert(!GetWindowForThumbnailTaskItem(nullptr));
     windows[b]=11;
-    assert(!HwndFromMappingEntry(saved));
     assert(!IsWindowRecentForPreviewLocked(desk,b));
-    windows.erase(b);
-    assert(!HwndFromMappingEntry(saved));
 }
 '''.replace('// HELPERS',helpers)
 with tempfile.TemporaryDirectory(prefix='windhawk-preview-') as folder:
@@ -79,5 +74,7 @@ with tempfile.TemporaryDirectory(prefix='windhawk-preview-') as folder:
     subprocess.run(['g++','-std=c++17',str(cpp_path),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True,timeout=20)
 assert 'kHostedWindowTimerId' not in source and 'g_hostedWindowLinks' not in source
-assert 'GetWindowForThumbnailTaskItem(taskItem)' in function('void AddThumbnailTaskItemMapping(')
-print('PASS: thumbnail getter selection, correct interface, early-null app, missing getter, Win32 identity and PID guards')
+# 0.11.19: preview cards resolve only through their view model; the ctor
+# map, DataContext pass and captured Thumbnails index pass are gone.
+assert 'AddThumbnailTaskItemMapping' not in source and 'g_TaskGroup_Thumbnails' not in source
+print('PASS: thumbnail getter selection, correct interface, early-null app, missing getter, PID guard')

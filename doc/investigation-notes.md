@@ -64,7 +64,9 @@ rank rested on the index fallback. After closing a ranked card in a
 12-window Calculator flyout, the index pairing shifted and the rank-2 paint
 landed on the wrong card until the flyout was reopened. Explorer's
 `WindowId` for Calculator is the `ApplicationFrameWindow` (shadow log), the
-same frame HWND focus tracking uses. Repeater order is
+same frame HWND focus tracking uses. Since 0.11.19 the view model is the
+only resolver: the constructor map / DataContext pass and the repeater-index
+pass were removed. Repeater order is
 not a universal window identity; it is useful only with the corresponding
 current model collection. There is no title or construction-order guess in
 the mod. The explicit native click path also uses the thumbnail getter and

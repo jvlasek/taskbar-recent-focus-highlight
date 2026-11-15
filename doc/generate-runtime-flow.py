@@ -62,16 +62,16 @@ box(44,802,660,135,'QueueButtonResolve → focus worker → UI cache',[
     'Validate targets; coalesce completion paints per dispatcher.',
     'Exact HWND / AUMID / path match; missing identity → no glow.'])
 
-text(776,622,'IDENTITY BRIDGE · LIVE NATIVE TASK ITEM','tag')
-box(776,642,656,135,'Thumbnail constructor → capture presented HWND',[
-    'AddThumbnailTaskItemMapping → GetWindowForThumbnailTaskItem',
-    'Immersive: GetThumbnailWindow(ITaskItem*) → frame HWND',
-    'Ordinary: existing window getter. Store model + HWND + PID.'], '#dcfce7','#22a06b')
+text(776,622,'IDENTITY BRIDGE · EXPLORER VIEW MODEL','tag')
+box(776,642,656,135,'Card view model → presented HWND',[
+    'ThumbnailSource → TaskItemThumbnail → ParentItem.WindowId',
+    'Immersive: ApplicationFrameWindow (same HWND as focus)',
+    'Per card; no constructor map, no index correspondence.'], '#dcfce7','#22a06b')
 wire('M1104 777 V802')
 box(776,802,656,135,'Flyout opens / template or target changes',[
-    'RefreshThumbnailFlyout_UIThread: card view model -> WindowId first;',
-    'then DataContext map, then repeater + model collection fill holes.',
-    'Validate HWND/PID; missing getter or match → leave unmarked.'])
+    'RefreshThumbnailFlyout_UIThread: each card -> its view model HWND.',
+    'Rebind (put_ThumbnailSource) / removal (ElementClearing) repaint.',
+    'No view-model HWND → leave unmarked.'])
 
 wire('M374 937 V995')
 wire('M1104 937 V995')

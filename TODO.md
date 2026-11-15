@@ -161,8 +161,10 @@ first, then the low-risk preview fixes, then identity.
   offset probe), the ReportClicked-sentinel native lookups,
   GetProcessIdFromTaskListButton and the fallback branch; drops the required
   symbols CTaskGroup::GetNumItems and TaskItem/TaskGroup ReportClicked, and
-  -lcomctl32. Phase 2: preview passes 1/2 (ctor map, index + Thumbnails) and
-  snap-group detection via view model. Phase 3: preview click confirmation
+  -lcomctl32. **0.11.19 (phase 2):** removed preview passes 1/2 (ctor
+  hooks + DataContext map, repeater index + captured Thumbnails GetAt) and
+  their five optional taskbar.dll symbols; snap-group detection uses the
+  view model. Phase 3: preview click confirmation
   (HandleClick + vtable-probed GetWindowForThumbnailTaskItem).
 - [x] **Never Combine: one button = one window** (user, 2026-11-15).
   Verified on 0.11.15 (`manual-20261115-222407-856139`): 49 window buttons
