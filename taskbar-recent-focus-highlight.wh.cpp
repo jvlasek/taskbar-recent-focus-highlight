@@ -2,12 +2,12 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.8
+// @version         0.11.9
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lole32 -loleaut32 -lruntimeobject -luuid -lshell32 -ladvapi32
+// @compilerOptions -lcomctl32 -lole32 -loleaut32 -lruntimeobject -luuid -lshell32 -ladvapi32 -ldwmapi
 // ==/WindhawkMod==
 // -loleaut32 is required: WinRT hresult_error calls SysFreeString / SysStringLen.
 
@@ -276,6 +276,7 @@ to clear highlights.
 #include <objbase.h>
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <dwmapi.h>
 
 #undef GetCurrentTime
 
@@ -3740,6 +3741,43 @@ std::mutex g_udkCompareMutex;
 std::unordered_map<void*, std::wstring> g_udkCompareLast;
 unsigned g_udkCompareAgree = 0, g_udkCompareDiffer = 0, g_udkCompareUnavailable = 0;
 
+// Content windows (UWP CoreWindow) compare as their top-level frame: the old
+// path returns the CoreWindow, Explorer's public list the frame (0.11.8 log).
+HWND UdkCompareRoot(HWND h) {
+    if (h && IsWindow(h) && (GetWindowLong(h, GWL_STYLE) & WS_CHILD)) {
+        if (HWND root = GetAncestor(h, GA_ROOT)) {
+            return root;
+        }
+    }
+    return h;
+}
+
+std::wstring UdkCompareDescribe(HWND h) {
+    wchar_t cls[96] = L"";
+    if (h && IsWindow(h)) {
+        GetClassNameW(h, cls, ARRAYSIZE(cls));
+    }
+    DWORD pid = 0;
+    if (h) {
+        GetWindowThreadProcessId(h, &pid);
+    }
+    const LONG style = h ? GetWindowLong(h, GWL_STYLE) : 0;
+    const LONG exStyle = h ? GetWindowLong(h, GWL_EXSTYLE) : 0;
+    BOOL cloaked = FALSE;
+    if (h) {
+        DwmGetWindowAttribute(h, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+    }
+    wchar_t buf[256];
+    swprintf_s(buf,
+               L"%p[%s pid=%u vis=%d cloak=%d child=%d tool=%d app=%d "
+               L"owner=%p root=%p]",
+               h, cls, pid, h && IsWindowVisible(h) ? 1 : 0, cloaked ? 1 : 0,
+               (style & WS_CHILD) ? 1 : 0, (exStyle & WS_EX_TOOLWINDOW) ? 1 : 0,
+               (exStyle & WS_EX_APPWINDOW) ? 1 : 0,
+               h ? GetWindow(h, GW_OWNER) : nullptr, UdkCompareRoot(h));
+    return buf;
+}
+
 std::wstring HwndSetText(std::vector<HWND> v) {
     std::sort(v.begin(), v.end());
     std::wstring out;
@@ -3759,8 +3797,20 @@ void ShadowCompareButtonWindows(void* buttonId,
     if (!udkAvailable && oldWindows.empty() && udkWindows.empty()) {
         udkAvailable = true;
     }
-    const std::wstring oldText = HwndSetText(oldWindows);
-    const std::wstring newText = HwndSetText(udkWindows);
+    auto rooted = [](const std::vector<HWND>& in) {
+        std::vector<HWND> out;
+        for (HWND h : in) {
+            HWND r = UdkCompareRoot(h);
+            if (std::find(out.begin(), out.end(), r) == out.end()) {
+                out.push_back(r);
+            }
+        }
+        return out;
+    };
+    const std::vector<HWND> oldRooted = rooted(oldWindows);
+    const std::vector<HWND> newRooted = rooted(udkWindows);
+    const std::wstring oldText = HwndSetText(oldRooted);
+    const std::wstring newText = HwndSetText(newRooted);
     const bool agree = udkAvailable && oldText == newText;
     const std::wstring signature =
         (udkAvailable ? L"" : L"n/a ") + oldText + L" / " + newText;
@@ -3790,9 +3840,22 @@ void ShadowCompareButtonWindows(void* buttonId,
         logTally = ((agreeCount + differCount + unavailableCount) % 200) == 1;
     }
     if (logLine) {
-        Wh_Log(L"Button windows: %s button=%p old={%s} udk={%s}",
+        Wh_Log(L"Button windows: %s button=%p old=%zu udk=%zu (after "
+               L"child->root)",
                udkAvailable ? L"DIFFER" : L"UDK-UNAVAILABLE", buttonId,
-               oldText.c_str(), newText.c_str());
+               oldRooted.size(), newRooted.size());
+        for (HWND h : oldRooted) {
+            if (std::find(newRooted.begin(), newRooted.end(), h) ==
+                newRooted.end()) {
+                Wh_Log(L"  only old: %s", UdkCompareDescribe(h).c_str());
+            }
+        }
+        for (HWND h : newRooted) {
+            if (std::find(oldRooted.begin(), oldRooted.end(), h) ==
+                oldRooted.end()) {
+                Wh_Log(L"  only udk: %s", UdkCompareDescribe(h).c_str());
+            }
+        }
     }
     if (logTally) {
         Wh_Log(L"Button windows tally: agree=%u differ=%u udk-unavailable=%u",
