@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.22
+// @version         0.11.23
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -47,11 +47,17 @@ app. Each virtual desktop keeps its own list.
 When you hover a combined icon and the flyout shows **two or more** windows,
 that flyout gets its own recency ladder (independent of icon ranks). The
 last focused window of that app is rank 1 in the flyout even if you used
-other apps more recently. Single-window flyouts are left alone.
+other apps more recently. Single-window flyouts are left alone unless
+**Also mark single-window previews** is on; then the card takes its app's
+icon rank.
 
-Preview styles (default **hybrid**): whole-card plate for rank 1 and a title
-tint for ranks 2+; or a thin bar under the title, a soft title tint, or a
-whole-card plate.
+Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
+plate for rank 1, title tint for ranks 2+); also an outline, a thin bar under
+the title, or none for ranks 2+.
+
+If you only want the active window highlighted in previews,
+[taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
+is a much lighter mod for exactly that.
 
 ## Settings (short)
 
@@ -59,8 +65,8 @@ whole-card plate.
   re-focus, decay, exclude list, tray-only filter
 - **Icons** — style, color (including system accent), per-rank intensity,
   thickness / size / fill, optional icon scale
-- **Previews** — on/off, how many windows, style, intensities, separate
-  min-focus and decay
+- **Previews** — on/off, how many windows, single-window previews, styles,
+  intensities, separate min-focus and decay
 
 All of those are in the Windhawk settings panel. Disable the mod in Windhawk
 to clear highlights.
@@ -72,9 +78,9 @@ to clear highlights.
 - Icon matching uses the process path / AppUserModelID from the taskband
   (not the localized button label). If that resolve is unavailable, the icon
   is left unhighlighted rather than guessed from its name.
-- Preview cards match via the flyout’s thumbnail model / index (HWND). If that
-  resolve is unavailable, the card is left unmarked rather than guessed from
-  its title.
+- Preview cards match through Explorer's own card view model (the window the
+  card shows). If that is unavailable, the card is left unmarked rather than
+  guessed from its title.
 - File Explorer folder windows (`CabinetWClass`) are ranked like other apps.
   The taskbar, desktop, Start, and IME stay ignored.
 - Multi-monitor: the same rank is applied on every taskbar that shows that
@@ -216,8 +222,8 @@ to clear highlights.
       $name: Highlight recent windows
       $description: >-
         When hovering a multi-window taskbar icon, rank that flyout’s thumbnails
-        by window recency and mark the top N. Single-window flyouts are never
-        highlighted.
+        by window recency and mark the top N. Single-window flyouts: see the
+        next option.
     - highlightCount: 3
       $name: Number of highlighted windows
       $description: >-
@@ -225,6 +231,14 @@ to clear highlights.
         Ranking is local to that flyout: the last focused window of this app is
         rank 1 even if other apps were used more recently. Set to 1 to mark only
         the latest window.
+    - singleWindow: false
+      $name: Also mark single-window previews
+      $description: >-
+        Mark the preview of an app with only one window too. It gets the same
+        rank as the app's taskbar icon (rank 1 = the app you used last), drawn
+        with the styles below; apps outside the preview count stay unmarked.
+        For an active-window-only preview highlight, the much smaller
+        taskbar-active-window-highlight mod does just that.
     - topStyle: plate
       $name: Rank 1 style
       $description: >-
@@ -431,6 +445,7 @@ struct Settings {
     bool requireTaskbarButton = true;  // skip tray-only focus targets
     bool previewHighlightEnabled = true;
     int previewHighlightCount = 3;
+    bool previewSingleWindow = false;  // single-window flyouts: app rank
     int previewIntensity[3] = {100, 70, 45};
     int previewMinFocusSeconds = 1;
     int previewDecayMinutes = 15;
@@ -1973,6 +1988,24 @@ bool IsWindowRecentForPreviewLocked(DesktopRecencyState& desk,
         *outTick = it->second.lastConfirmedTick;
     }
     return true;
+}
+
+// App rank (1-based) for the only window of a single-window flyout, or 0.
+// Capped at the preview count. Takes g_stateMutex.
+int SingleWindowPreviewRank(HWND hwnd) {
+    if (!hwnd) {
+        return 0;
+    }
+    const int limit = (std::max)(0, SettingsSnap()->previewHighlightCount);
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    const auto& ranks = CurrentDeskLocked().rankedApps;
+    for (size_t i = 0; i < ranks.size() && static_cast<int>(i) < limit; ++i) {
+        if (ranks[i].lastHwnd == hwnd && ranks[i].lastPid &&
+            HwndMatchesStoredPid(hwnd, ranks[i].lastPid)) {
+            return static_cast<int>(i) + 1;
+        }
+    }
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -6072,10 +6105,28 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         }
     }
 
-    // Product rule: only multi-window flyouts (group card does not count).
+    // Multi-window flyouts rank their own cards (below). A single-window
+    // flyout is marked only with previews.singleWindow, and then with its
+    // app's taskbar rank: the ranked app whose last focused window is this
+    // card's window (same PID). Fail closed when lastHwnd is stale.
     if (siblings.size() <= 1) {
+        int rank = 0;
+        HWND hwnd = nullptr;
+        if (siblings.size() == 1 && SettingsSnap()->previewSingleWindow) {
+            TrackThumbView_UIThread(siblings[0]);
+            hwnd = ResolveHwndFromCardViewModel(siblings[0]);
+            rank = SingleWindowPreviewRank(hwnd);
+        }
+        if (!siblings.empty()) {
+            Wh_Log(L"Preview resolve: single window hwnd=%p rank=%d", hwnd,
+                   rank);
+        }
         for (auto& s : siblings) {
-            ClearThumbnailHighlight(s);
+            if (rank > 0) {
+                ApplyThumbnailHighlight(s, rank);
+            } else {
+                ClearThumbnailHighlight(s);
+            }
         }
         return;
     }
@@ -8126,6 +8177,8 @@ void LoadSettings() {
         s.previewHighlightCount = 16;
     }
 
+    s.previewSingleWindow = Wh_GetIntSetting(L"previews.singleWindow") != 0;
+
     s.previewIntensity[0] = Wh_GetIntSetting(L"previews.intensityRank1");
     s.previewIntensity[1] = Wh_GetIntSetting(L"previews.intensityRank2");
     s.previewIntensity[2] = Wh_GetIntSetting(L"previews.intensityRank3");
@@ -8179,13 +8232,14 @@ void LoadSettings() {
 
     Wh_Log(L"Settings: style=%s th=%d round=%d%% size=%d%% "
            L"layers=%d fillOp=%d previewFillOp=%d decay=%dmin "
-           L"minFocus=%ds promote=%s preview=%d previewCount=%d "
+           L"minFocus=%ds promote=%s preview=%d previewCount=%d single=%d "
            L"previewI=%d/%d/%d previewStyle=%s previewMin=%ds previewDecay=%dmin",
            GlowStyleName(s.glowStyle), s.glowThickness,
            s.glowRoundness, s.glowSize, s.glowLayers, s.glowFillOpacity,
            s.previewFillOpacity, s.decayMinutes,
            s.minFocusSeconds, PromoteModeName(s.promoteMode),
            s.previewHighlightEnabled ? 1 : 0, s.previewHighlightCount,
+           s.previewSingleWindow ? 1 : 0,
            s.previewIntensity[0], s.previewIntensity[1], s.previewIntensity[2],
            PreviewStyleName(s.previewTopStyle), s.previewMinFocusSeconds,
            s.previewDecayMinutes);

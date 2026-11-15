@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Version:** v0.11.22 — README credits and logging note updated; v0.11.21: shadow AppId diagnostics removed (results below; kept on branch `shadow-appid-diagnostics`); v0.11.20: cleanup phase 3: no taskbar.dll hooks at all (click confirmation, vtable lookups and the required HandleClick symbol removed); v0.11.19: cleanup phase 2: previews resolve only through the card view model (constructor map, index pass and five optional symbols removed); v0.11.18: cleanup: removed the private taskbar.dll window lookups (GetNumItems offset probe, fake ReportClicked) and three required symbols; v0.11.17: title tint drawn under the title text; Outline has its own fill opacity (default 20); v0.11.16: preview styles per rank (Rank 1 / Ranks 2+), new Outline style, plate and outline as own overlay (stays on hover); v0.11.15: uncombined (Never Combine) buttons: "Window: 0x…" AutomationId matching the button's own TaskItem, ranked per window; v0.11.12: diagnostic log of what multi-window group buttons are bound to (Never Combine investigation); v0.11.11: uncombined taskbar buttons (Never combine) rank per window; v0.11.10: button windows come from Explorer's public TaskGroup.Items (private taskbar.dll path only as logged fallback); v0.11.9: button-window comparison maps content windows to their frame and logs remaining differences in detail; v0.11.8: log-only comparison of button window lists via public WindowsUdk TaskGroup.Items; v0.11.7: owner lookup skips hidden app windows (Delphi: Lister find box); v0.11.6: owned-dialog focus now confirms its owner; v0.11.5: dialogs count for their owner window; jump lists / Start menu ignored as shell UI; v0.11.4: apps keyed by window AppUserModelID when the window has one (one taskbar button = one app; Total Commander and its Lister are separate); v0.11.3: flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
+**Version:** v0.11.23 — optional marking of single-window previews (app rank); v0.11.22: README credits and logging note updated; v0.11.21: shadow AppId diagnostics removed (results below; kept on branch `shadow-appid-diagnostics`); v0.11.20: cleanup phase 3: no taskbar.dll hooks at all (click confirmation, vtable lookups and the required HandleClick symbol removed); v0.11.19: cleanup phase 2: previews resolve only through the card view model (constructor map, index pass and five optional symbols removed); v0.11.18: cleanup: removed the private taskbar.dll window lookups (GetNumItems offset probe, fake ReportClicked) and three required symbols; v0.11.17: title tint drawn under the title text; Outline has its own fill opacity (default 20); v0.11.16: preview styles per rank (Rank 1 / Ranks 2+), new Outline style, plate and outline as own overlay (stays on hover); v0.11.15: uncombined (Never Combine) buttons: "Window: 0x…" AutomationId matching the button's own TaskItem, ranked per window; v0.11.12: diagnostic log of what multi-window group buttons are bound to (Never Combine investigation); v0.11.11: uncombined taskbar buttons (Never combine) rank per window; v0.11.10: button windows come from Explorer's public TaskGroup.Items (private taskbar.dll path only as logged fallback); v0.11.9: button-window comparison maps content windows to their frame and logs remaining differences in detail; v0.11.8: log-only comparison of button window lists via public WindowsUdk TaskGroup.Items; v0.11.7: owner lookup skips hidden app windows (Delphi: Lister find box); v0.11.6: owned-dialog focus now confirms its owner; v0.11.5: dialogs count for their owner window; jump lists / Start menu ignored as shell UI; v0.11.4: apps keyed by window AppUserModelID when the window has one (one taskbar button = one app; Total Commander and its Lister are separate); v0.11.3: flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
 model (exact per card; see [investigation notes](doc/investigation-notes.md));
 log-only shadow AppId diagnostics (0.11.2–0.11.20). v0.11.1 base: foreground WinEvents plus validated shell activation
 notifications; no foreground recovery polling. Targeted Calculator recordings
@@ -50,7 +50,7 @@ too — so “which one did I just use?” is unclear.
 - **Tray-only filter** — ignore focus targets with no taskbar button (default on)
 - **UWP** — hosted apps (`ApplicationFrameHost`) ranked by AppUserModelID
   (Calculator ≠ Settings; Windows Security does not copy Settings)
-- **Thumbnail previews** — multi-window flyouts only; own top-N ranks, intensities,
+- **Thumbnail previews** — multi-window flyouts (single-window optional); own top-N ranks, intensities,
   min-focus, decay, and style
 - Plays nicely with **Windows 11 Taskbar Styler** (own overlays; preview plate
   restores Styler tints; side bar stays visible on hover plates)
@@ -93,6 +93,7 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 |---------|-------------|---------|
 | Highlight recent windows in previews | Multi-window flyout ranks | On |
 | Number of highlighted windows | Top N in **that** flyout (1–6 recommended) | 3 |
+| Also mark single-window previews | One-window flyout gets its app's icon rank (if within the count) | Off |
 | Rank 1 style | Plate / Outline / Title bg / Title bar | **Plate** |
 | Ranks 2+ style | Title bg / Title bar / Plate / Outline / None | **Title bg** |
 | Outline thickness | Border width for the Outline style (1–8 px) | 2 |
@@ -102,7 +103,7 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 | Preview minimum focus (seconds) | Window→preview recency (separate from apps). A thumbnail click counts like any other focus. | 1 |
 | Preview decay (minutes) | Drop window from preview recency | 15 |
 
-### Preview styles (multi-window flyout only)
+### Preview styles
 
 | Style | Look | Notes |
 |-------|------|--------|
@@ -112,14 +113,20 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 | **Title background** | Soft wash behind the title | Kept light so text stays readable; intensity scales linearly |
 | **Whole preview plate** | Own tinted border above the card's `BackgroundBorder`, bound to its size and corners | Strong signal; survives hover (0.11.16+); follows Taskbar Styler shapes |
 
-Single-window flyouts are **never** marked (nothing to disambiguate). Ranking
-is **per flyout**: Chrome’s last-used window is rank 1 in the Chrome flyout even
-if you then used Notepad. Set the window count to **1** to restore the old
+Single-window flyouts are not marked by default (nothing to disambiguate).
+With **Also mark single-window previews** on, the card gets its app's icon rank
+(rank 1 = the app you used last), so the flyout matches the taskbar.
+If you only want the active window highlighted in previews,
+[taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
+is a much lighter mod for exactly that.
+
+Multi-window ranking is **per flyout**: Chrome’s last-used window is rank 1 in
+the Chrome flyout even if you then used Notepad. Set the window count to **1** to restore the old
 “most recent only” look.
 
-Preview cards match via the flyout’s thumbnail model / index (HWND). If that
-resolve is unavailable, the card is left unmarked rather than guessed from
-its title.
+Preview cards match through Explorer's own card view model (the window the
+card shows). If that is unavailable, the card is left unmarked rather than
+guessed from its title.
 
 File Explorer folder windows are ranked like other apps. The taskbar, desktop,
 Start, and IME stay ignored.
