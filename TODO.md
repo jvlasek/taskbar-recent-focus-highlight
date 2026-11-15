@@ -162,7 +162,13 @@ first, then the low-risk preview fixes, then identity.
   matched. **0.11.11:** an uncombined button (own TaskItem inside a group of
   2+) lists only its own window; each window's app-level confirmation is
   kept; an app with uncombined windows ranks one slot per confirmed window
-  (`perWindow`), matched only by exact window. Needs a live check. With
+  (`perWindow`), matched only by exact window. Live check failed: the
+  uncombined detection never fired — Never Combine buttons have no own
+  TaskItem (same sample HWND, group=2). UWPSpy dump
+  (`captures/uwspy-nevercombine`): each window button's AutomationId is
+  `Window: 0x<hwnd>`, the group button's `Appid: <AUMID>`; nothing else
+  differs (DataContext null on all). **0.11.13** takes the own window from
+  that AutomationId, validated against the group's public Items. With
   combining off, each button is its own unit and should rank on its own
   window, not light up with every button of the same app. Check what a
   Never Combine button's window list contains (whole group or its own

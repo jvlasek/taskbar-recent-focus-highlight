@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.12
+// @version         0.11.13
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -2262,6 +2262,12 @@ std::wstring GetButtonAutomationName(FrameworkElement button) {
     }
 }
 
+// "Window: 0x31426" on an uncombined button (Never Combine) names its window,
+// not an app; see GetButtonAutomationWindow.
+bool IsWindowAutomationId(const std::wstring& id) {
+    return id.size() > 7 && _wcsnicmp(id.c_str(), L"Window:", 7) == 0;
+}
+
 std::wstring GetButtonAutomationAppId(FrameworkElement button) {
     if (!button) {
         return {};
@@ -2269,9 +2275,43 @@ std::wstring GetButtonAutomationAppId(FrameworkElement button) {
     try {
         std::wstring id =
             Automation::AutomationProperties::GetAutomationId(button).c_str();
+        if (IsWindowAutomationId(id)) {
+            return {};
+        }
         return ToUpper(StripAppIdPrefix(std::move(id)));
     } catch (...) {
         return {};
+    }
+}
+
+// Uncombined taskbar buttons (Never Combine / combine when full) carry their
+// window in AutomationProperties.AutomationId: "Window: 0x<hwnd hex>"; group
+// buttons carry "Appid: <AUMID>" (UWPSpy dump 2026-11-15, two VS Code
+// windows). Explorer's identifier, not a display name. Callers must still
+// check the HWND against the group's windows.
+HWND GetButtonAutomationWindow(FrameworkElement button) {
+    if (!button) {
+        return nullptr;
+    }
+    try {
+        std::wstring id =
+            Automation::AutomationProperties::GetAutomationId(button).c_str();
+        if (!IsWindowAutomationId(id)) {
+            return nullptr;
+        }
+        const wchar_t* p = id.c_str() + 7;
+        while (*p == L' ' || *p == L'\t') {
+            ++p;
+        }
+        wchar_t* end = nullptr;
+        const unsigned long long value = wcstoull(p, &end, 16);
+        if (!value || end == p) {
+            return nullptr;
+        }
+        HWND hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(value));
+        return IsWindow(hwnd) ? hwnd : nullptr;
+    } catch (...) {
+        return nullptr;
     }
 }
 
@@ -4261,9 +4301,18 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
             LogGroupButtonDiagnostics(data.buttonId, button, udkItem != nullptr,
                                       windowsUdkTaskGroup, udkWindows.size());
         }
-        // Uncombined button: its own window item inside a group of several
-        // windows (Never combine / combine when full). The button stands for
-        // that window only, so list just it.
+        // Uncombined button: one window of a group of several (Never combine
+        // / combine when full). The button stands for that window only, so
+        // list just it. Explorer gives it no own TaskItem (0.11.11 log); its
+        // window is in the AutomationId. Accept it only if it is one of the
+        // group's windows.
+        if (!ownWindow && udkWindows.size() > 1) {
+            HWND fromId = GetButtonAutomationWindow(button);
+            if (fromId && std::find(udkWindows.begin(), udkWindows.end(),
+                                    fromId) != udkWindows.end()) {
+                ownWindow = fromId;
+            }
+        }
         const bool uncombined = ownWindow && udkWindows.size() > 1;
         {
             bool changed = false;
