@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.15
+// @version         0.11.16
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -220,19 +220,34 @@ to clear highlights.
         Ranking is local to that flyout: the last focused window of this app is
         rank 1 even if other apps were used more recently. Set to 1 to mark only
         the latest window.
-    - style: plateTitle
-      $name: Highlight style
+    - topStyle: plate
+      $name: Rank 1 style
       $description: >-
-        How to mark ranked windows. Hybrid (default) = whole plate for rank 1,
-        title wash for ranks 2+. Title bar = thin line under the title
-        (thickness follows Icons → Thickness). Title background = soft wash
-        behind the title. Plate = tint the whole card (native corners stay;
-        the overlay fallback uses Previews: Roundness).
+        How to mark the most recent window. Plate = tint the whole card.
+        Outline = tinted card with an accent border (the look of Taskbar
+        Active Window Highlight). Title background = soft wash behind the
+        title. Title bar = thin line under the title (thickness follows
+        Icons → Thickness). Plate and Outline keep the card's own rounded
+        corners and stay visible on hover.
       $options:
-      - titleBar: Bar under window title
-      - titleBg: Title background tint
       - plate: Whole preview plate
-      - plateTitle: Hybrid (plate rank 1, title tint 2+)
+      - outline: Plate with accent outline
+      - titleBg: Title background tint
+      - titleBar: Bar under window title
+    - restStyle: titleBg
+      $name: Ranks 2+ style
+      $description: >-
+        How to mark the other ranked windows (2nd, 3rd …). Not marked = only
+        rank 1 is shown.
+      $options:
+      - titleBg: Title background tint
+      - titleBar: Bar under window title
+      - plate: Whole preview plate
+      - outline: Plate with accent outline
+      - none: Not marked
+    - outlineThickness: 2
+      $name: Outline thickness
+      $description: Border width in pixels for the Outline style (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
       $description: Strength for the most recent window in the flyout (0–100)
@@ -288,6 +303,7 @@ to clear highlights.
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Automation.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Data.h>
 // WinUI 2 ItemsRepeater (thumbnail flyout). Same as taskbar-thumbnail-reorder.
 #define WH_WINRT_WINUI2
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
@@ -383,7 +399,8 @@ enum class PreviewStyle {
     TitleBg,    // tint behind the window title text
     Plate,      // tint whole preview card (hover-like plate)
     TitleBar,   // thin bar under the title, above the thumbnail image
-    PlateTitle, // rank 1 = plate; ranks 2+ = title background tint
+    Outline,    // plate plus an accent border (card overlay)
+    None,       // not marked (ranks 2+ only)
 };
 
 struct Settings {
@@ -408,7 +425,11 @@ struct Settings {
     int previewIntensity[3] = {100, 70, 45};
     int previewMinFocusSeconds = 1;
     int previewDecayMinutes = 15;
-    PreviewStyle previewStyle = PreviewStyle::PlateTitle;
+    // Rank 1 and ranks 2+ are styled separately (0.11.16; replaced the
+    // fixed "hybrid" option: rank 1 plate, ranks 2+ title tint = defaults).
+    PreviewStyle previewTopStyle = PreviewStyle::Plate;
+    PreviewStyle previewRestStyle = PreviewStyle::TitleBg;
+    int previewOutlineThickness = 2;
     std::unordered_set<std::wstring> excludedPrograms;
     // Bumped in PublishSettings so UVS can skip a no-op repaint.
     uint32_t generation = 0;
@@ -2907,9 +2928,11 @@ PCWSTR PreviewStyleName(PreviewStyle s) {
             return L"plate";
         case PreviewStyle::TitleBar:
             return L"titleBar";
-        case PreviewStyle::PlateTitle:
+        case PreviewStyle::Outline:
+            return L"outline";
+        case PreviewStyle::None:
         default:
-            return L"plateTitle";
+            return L"none";
     }
 }
 
@@ -5714,6 +5737,108 @@ void StorePlateOwner(FrameworkElement marker,
     marker.Tag(bag);
 }
 
+// ---------------------------------------------------------------------------
+// Card overlay (Plate / Outline preview styles, 0.11.16)
+// ---------------------------------------------------------------------------
+// Our own Border, inserted right above the card's BackgroundBorder and bound
+// to its geometry (size, margin, alignment, rounded corners), so it follows
+// Taskbar Styler themes without measuring. Same construction as
+// taskbar-active-window-highlight (EphremTil17, GPL-3.0). Before 0.11.16 the
+// plate recoloured BackgroundBorder itself, and the card's hover state
+// replaced that brush (rank-1 plate vanished on hover). The overlay sits
+// above BackgroundBorder and below the title/thumbnail, so hover changes the
+// background underneath and still shows through a partial fill.
+
+constexpr wchar_t kThumbCardOverlayName[] = L"WhRecentFocusThumbCard";
+
+void BindCardOverlay(FrameworkElement const& target,
+                     DependencyObject const& source,
+                     DependencyProperty const& property,
+                     PCWSTR path) {
+    Data::Binding binding;
+    binding.Source(source);
+    binding.Path(PropertyPath(path));
+    binding.Mode(Data::BindingMode::OneWay);
+    target.SetBinding(property, binding);
+}
+
+Controls::Border FindCardOverlay(FrameworkElement thumbView) {
+    if (auto el = FindDescendantByName(thumbView, kThumbCardOverlayName)) {
+        return el.try_as<Controls::Border>();
+    }
+    return nullptr;
+}
+
+void HideCardOverlay(FrameworkElement thumbView) {
+    try {
+        if (auto overlay = FindCardOverlay(thumbView)) {
+            overlay.Visibility(Visibility::Collapsed);
+        }
+    } catch (...) {
+    }
+}
+
+// Returns false when the card has no BackgroundBorder in a panel (unknown
+// template); the caller then uses the old overlay-host plate.
+bool PaintCardOverlay(FrameworkElement thumbView,
+                      winrt::Windows::UI::Color fill,
+                      winrt::Windows::UI::Color stroke,
+                      double strokeThickness) {
+    auto background = FindThumbnailBackgroundBorder(thumbView);
+    if (!background) {
+        return false;
+    }
+    auto panel =
+        Media::VisualTreeHelper::GetParent(background).try_as<Controls::Panel>();
+    if (!panel) {
+        return false;
+    }
+    Controls::Border overlay = FindCardOverlay(thumbView);
+    if (!overlay) {
+        overlay = Controls::Border();
+        overlay.Name(kThumbCardOverlayName);
+        overlay.IsHitTestVisible(false);
+        Controls::Grid::SetRow(overlay, Controls::Grid::GetRow(background));
+        Controls::Grid::SetColumn(overlay, Controls::Grid::GetColumn(background));
+        Controls::Grid::SetRowSpan(overlay, Controls::Grid::GetRowSpan(background));
+        Controls::Grid::SetColumnSpan(overlay,
+                                      Controls::Grid::GetColumnSpan(background));
+        BindCardOverlay(overlay, background, FrameworkElement::WidthProperty(),
+                        L"Width");
+        BindCardOverlay(overlay, background, FrameworkElement::HeightProperty(),
+                        L"Height");
+        BindCardOverlay(overlay, background, FrameworkElement::MarginProperty(),
+                        L"Margin");
+        BindCardOverlay(overlay, background,
+                        FrameworkElement::HorizontalAlignmentProperty(),
+                        L"HorizontalAlignment");
+        BindCardOverlay(overlay, background,
+                        FrameworkElement::VerticalAlignmentProperty(),
+                        L"VerticalAlignment");
+        if (background.try_as<Controls::Border>()) {
+            BindCardOverlay(overlay, background,
+                            Controls::Border::CornerRadiusProperty(),
+                            L"CornerRadius");
+        }
+        auto children = panel.Children();
+        uint32_t index = 0;
+        const bool found = children.IndexOf(background, index);
+        // Explicit index: directly above the background, below the content.
+        children.InsertAt(found ? index + 1 : 0, overlay);
+    }
+    overlay.Background(Media::SolidColorBrush{fill});
+    if (strokeThickness > 0.0) {
+        overlay.BorderBrush(Media::SolidColorBrush{stroke});
+        overlay.BorderThickness(Thickness{strokeThickness, strokeThickness,
+                                          strokeThickness, strokeThickness});
+    } else {
+        overlay.BorderBrush(nullptr);
+        overlay.BorderThickness(Thickness{0, 0, 0, 0});
+    }
+    overlay.Visibility(Visibility::Visible);
+    return true;
+}
+
 void ClearThumbnailNativeStyles(FrameworkElement thumbView) {
     if (!thumbView) {
         return;
@@ -5766,9 +5891,11 @@ void ClearThumbnailHighlight(FrameworkElement thumbView) {
     }
     try {
         if (!FindDescendantByName(thumbView, kThumbGlowElementName) &&
-            !FindDescendantByName(thumbView, kThumbNativeStyleMarker)) {
+            !FindDescendantByName(thumbView, kThumbNativeStyleMarker) &&
+            !FindDescendantByName(thumbView, kThumbCardOverlayName)) {
             return;
         }
+        RemoveNamedDescendant(thumbView, kThumbCardOverlayName);
         RemoveNamedDescendant(thumbView, kThumbGlowElementName);
         RemoveNamedDescendant(thumbView, kThumbTitleBgName);
         RemoveNamedDescendant(thumbView, kThumbTitleBarName);
@@ -5926,6 +6053,7 @@ void HideThumbOverlayChildren(Controls::Grid host) {
 // XamlReader::Load on the next paint.
 void ResetThumbnailOverlayForRepaint(FrameworkElement thumbView) {
     ClearThumbnailNativeStyles(thumbView);
+    HideCardOverlay(thumbView);
     try {
         auto panel = GetThumbnailHostPanel(thumbView);
         if (!panel) {
@@ -6116,18 +6244,14 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         // Preview plate / titleBg use dedicated opacity (not taskbar fill).
         const int fillOpacitySetting =
             (std::max)(0, (std::min)(100, settings->previewFillOpacity));
-        const PreviewStyle style = settings->previewStyle;
-        if (t <= 0.0) {
+        const PreviewStyle style = rankOneBased <= 1
+                                       ? settings->previewTopStyle
+                                       : settings->previewRestStyle;
+        if (t <= 0.0 || style == PreviewStyle::None) {
             ClearThumbnailHighlight(thumbView);
             return;
         }
-        // Hybrid: plate is the rank-1 “this one” signal; title wash is enough
-        // for 2+ (whole-plate 50/5 looks like leftover hover, not a ladder).
         PreviewStyle paintStyle = style;
-        if (style == PreviewStyle::PlateTitle) {
-            paintStyle = (rankOneBased <= 1) ? PreviewStyle::Plate
-                                             : PreviewStyle::TitleBg;
-        }
 
         // Measure card BEFORE injecting any overlay (critical for layout).
         double cardW = 0, cardH = 0;
@@ -6172,40 +6296,23 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             }
         }
 
-        // Plate prefers native BackgroundBorder (no layout child).
-        // Zero fill leaves that background alone. Reset already restored
-        // a plate this mod still owned.
-        if (paintStyle == PreviewStyle::Plate) {
-            bool usedNative = false;
-            if (fillOpacitySetting <= 0) {
-                usedNative = true;
-            } else if (auto borderEl = FindThumbnailBackgroundBorder(thumbView)) {
+        // Plate / Outline: our own Border above BackgroundBorder (see
+        // PaintCardOverlay). Zero tint and no outline leaves the card alone.
+        if (paintStyle == PreviewStyle::Plate ||
+            paintStyle == PreviewStyle::Outline) {
+            const bool outline = paintStyle == PreviewStyle::Outline;
+            const int fillA =
+                static_cast<int>(fillOpacitySetting * 2.55 * t + 0.5);
+            const int strokeA = static_cast<int>(255 * t + 0.5);
+            bool usedNative = !outline && fillOpacitySetting <= 0;
+            if (!usedNative) {
                 try {
-                    if (auto border = borderEl.try_as<Controls::Border>()) {
-                        auto local = border.ReadLocalValue(
-                            Controls::Border::BackgroundProperty());
-                        const bool hadLocal =
-                            local != DependencyProperty::UnsetValue();
-                        Media::Brush prior{nullptr};
-                        if (hadLocal) {
-                            prior = border.Background();
-                        }
-                        const bool localNull = hadLocal && !prior;
-                        const int fillA = static_cast<int>(
-                            fillOpacitySetting * 2.55 * t + 0.5);
-                        Media::Brush ours =
-                            Media::SolidColorBrush{withAlpha(base, fillA)};
-                        auto marker = MakeThumbNativeMarker();
-                        if (marker) {
-                            StorePlateOwner(marker, hadLocal, localNull, prior,
-                                            ours);
-                            auto children = panel.Children();
-                            children.InsertAt(children.Size(), marker);
-                            border.Background(ours);
-                            usedNative = true;
-                        }
-                    }
+                    usedNative = PaintCardOverlay(
+                        thumbView, withAlpha(base, fillA),
+                        withAlpha(base, strokeA),
+                        outline ? settings->previewOutlineThickness : 0.0);
                 } catch (...) {
+                    usedNative = false;
                 }
             }
             if (!usedNative) {
@@ -9219,18 +9326,23 @@ void LoadSettings() {
         s.previewDecayMinutes = 0;
     }
 
-    auto previewStyle = WindhawkUtils::StringSetting::make(L"previews.style");
-    s.previewStyle = PreviewStyle::PlateTitle;
-    if (wcscmp(previewStyle.get(), L"titleBg") == 0) {
-        s.previewStyle = PreviewStyle::TitleBg;
-    } else if (wcscmp(previewStyle.get(), L"plate") == 0) {
-        s.previewStyle = PreviewStyle::Plate;
-    } else if (wcscmp(previewStyle.get(), L"titleBar") == 0) {
-        s.previewStyle = PreviewStyle::TitleBar;
-    } else if (wcscmp(previewStyle.get(), L"plateTitle") == 0) {
-        s.previewStyle = PreviewStyle::PlateTitle;
-    }
-    // Saved "ring" (removed) falls through to hybrid.
+    auto parsePreviewStyle = [](PCWSTR name, PreviewStyle fallback,
+                                bool allowNone) {
+        auto value = WindhawkUtils::StringSetting::make(name);
+        const PCWSTR v = value.get();
+        if (wcscmp(v, L"plate") == 0) return PreviewStyle::Plate;
+        if (wcscmp(v, L"outline") == 0) return PreviewStyle::Outline;
+        if (wcscmp(v, L"titleBg") == 0) return PreviewStyle::TitleBg;
+        if (wcscmp(v, L"titleBar") == 0) return PreviewStyle::TitleBar;
+        if (allowNone && wcscmp(v, L"none") == 0) return PreviewStyle::None;
+        return fallback;
+    };
+    s.previewTopStyle =
+        parsePreviewStyle(L"previews.topStyle", PreviewStyle::Plate, false);
+    s.previewRestStyle =
+        parsePreviewStyle(L"previews.restStyle", PreviewStyle::TitleBg, true);
+    s.previewOutlineThickness = (std::max)(
+        1, (std::min)(8, Wh_GetIntSetting(L"previews.outlineThickness")));
 
     s.excludedPrograms.clear();
     for (int i = 0;; i++) {
@@ -9252,7 +9364,7 @@ void LoadSettings() {
            s.minFocusSeconds, PromoteModeName(s.promoteMode),
            s.previewHighlightEnabled ? 1 : 0, s.previewHighlightCount,
            s.previewIntensity[0], s.previewIntensity[1], s.previewIntensity[2],
-           PreviewStyleName(s.previewStyle), s.previewMinFocusSeconds,
+           PreviewStyleName(s.previewTopStyle), s.previewMinFocusSeconds,
            s.previewDecayMinutes);
 
     PublishSettings(std::move(s));

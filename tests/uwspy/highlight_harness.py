@@ -200,10 +200,18 @@ def pair_cards(cards, rows):
     return list(zip(cards, rows))
 
 
-def highlighted(nodes):
-    # Plate marker is attached only while the native background is owned.
-    # Overlay hosts can remain when unpainted: inspect visible painted children.
+def has_card_plate(nodes):
+    # 0.11.16+: plate/outline is our own Border above BackgroundBorder
+    # (WhRecentFocusThumbCard), collapsed when unpainted. Older builds marked
+    # an owned native background with WhRecentFocusThumbNative.
     if any(n.get('name') == 'WhRecentFocusThumbNative' for n in nodes): return True
+    return any(n.get('name') == 'WhRecentFocusThumbCard' and
+               property_value(n,'Visibility','0') == '0' for n in nodes)
+
+
+def highlighted(nodes):
+    # Overlay hosts can remain when unpainted: inspect visible painted children.
+    if has_card_plate(nodes): return True
     return any(n.get('name') in ('WhRecentFocusThumbTitleBg','WhRecentFocusThumbTitleBar') and
                property_value(n,'Visibility','0') == '0' and
                float(property_value(n,'Opacity','1')) > 0 for n in nodes)
@@ -397,9 +405,9 @@ class Run:
             if hwnd in expected and not actual: raise Failure(f'recent window {hwnd:#x} has no preview highlight')
             if exact and actual != (hwnd in expected): raise Failure('unexpected preview highlight membership')
             if hwnd in expected and self.a.preview_style=='plateTitle':
-                plate=any(n.get('name')=='WhRecentFocusThumbNative' for n in card['nodes'])
+                plate=has_card_plate(card['nodes'])
                 if plate != (hwnd==self.history[0]):
-                    raise Failure('preview rank 1 plate is on the wrong window (or native plate unavailable)')
+                    raise Failure('preview rank 1 plate is on the wrong window (or card overlay unavailable)')
         if not expected.issubset(seen): raise Inconclusive('thumbnail identities changed; refusing stale correspondence')
 
     def check_clicked_preview(self, card, hwnd):
@@ -412,7 +420,7 @@ class Run:
         if expected!=actual:
             raise Failure(f'pre-click preview membership wrong for {hwnd:#x}')
         if expected and self.a.preview_style=='plateTitle':
-            plate=any(n.get('name')=='WhRecentFocusThumbNative' for n in card['nodes'])
+            plate=has_card_plate(card['nodes'])
             if plate!=(hwnd==self.history[0]):
                 raise Failure('pre-click preview rank 1 plate is on the wrong window')
 
@@ -449,7 +457,7 @@ class Run:
                     raise Inconclusive('thumbnail identities changed during hover')
                 for key in old:
                     def state(c):
-                        return (highlighted(c['nodes']),any(x.get('name')=='WhRecentFocusThumbNative' for x in c['nodes']))
+                        return (highlighted(c['nodes']),has_card_plate(c['nodes']))
                     if state(old[key])!=state(new[key]):
                         raise Failure('preview membership or rank-1 plate changed during hover')
                 target=next(pair for pair in fresh if card_key(pair[0])==card_key(card))
@@ -602,7 +610,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--app',choices=['win32','calculator'],required=True)
     p.add_argument('--grouping',choices=['combined','separated'],default='combined',help='record actual Windows setting; separated mode checks icons/activation, not hidden flyout ranks')
-    p.add_argument('--preview-style',choices=['plateTitle','other'],default='plateTitle',help='plateTitle also verifies rank 1 has the native plate; other checks membership only')
+    p.add_argument('--preview-style',choices=['plateTitle','other'],default='plateTitle',help='plateTitle (= default Rank 1 plate/outline, Ranks 2+ title) also verifies rank 1 has the card plate; other checks membership only')
     p.add_argument('--launch',choices=['background','minimized','attention'],default='attention',help='Win32 only; Calculator uses normal launch plus minimize and calibration')
     p.add_argument('--endpoint'); p.add_argument('--tree')
     p.add_argument('--taskbar-hwnd',type=lambda s:int(s,0))

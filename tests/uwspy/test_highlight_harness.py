@@ -182,6 +182,8 @@ class Geometry(unittest.TestCase):
         self.assertFalse(highlighted([node('WhRecentFocusThumbTitleBg',Visibility=1)]))
         self.assertFalse(highlighted([node('WhRecentFocusThumbTitleBg',Opacity=0)]))
         self.assertTrue(highlighted([node('WhRecentFocusThumbNative')]))
+        self.assertTrue(highlighted([node('WhRecentFocusThumbCard',Visibility=0)]))
+        self.assertFalse(highlighted([node('WhRecentFocusThumbCard',Visibility=1)]))
         self.assertTrue(highlighted([node('WhRecentFocusThumbTitleBg',Visibility=0)]))
 
     def test_expected_membership_and_recycled_card(self):

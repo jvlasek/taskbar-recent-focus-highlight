@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Version:** v0.11.15 — uncombined (Never Combine) buttons: "Window: 0x…" AutomationId matching the button's own TaskItem, ranked per window; v0.11.12: diagnostic log of what multi-window group buttons are bound to (Never Combine investigation); v0.11.11: uncombined taskbar buttons (Never combine) rank per window; v0.11.10: button windows come from Explorer's public TaskGroup.Items (private taskbar.dll path only as logged fallback); v0.11.9: button-window comparison maps content windows to their frame and logs remaining differences in detail; v0.11.8: log-only comparison of button window lists via public WindowsUdk TaskGroup.Items; v0.11.7: owner lookup skips hidden app windows (Delphi: Lister find box); v0.11.6: owned-dialog focus now confirms its owner; v0.11.5: dialogs count for their owner window; jump lists / Start menu ignored as shell UI; v0.11.4: apps keyed by window AppUserModelID when the window has one (one taskbar button = one app; Total Commander and its Lister are separate); v0.11.3: flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
+**Version:** v0.11.16 — preview styles per rank (Rank 1 / Ranks 2+), new Outline style, plate and outline as own overlay (stays on hover); v0.11.15: uncombined (Never Combine) buttons: "Window: 0x…" AutomationId matching the button's own TaskItem, ranked per window; v0.11.12: diagnostic log of what multi-window group buttons are bound to (Never Combine investigation); v0.11.11: uncombined taskbar buttons (Never combine) rank per window; v0.11.10: button windows come from Explorer's public TaskGroup.Items (private taskbar.dll path only as logged fallback); v0.11.9: button-window comparison maps content windows to their frame and logs remaining differences in detail; v0.11.8: log-only comparison of button window lists via public WindowsUdk TaskGroup.Items; v0.11.7: owner lookup skips hidden app windows (Delphi: Lister find box); v0.11.6: owned-dialog focus now confirms its owner; v0.11.5: dialogs count for their owner window; jump lists / Start menu ignored as shell UI; v0.11.4: apps keyed by window AppUserModelID when the window has one (one taskbar button = one app; Total Commander and its Lister are separate); v0.11.3: flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
 model (exact per card; see [investigation notes](doc/investigation-notes.md));
 log-only shadow AppId diagnostics. v0.11.1 base: foreground WinEvents plus validated shell activation
 notifications; no foreground recovery polling. Targeted Calculator recordings
@@ -29,9 +29,10 @@ too — so “which one did I just use?” is unclear.
    icons (side bar, frame, full plate, or edge bar).
 2. **Preview ranks** — separately track focus per **window** (`HWND`). When a
    multi-window thumbnail flyout opens, that flyout gets its own recency list
-   and marks the top N windows with rank intensities. Default is **hybrid**
-   (plate for rank 1, title tint for 2+); title bar, title wash, whole plate,
-   are also available.
+   and marks the top N windows with rank intensities. Rank 1 and ranks 2+
+   have separate styles (default: whole plate for rank 1, title tint for 2+);
+   whole plate, plate with accent outline, title wash and title bar are
+   available for each, and ranks 2+ can also be left unmarked.
 
 ## Features
 
@@ -92,7 +93,9 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 |---------|-------------|---------|
 | Highlight recent windows in previews | Multi-window flyout ranks | On |
 | Number of highlighted windows | Top N in **that** flyout (1–6 recommended) | 3 |
-| Preview highlight style | Title bar / Title bg / Plate / Hybrid | **Hybrid** |
+| Rank 1 style | Plate / Outline / Title bg / Title bar | **Plate** |
+| Ranks 2+ style | Title bg / Title bar / Plate / Outline / None | **Title bg** |
+| Outline thickness | Border width for the Outline style (1–8 px) | 2 |
 | Intensity rank 1/2/3 | Strength per window rank (0–100) | 100 / 70 / 45 |
 | Preview tint opacity | Plate + title-background wash (0–100) | 40 |
 | Preview minimum focus (seconds) | Window→preview recency (separate from apps). A thumbnail / grouped-icon click confirms immediately. | 1 |
@@ -102,10 +105,11 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 
 | Style | Look | Notes |
 |-------|------|--------|
-| **Hybrid (plate + title)** (default) | Plate on rank 1, title wash on ranks 2+ | Rank 1 pops; 2+ stay light |
+| Defaults | Plate on rank 1, title wash on ranks 2+ | Rank 1 pops; 2+ stay light (the former "Hybrid") |
+| **Outline** | Plate plus an accent border | Same look as Taskbar Active Window Highlight |
 | **Title bar** | Thin accent line under the window title | Sits just below the text |
 | **Title background** | Soft wash behind the title | Kept light so text stays readable; intensity scales linearly |
-| **Whole preview plate** | Tints the card chrome (`BackgroundBorder`) | Strong signal; previous brush restored on clear (Taskbar Styler) |
+| **Whole preview plate** | Own tinted border above the card's `BackgroundBorder`, bound to its size and corners | Strong signal; survives hover (0.11.16+); follows Taskbar Styler shapes |
 
 Single-window flyouts are **never** marked (nothing to disambiguate). Ranking
 is **per flyout**: Chrome’s last-used window is rank 1 in the Chrome flyout even

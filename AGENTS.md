@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.15). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.16). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -216,8 +216,14 @@ Rules:
 |----------------|----------------|
 | `titleBar` | Thin rect just under title baseline (~2px gap); 8px side inset |
 | `titleBg` | Soft wash; 4px corners (`CornerRadius{4,4,4,4}` — `{4}` is TopLeft only), 8px inset |
-| `plate` | Tint `BackgroundBorder`. The marker remembers the displaced brush and the brush this mod installed. Restore only while the border still has our brush; a later owner is saved on the next takeover. Zero fill does not replace the native background. Unset and explicit null stay distinct |
-| `plateTitle` | Rank 1 = plate; ranks 2+ = titleBg |
+| `plate` | 0.11.16+: own `Border` `WhRecentFocusThumbCard` inserted right after `BackgroundBorder` in its panel; Width/Height/Margin/alignment/CornerRadius bound to it; fill only. Survives the card's hover state (which rewrites `BackgroundBorder.Background`). Fallback without a BackgroundBorder: overlay-host rectangle. Native-brush restore code (`WhRecentFocusThumbNative`) kept only to undo pre-0.11.16 paint |
+| `outline` | Same overlay with accent `BorderBrush` and `previews.outlineThickness` |
+| `none` | Ranks 2+ only: not marked |
+
+Styles are chosen per rank: `previews.topStyle` (rank 1, default `plate`) and
+`previews.restStyle` (ranks 2+, default `titleBg`). The old `previews.style`
+(incl. `plateTitle` "hybrid") is no longer read; its defaults equal the old
+hybrid.
 
 Clear (unload / unranked) removes named overlays. A ranked repaint keeps
 `WhRecentFocusThumbGlow` and only hides children + restores the plate brush.
@@ -442,7 +448,7 @@ General keys stay top-level; icon/preview keys are dotted.
 | Taskbar icons | `icons.sizeBoostRank1..3` | `sizeBoostPercent[3]` |
 | Thumbnail previews | `previews.highlightEnabled` | preview master |
 | Thumbnail previews | `previews.highlightCount` | per-flyout top N |
-| Thumbnail previews | `previews.style` | `titleBar` / `titleBg` / `plate` / `plateTitle` (saved `ring` loads as hybrid) |
+| Thumbnail previews | `previews.topStyle` / `previews.restStyle` | `plate` / `outline` / `titleBg` / `titleBar` (+ `none` for ranks 2+) |
 | Thumbnail previews | `previews.intensityRank1..3` | `previewIntensity[3]` |
 | Thumbnail previews | `previews.fillOpacity` | plate + titleBg wash (not title bar line) |
 | Thumbnail previews | `previews.minFocusSeconds` | window confirm |
