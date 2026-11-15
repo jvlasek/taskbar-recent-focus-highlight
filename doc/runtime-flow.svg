@@ -79,11 +79,11 @@
 <text x="796" y="1056" class="body">Require &gt;1 window card; skip unresolved and snap-group-only cards.</text>
 <text x="796" y="1081" class="body">Sort recent siblings → preview top N; no app-rank requirement.</text>
 <text x="796" y="1106" class="body">Title bar / title tint / plate / plate + title tint.</text>
-<text x="796" y="1131" class="body">Overlays span the card grid; plate restores only our owned brush.</text>
+<text x="796" y="1131" class="body">Plate / outline: own Border above BackgroundBorder (bound geometry).</text>
 <text x="796" y="1156" class="body">Hover alone does not promote window recency.</text>
 <rect x="40" y="1230" width="1400" height="90" rx="12" fill="#fff7ed" stroke="#fdba74"/>
-<text x="60" y="1262" class="heading">Additional input: explicit native click</text>
-<text x="60" y="1291" class="body">HandleClick succeeds → same GetWindowForThumbnailTaskItem helper → post HWND/PID → WM_APP_PREVIEW_CLICK → ConfirmPreviewFocusNow.</text>
+<text x="60" y="1262" class="heading">No taskbar.dll hooks (0.11.20+)</text>
+<text x="60" y="1291" class="body">Clicking a thumbnail is ordinary focus; identity, windows and previews come from Taskbar.View.dll + public WindowsUdk interfaces.</text>
 <text x="40" y="1352" class="small">THREAD RULE  Native hooks capture live data. The worker handles metadata / recency. XAML changes use the owning UI dispatcher.</text>
 <text x="40" y="1381" class="small">LIFETIME RULE  Stop and join worker → clean and drain UI dispatchers → unload. Result deadlines do not cancel an OS call.</text>
 <text x="40" y="1410" class="small">Read investigation-notes.md for evidence and limits. This diagram omits guard branches; private Explorer hooks are build-dependent.</text>

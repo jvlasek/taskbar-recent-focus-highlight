@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.19). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.20). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -188,10 +188,11 @@ paint the top `previewHighlightCount` at `previewIntensity` ranks.
 `OnApplyTemplate`, hover-switch (`TargetItemKey`), and title remeasure all
 coalesce onto one Low-priority flyout refresh. The callback prefers the card
 that scheduled the pass if it is still live under an `ItemsRepeater`, else a
-live in-repeater tracked view. Thumbnail / grouped-icon click posts
-`WM_APP_PREVIEW_CLICK` to the focus thread; `ConfirmPreviewFocusNow` does not
-run inside `HandleClick`. Ctor-map `taskItem` is compared, never dereferenced
-after the HWND is captured.
+live in-repeater tracked view. Since 0.11.20 a thumbnail click has no
+special path: it is a focus change like any other and waits the preview
+minimum (the `HandleClick` hook, `WM_APP_PREVIEW_CLICK` /
+`ConfirmPreviewFocusNow` and the vtable-probed native HWND getters were
+removed together with every taskbar.dll hook).
 
 Hooks for thumbnails are **optional**. Missing symbols: app ranks still work;
 preview cards without a TaskItem/repeater HWND stay unmarked.
@@ -516,8 +517,8 @@ Keep helpers in the one `.wh.cpp` unless the mod is split for non-Windhawk build
    reorder native `IconPanel` children on buttons we never painted.
 6. **Do not** `SetTimer` on the hook HWND from the UI thread (window must be
    owned by the caller). `PostMessage` and arm the timer in `WndProc`.
-   `ConfirmPreviewFocusNow` is posted (`WM_APP_PREVIEW_CLICK` + HWND/PID), not
-   called from `HandleClick`.
+   (Historical: the removed click confirmation was posted to the worker, never
+   run inside `HandleClick`.)
 7. **Do not** call `SHGetPropertyStoreForWindow` / `GetProcessImagePath` /
    `GetWindowClassName` while holding `g_stateMutex` or `g_buttonPathMutex`.
 8. **Do not** `CoCreate`/`Release` `IVirtualDesktopManager` off the focus

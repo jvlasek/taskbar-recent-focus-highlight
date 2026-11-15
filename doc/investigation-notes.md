@@ -251,10 +251,10 @@ Search these names in [the single translation unit](../taskbar-recent-focus-high
 | Stage | Functions / hooks |
 |---|---|
 | Foreground and shell activation | `HandleShellActivation`, `HandleForegroundNotification`, `HandleForegroundChanged` |
-| App identity and preview history | `ResolveAppIdentity`, `StampWindowRecencyLocked`, `ConfirmPreviewFocusNow` |
-| Button identity work | `QueueButtonResolve`, `ResolveOneButtonOnFocusThread`, `GetWindowFromTaskItem` |
-| Presented-window lookup | `GetWindowForThumbnailTaskItem`, `AddThumbnailTaskItemMapping` |
-| Explicit native click | `CTaskListWnd_HandleClick_Hook`, `WM_APP_PREVIEW_CLICK` |
+| App identity and preview history | `ResolveAppIdentity`, `StampWindowRecencyLocked` |
+| Button identity work | `QueueButtonResolve`, `ResolveOneButtonOnFocusThread`, `CollectUdkGroupWindows` |
+| Presented-window lookup | `ResolveHwndFromCardViewModel` |
+| Explicit native click | removed in 0.11.20 (no taskbar.dll hooks) |
 | Bind and paint | `ApplyAllHighlights_UIThread`, `RefreshThumbnailFlyout_UIThread`, `ApplyThumbnailHighlight` |
 | Shutdown | `Wh_ModUninit`, `RunOnEachUiDispatcherAndWait` |
 

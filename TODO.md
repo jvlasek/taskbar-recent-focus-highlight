@@ -164,7 +164,11 @@ first, then the low-risk preview fixes, then identity.
   -lcomctl32. **0.11.19 (phase 2):** removed preview passes 1/2 (ctor
   hooks + DataContext map, repeater index + captured Thumbnails GetAt) and
   their five optional taskbar.dll symbols; snap-group detection uses the
-  view model. Phase 3: preview click confirmation
+  view model. **0.11.20 (phase 3):** dropped the immediate preview click
+  confirmation (user decision 2026-11-15: clicks wait the 1 s preview minimum
+  like any focus) and with it every taskbar.dll hook: HandleClick (required),
+  CWindowTaskItem/CImmersiveTaskItem getters and four vftables,
+  QueryViaVtable, LoadLibrary/FreeLibrary of taskbar.dll. Phase 3: preview click confirmation
   (HandleClick + vtable-probed GetWindowForThumbnailTaskItem).
 - [x] **Never Combine: one button = one window** (user, 2026-11-15).
   Verified on 0.11.15 (`manual-20261115-222407-856139`): 49 window buttons

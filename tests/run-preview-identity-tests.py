@@ -1,14 +1,21 @@
-"""Exercise production getter selection and captured HWND/PID validation."""
+"""Preview recency guard: a recorded window counts only while its PID holds.
+
+Until 0.11.19 this also exercised GetWindowForThumbnailTaskItem (native
+click / ctor HWND getter); that code was removed in 0.11.20 along with every
+taskbar.dll hook.
+"""
 from pathlib import Path
 import subprocess
 import tempfile
 source = (Path(__file__).resolve().parent.parent / 'taskbar-recent-focus-highlight.wh.cpp').read_text(encoding='utf-8')
 def function(signature):
-    start = source.index(signature)
-    return source[start:source.index('\n}', start)+2]
-helpers = '\n'.join(function(x) for x in (
-    'HWND GetWindowForThumbnailTaskItem(',
-    'bool IsWindowRecentForPreviewLocked('))
+    start = 0
+    while True:
+        start = source.index('\n' + signature, start) + 1
+        brace, semi = source.find('{', start), source.find(';', start)
+        if brace != -1 and (semi == -1 or brace < semi):
+            return source[start:source.index('\n}', start)+2]
+helpers = function('bool IsWindowRecentForPreviewLocked(')
 cpp = r'''
 #include <cassert>
 #include <map>
@@ -26,46 +33,18 @@ Settings* SettingsSnap() { return &settings; }
 ULONGLONG GetTickCount64() { return 1000; }
 ULONGLONG DecayMsFromMinutes(int n) { return n*60000ULL; }
 bool IsTickDecayed(ULONGLONG t,ULONGLONG d,ULONGLONG now) { return now-t>=d; }
-void* CImmersiveTaskItem_vftable_ITaskItem=reinterpret_cast<void*>(100);
-HWND (*CImmersiveTaskItem_GetThumbnailWindow)(void*)=nullptr;
-struct Item { void* vtable; HWND frame; HWND app; };
-void* expected=nullptr;
-int appQueries=0, thumbnailQueries=0;
-HWND Thumbnail(void* p) {
-    assert(p==expected); ++thumbnailQueries;
-    return static_cast<Item*>(p)->frame;
-}
-HWND GetWindowFromTaskItem(void* p) { ++appQueries; return static_cast<Item*>(p)->app; }
 // HELPERS
 int main() {
     HWND a=reinterpret_cast<HWND>(1), b=reinterpret_cast<HWND>(2);
-    HWND content=reinterpret_cast<HWND>(3);
-    windows[a]=10; windows[b]=10; windows[content]=20;
-    Item first{CImmersiveTaskItem_vftable_ITaskItem,a,nullptr};
-    Item second{CImmersiveTaskItem_vftable_ITaskItem,b,content};
-    CImmersiveTaskItem_GetThumbnailWindow=Thumbnail;
-    expected=&first;
-    assert(GetWindowForThumbnailTaskItem(&first)==a); // app HWND not created yet
-    expected=&second;
-    assert(GetWindowForThumbnailTaskItem(&second)==b); // ignore detached content
-    assert(appQueries==0 && thumbnailQueries==2);
+    windows[a]=10; windows[b]=10;
     DesktopRecencyState desk;
     desk.windowFocusMap[a]={900,10}; desk.windowFocusMap[b]={950,10};
     ULONGLONG tick=0;
     assert(IsWindowRecentForPreviewLocked(desk,b,&tick) && tick==950);
-    // Missing getter or missing native HWND fails closed, never app fallback.
-    CImmersiveTaskItem_GetThumbnailWindow=nullptr;
-    assert(!GetWindowForThumbnailTaskItem(&second) && appQueries==0);
-    CImmersiveTaskItem_GetThumbnailWindow=Thumbnail;
-    second.frame=nullptr;
-    assert(!GetWindowForThumbnailTaskItem(&second) && appQueries==0);
-    Item desktop{reinterpret_cast<void*>(200),nullptr,a};
-    assert(GetWindowForThumbnailTaskItem(&desktop)==a && appQueries==1);
-    desktop.app=b;
-    assert(GetWindowForThumbnailTaskItem(&desktop)==b && appQueries==2);
-    assert(!GetWindowForThumbnailTaskItem(nullptr));
-    windows[b]=11;
+    windows[b]=11;  // HWND recycled by another process
     assert(!IsWindowRecentForPreviewLocked(desk,b));
+    windows.erase(a);
+    assert(!IsWindowRecentForPreviewLocked(desk,a));
 }
 '''.replace('// HELPERS',helpers)
 with tempfile.TemporaryDirectory(prefix='windhawk-preview-') as folder:
@@ -74,7 +53,6 @@ with tempfile.TemporaryDirectory(prefix='windhawk-preview-') as folder:
     subprocess.run(['g++','-std=c++17',str(cpp_path),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True,timeout=20)
 assert 'kHostedWindowTimerId' not in source and 'g_hostedWindowLinks' not in source
-# 0.11.19: preview cards resolve only through their view model; the ctor
-# map, DataContext pass and captured Thumbnails index pass are gone.
 assert 'AddThumbnailTaskItemMapping' not in source and 'g_TaskGroup_Thumbnails' not in source
-print('PASS: thumbnail getter selection, correct interface, early-null app, missing getter, PID guard')
+assert 'HandleClick' not in source and 'QueryViaVtable' not in source
+print('PASS: preview recency PID guard; no ctor map, Thumbnails capture or taskbar.dll click path')

@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.19
+// @version         0.11.20
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -276,8 +276,7 @@ to clear highlights.
       $description: >-
         How long a window must stay focused before it enters that flyout’s
         recency list. Separate from app ranking min focus (0 = immediate).
-        A click on a thumbnail or grouped-icon flyout confirms that window
-        immediately (does not wait this timer).
+        Clicking a thumbnail counts like any other focus.
     - decayMinutes: 15
       $name: Decay (minutes)
       $description: >-
@@ -665,9 +664,8 @@ struct ButtonPathCacheEntry {
 };
 std::mutex g_buttonPathMutex;
 std::unordered_map<void*, ButtonPathCacheEntry> g_buttonPathCache;
+// Button identity lookups (Taskbar.View.dll symbols) are hooked and usable.
 std::atomic<bool> g_taskbandResolveReady{false};
-HMODULE g_taskbarDll = nullptr;
-bool g_taskbarDllLoadedByUs = false;
 
 // Live thumbnail views for unload / re-apply while flyout is open.
 std::mutex g_thumbViewsMutex;
@@ -803,7 +801,6 @@ constexpr UINT WM_APP_DESKTOP_SWITCHED = WM_APP + 2;
 constexpr UINT WM_APP_SHUTDOWN = WM_APP + 3;
 constexpr UINT WM_APP_REQUEST_APPLY_DEBOUNCED = WM_APP + 4;
 constexpr UINT WM_APP_REFRESH_ACCENT = WM_APP + 5;
-constexpr UINT WM_APP_PREVIEW_CLICK = WM_APP + 6;
 constexpr UINT WM_APP_SETTINGS_CHANGED = WM_APP + 7;
 constexpr UINT WM_APP_RESOLVE_BUTTON = WM_APP + 8;
 // Shadow AppId diagnostics: Explorer active-item reports queued for the
@@ -1897,47 +1894,6 @@ void StampWindowRecencyLocked(DesktopRecencyState& desk,
                               const std::wstring& windowTitle,
                               ULONGLONG now,
                               const std::wstring& appIdUpper = {});
-
-void ConfirmPreviewFocusNow(HWND hwnd, DWORD expectedPid = 0) {
-    if (!hwnd || g_unloading.load() ||
-        !SettingsSnap()->previewHighlightEnabled) {
-        return;
-    }
-    if (expectedPid && !HwndMatchesStoredPid(hwnd, expectedPid)) {
-        return;
-    }
-    hwnd = NormalizeFocusHwnd(hwnd);
-    if (ShouldIgnoreHwnd(hwnd)) {
-        return;
-    }
-
-    std::wstring key;
-    std::wstring displayName;
-    std::wstring windowTitle;
-    std::wstring appIdUpper;
-    DWORD processId = 0;
-    if (!ResolveAppIdentity(hwnd, key, displayName, processId, &windowTitle,
-                            &appIdUpper)) {
-        return;
-    }
-    if (IsExcludedKey(key, ToUpper(displayName), appIdUpper)) {
-        return;
-    }
-
-    const ULONGLONG now = GetTickCount64();
-    {
-        std::lock_guard<std::mutex> lock(g_stateMutex);
-        auto& desk = CurrentDeskLocked();
-        StampWindowRecencyLocked(desk, hwnd, key, windowTitle, now, appIdUpper);
-        Wh_Log(L"Preview click confirmed: hwnd=%p %s title=\"%s\" (map=%zu "
-               L"desktop=%s)",
-               hwnd, displayName.c_str(), windowTitle.c_str(),
-               desk.windowFocusMap.size(),
-               GuidToLogString(g_currentDesktopId).c_str());
-    }
-    EnsureDecayTimerArmed();
-    RequestApplyPreviewVisuals();
-}
 
 void PruneWindowFocusMapLocked(DesktopRecencyState& desk) {
     const ULONGLONG now = GetTickCount64();
@@ -3740,35 +3696,6 @@ void TrackButton_UIThread(FrameworkElement button) {
 thread_local bool g_captureTaskGroup = false;
 thread_local void* g_capturedTaskGroup = nullptr;
 
-constexpr int kMaxVtableProbeSlots = 32;
-
-void* QueryViaVtable(void* object, void* vtable) {
-    if (!object || !vtable) {
-        return nullptr;
-    }
-    void** ptr = static_cast<void**>(object);
-    for (int i = 0; i < kMaxVtableProbeSlots; ++i) {
-        if (ptr[i] == vtable) {
-            return ptr + i;
-        }
-    }
-    return nullptr;
-}
-
-using CWindowTaskItem_GetWindow_t = HWND(WINAPI*)(void* pThis);
-CWindowTaskItem_GetWindow_t CWindowTaskItem_GetWindow;
-
-using CImmersiveTaskItem_GetAppWindow_t = HWND(WINAPI*)(void* pThis);
-CImmersiveTaskItem_GetAppWindow_t CImmersiveTaskItem_GetAppWindow;
-// Preview getter. Unlike GetAppWindow, this takes the ITaskItem pointer.
-using CImmersiveTaskItem_GetThumbnailWindow_t = HWND(WINAPI*)(void* pThis);
-CImmersiveTaskItem_GetThumbnailWindow_t CImmersiveTaskItem_GetThumbnailWindow;
-
-void* CImmersiveTaskItem_vftable = nullptr;
-void* CImmersiveTaskItem_vftable_ITaskItem = nullptr;
-void* CWindowTaskItem_vftable = nullptr;
-void* CWindowTaskItem_vftable_ITaskItem = nullptr;
-
 using TryGetItemFromContainer_TaskListWindowViewModel_t =
     void*(WINAPI*)(void** output, UIElement* container);
 TryGetItemFromContainer_TaskListWindowViewModel_t
@@ -4003,38 +3930,6 @@ bool WINAPI ITaskGroup_IsRunning_Hook(void* pThis) {
                : false;
 }
 
-using CTaskListWnd_HandleClick_t = HRESULT(WINAPI*)(void* pThis,
-                                                    void* taskGroup,
-                                                    void* taskItem,
-                                                    void** launcherOptions);
-CTaskListWnd_HandleClick_t CTaskListWnd_HandleClick_Original;
-HWND GetWindowFromTaskItem(void* taskItem);
-auto GetWindowForThumbnailTaskItem(void* taskItem) -> HWND;
-
-
-
-HRESULT WINAPI CTaskListWnd_HandleClick_Hook(void* pThis,
-                                             void* taskGroup,
-                                             void* taskItem,
-                                             void** launcherOptions) {
-    const HRESULT hr = CTaskListWnd_HandleClick_Original
-                           ? CTaskListWnd_HandleClick_Original(
-                                 pThis, taskGroup, taskItem, launcherOptions)
-                           : E_FAIL;
-    // Thumbnail (or grouped-icon) click is an explicit "this window".
-    // Confirm on the focus thread — ResolveAppIdentity + preview apply must
-    // not run inline on the taskbar UI thread inside HandleClick.
-    if (SUCCEEDED(hr) && taskItem) {
-        if (HWND clicked = GetWindowForThumbnailTaskItem(taskItem)) {
-            const DWORD pid = PidFromHwnd(clicked);
-            PostToHookThread(WM_APP_PREVIEW_CLICK,
-                             reinterpret_cast<WPARAM>(clicked),
-                             static_cast<LPARAM>(pid));
-        }
-    }
-    return hr;
-}
-
 winrt::com_ptr<IUnknown> GetWindowsUdkTaskItemFromTaskListButton(
     UIElement element) {
     if (!TryGetItemFromContainer_TaskListWindowViewModel_Original ||
@@ -4070,34 +3965,6 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
                                                   1);
     g_captureTaskGroup = false;
     return g_capturedTaskGroup;
-}
-
-HWND GetWindowFromTaskItem(void* taskItem) {
-    if (!taskItem) {
-        return nullptr;
-    }
-    if (CImmersiveTaskItem_vftable_ITaskItem &&
-        *(void**)taskItem == CImmersiveTaskItem_vftable_ITaskItem &&
-        CImmersiveTaskItem_GetAppWindow && CImmersiveTaskItem_vftable) {
-        void* immersiveTaskItem =
-            QueryViaVtable(taskItem, CImmersiveTaskItem_vftable);
-        if (!immersiveTaskItem) {
-            return nullptr;
-        }
-        return CImmersiveTaskItem_GetAppWindow(immersiveTaskItem);
-    }
-    if (CWindowTaskItem_GetWindow) {
-        void* windowTaskItem = taskItem;
-        if (CWindowTaskItem_vftable_ITaskItem && CWindowTaskItem_vftable &&
-            *(void**)taskItem == CWindowTaskItem_vftable_ITaskItem) {
-            windowTaskItem = QueryViaVtable(taskItem, CWindowTaskItem_vftable);
-            if (!windowTaskItem) {
-                return nullptr;
-            }
-        }
-        return CWindowTaskItem_GetWindow(windowTaskItem);
-    }
-    return nullptr;
 }
 
 // Capture only UI-affine taskbar identity here. Slow metadata reads are queued.
@@ -4902,23 +4769,6 @@ void ClearAllHighlights_UIThread() {
 // ---------------------------------------------------------------------------
 // Thumbnail preview glow (multi-window flyouts)
 // ---------------------------------------------------------------------------
-
-// Query only while the native click hook supplies a live ITaskItem.
-// Immersive previews use the presented frame, not GetAppWindow's app content.
-HWND GetWindowForThumbnailTaskItem(void* taskItem) {
-    if (!taskItem) {
-        return nullptr;
-    }
-    if (CImmersiveTaskItem_vftable_ITaskItem &&
-        *static_cast<void**>(taskItem) == CImmersiveTaskItem_vftable_ITaskItem) {
-        // This symbol takes ITaskItem directly; GetAppWindow uses another
-        // interface projection. Missing optional support must fail closed.
-        return CImmersiveTaskItem_GetThumbnailWindow
-                   ? CImmersiveTaskItem_GetThumbnailWindow(taskItem)
-                   : nullptr;
-    }
-    return GetWindowFromTaskItem(taskItem);
-}
 
 // ---------------------------------------------------------------------------
 // WindowsUdk.UI.Shell / Taskbar.View interfaces (Explorer's own bindings)
@@ -7395,6 +7245,9 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
         Wh_Log(L"HookSymbols failed for Taskbar.View.dll");
         return false;
     }
+    // Button identity (TaskListButton -> view model -> WindowsUdk TaskItem /
+    // TaskGroup) lives here; before 0.11.20 this flag waited for taskbar.dll.
+    g_taskbandResolveReady = true;
 
     Wh_Log(L"Preview resolve: view model %s, rebind repaint %s",
            (TaskItemThumbnailView_get_ThumbnailSource &&
@@ -7443,73 +7296,6 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
         }
     } catch (...) {
     }
-}
-
-bool HookTaskbarDllSymbols() {
-    HMODULE module = GetModuleHandle(L"taskbar.dll");
-    if (!module) {
-        module = LoadLibraryEx(L"taskbar.dll", nullptr,
-                               LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (module) {
-            g_taskbarDllLoadedByUs = true;
-        }
-    }
-    g_taskbarDll = module;
-    if (!module) {
-        Wh_Log(L"Could not load taskbar.dll — path cache unavailable");
-        return false;
-    }
-
-    WindhawkUtils::SYMBOL_HOOK taskbarDllHooks[] = {
-        {
-            {LR"(public: virtual struct HWND__ * __cdecl CWindowTaskItem::GetWindow(void))"},
-            &CWindowTaskItem_GetWindow,
-        },
-        {
-            {LR"(public: virtual struct HWND__ * __cdecl CImmersiveTaskItem::GetAppWindow(void))"},
-            &CImmersiveTaskItem_GetAppWindow,
-        },
-        {
-            {LR"(public: virtual struct HWND__ * __cdecl CImmersiveTaskItem::GetThumbnailWindow(void))"},
-            &CImmersiveTaskItem_GetThumbnailWindow,
-            nullptr,
-            true, // Optional: unsupported immersive previews stay unmarked.
-        },
-        {
-            {LR"(const CImmersiveTaskItem::`vftable')"},
-            &CImmersiveTaskItem_vftable,
-        },
-        {
-            {LR"(const CImmersiveTaskItem::`vftable'{for `ITaskItem'})"},
-            &CImmersiveTaskItem_vftable_ITaskItem,
-        },
-        {
-            {LR"(const CWindowTaskItem::`vftable')"},
-            &CWindowTaskItem_vftable,
-            nullptr,
-            true,
-        },
-        {
-            {LR"(const CWindowTaskItem::`vftable'{for `ITaskItem'})"},
-            &CWindowTaskItem_vftable_ITaskItem,
-            nullptr,
-            true,
-        },
-        {
-            {LR"(public: virtual long __cdecl CTaskListWnd::HandleClick(struct ITaskGroup *,struct ITaskItem *,struct winrt::Windows::System::LauncherOptions const &))"},
-            &CTaskListWnd_HandleClick_Original,
-            CTaskListWnd_HandleClick_Hook,
-        },
-    };
-
-    if (!HookSymbols(module, taskbarDllHooks, ARRAYSIZE(taskbarDllHooks))) {
-        Wh_Log(L"HookSymbols failed for taskbar.dll");
-        return false;
-    }
-
-    g_taskbandResolveReady = true;
-    Wh_Log(L"Hooked taskbar.dll symbols");
-    return true;
 }
 
 HMODULE GetTaskbarViewModuleHandle() {
@@ -7853,7 +7639,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
 
         // Preview min-focus is independent: do not stamp the current HWND
         // here. A window switch just before the app deadline must wait out
-        // previewStartTick. Clicks still confirm immediately.
+        // previewStartTick (clicks too, since 0.11.20).
         if (g_pendingFocus.valid &&
             (g_pendingFocus.hwnd == pending.hwnd ||
              g_pendingFocus.processId == pending.processId)) {
@@ -8280,10 +8066,6 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             return 0;
         case WM_APP_SHADOW_ACTIVE_ITEM:
             ShadowDrainActiveReports();
-            return 0;
-        case WM_APP_PREVIEW_CLICK:
-            ConfirmPreviewFocusNow(reinterpret_cast<HWND>(wParam),
-                                   static_cast<DWORD>(lParam));
             return 0;
         case WM_APP_SETTINGS_CHANGED: {
             bool dropPending = false;
@@ -8794,16 +8576,6 @@ void LoadSettings() {
 // Windhawk entry points
 // ---------------------------------------------------------------------------
 
-// Wh_ModUninit does not run when Wh_ModInit returns FALSE. Drop a
-// taskbar.dll this mod loaded or the extra reference stays in Explorer.
-void ReleaseTaskbarDllIfWeLoadedIt() {
-    if (g_taskbarDllLoadedByUs && g_taskbarDll) {
-        FreeLibrary(g_taskbarDll);
-    }
-    g_taskbarDll = nullptr;
-    g_taskbarDllLoadedByUs = false;
-}
-
 BOOL Wh_ModInit() {
     Wh_Log(L"> init " WH_MOD_VERSION);
 
@@ -8834,17 +8606,13 @@ BOOL Wh_ModInit() {
                                    LoadLibraryExW_Hook,
                                    &LoadLibraryExW_Original);
 
-    if (!HookTaskbarDllSymbols()) {
-        Wh_Log(L"taskbar.dll identity hooks failed");
-        ReleaseTaskbarDllIfWeLoadedIt();
-        return FALSE;
-    }
-
+    // No taskbar.dll hooks since 0.11.20: button identity, windows, previews
+    // and focus all come from Taskbar.View.dll and public WindowsUdk
+    // interfaces.
     if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
         if (!HookTaskbarViewDllSymbols(taskbarViewModule)) {
             Wh_Log(L"Taskbar.View hooks failed");
-            ReleaseTaskbarDllIfWeLoadedIt();
-            return FALSE;
+                return FALSE;
         }
         g_taskbarViewHookAttempted = true;
     } else {
@@ -8853,7 +8621,6 @@ BOOL Wh_ModInit() {
 
     if (!StartWinEventHookThread()) {
         Wh_Log(L"Focus thread failed to start");
-        ReleaseTaskbarDllIfWeLoadedIt();
         return FALSE;
     }
     return TRUE;
@@ -8934,7 +8701,6 @@ void Wh_ModUninit() {
         std::lock_guard<std::mutex> lock(g_dispatchersMutex);
         g_uiDispatchers.reset();
     }
-    ReleaseTaskbarDllIfWeLoadedIt();
 }
 
 void Wh_ModSettingsChanged() {

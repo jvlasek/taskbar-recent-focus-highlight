@@ -89,11 +89,11 @@ box(776,995,656,188,'Rank within this flyout → paint on UI dispatcher',[
     'Require >1 window card; skip unresolved and snap-group-only cards.',
     'Sort recent siblings → preview top N; no app-rank requirement.',
     'Title bar / title tint / plate / plate + title tint.',
-    'Overlays span the card grid; plate restores only our owned brush.',
+    'Plate / outline: own Border above BackgroundBorder (bound geometry).',
     'Hover alone does not promote window recency.'])
 
-box(40,1230,1400,90,'Additional input: explicit native click',[
-    'HandleClick succeeds → same GetWindowForThumbnailTaskItem helper → post HWND/PID → WM_APP_PREVIEW_CLICK → ConfirmPreviewFocusNow.'], '#fff7ed','#fdba74')
+box(40,1230,1400,90,'No taskbar.dll hooks (0.11.20+)',[
+    'Clicking a thumbnail is ordinary focus; identity, windows and previews come from Taskbar.View.dll + public WindowsUdk interfaces.'], '#fff7ed','#fdba74')
 text(40,1352,'THREAD RULE  Native hooks capture live data. The worker handles metadata / recency. XAML changes use the owning UI dispatcher.','small')
 text(40,1381,'LIFETIME RULE  Stop and join worker → clean and drain UI dispatchers → unload. Result deadlines do not cancel an OS call.','small')
 text(40,1410,'Read investigation-notes.md for evidence and limits. This diagram omits guard branches; private Explorer hooks are build-dependent.','small')
