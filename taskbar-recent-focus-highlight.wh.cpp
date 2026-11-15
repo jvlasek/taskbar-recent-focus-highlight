@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.5
+// @version         0.11.6
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -6111,8 +6111,9 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     }
 
     // Rank this flyout only (not a global window ladder). Sort siblings that
-    // have a recency tick; ties: confirmSeq, then the live foreground HWND.
-    HWND foreground = GetForegroundWindow();
+    // have a recency tick; ties: confirmSeq, then the live foreground HWND
+    // (normalized: an owned dialog stands for its owner's card).
+    HWND foreground = NormalizeFocusHwnd(GetForegroundWindow());
     std::vector<size_t> order;
     order.reserve(scored.size());
     for (size_t i = 0; i < scored.size(); ++i) {
@@ -7613,7 +7614,11 @@ void CancelPreviewMinFocusTimer() {
 bool StillPendingForeground(const PendingFocus& pending,
                             HWND* outHwnd,
                             std::wstring* outTitle) {
-    HWND foreground = GetForegroundWindow();
+    // Same mapping as the focus path (child -> root, owned dialog -> owner),
+    // so an owned dialog keeps its owner's pending focus alive. Raw HWND
+    // here made a Lister dialog (no AUMID) look like another app after
+    // 0.11.4/0.11.5, and its owner was never confirmed.
+    HWND foreground = NormalizeFocusHwnd(GetForegroundWindow());
     HWND confirmHwnd = pending.hwnd;
     std::wstring title = pending.windowTitle;
     if (!foreground || foreground != pending.hwnd) {

@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.5). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.6). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
