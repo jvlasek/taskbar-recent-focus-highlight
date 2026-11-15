@@ -207,10 +207,17 @@ first, then the low-risk preview fixes, then identity.
   Keep window-level (WindowId) matching first so Never Combine buttons of one
   AppId do not all light up. Plan exclude-list migration (keys change from
   paths/AUMIDs).
-- [ ] Optional: "outline" preview style — own Border above `BackgroundBorder`,
-  geometry/corner radius bound to it, `{ThemeResource SystemAccentColor}`.
-- [ ] Unload: replace `INFINITE` waits (focus thread stop, dispatcher drain)
-  with bounded waits.
+- [x] Optional: "outline" preview style — done in 0.11.16 (Outline).
+- [x] Unload: keep the `INFINITE` waits (decided 2026-11-16). A plain timeout
+  can unload the DLL under a queued callback; deadline + module pin was
+  considered and rejected. Probe mod `tests/windhawk-probe/` on Windhawk
+  1.7.3: Windhawk has no uninit timeout, shows a "Mod tasks in progress —
+  Uninitializing..." window while uninit runs, queues a re-enable until it
+  returns, then reloads the same DLL. So a stuck drain is visible and
+  self-heals if the UI thread recovers; a pinned DLL would instead come back
+  with stale globals. A failed `Wh_ModInit` (returns FALSE) is silent in the
+  UI: the toggle stays on, `Wh_ModUninit` is not called.
+  Possible follow-up: periodic "still waiting on thread N" log while draining.
 - [ ] Active-only preview mode + single-window flyouts: not planned while
   taskbar-active-window-highlight covers that use case.
 

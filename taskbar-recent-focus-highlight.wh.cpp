@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.21
+// @version         0.11.22
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -79,11 +79,16 @@ to clear highlights.
   The taskbar, desktop, Start, and IME stay ignored.
 - Multi-monitor: the same rank is applied on every taskbar that shows that
   app.
-- Verbose bind / preview-resolve lines go to Windhawk’s **Mod logs** (Advanced
-  tab). There is no extra in-mod debug toggle.
-- Taskband identity resolve is adapted from
+- All mod log lines are plain `Wh_Log` output: they appear only when the
+  mod's logging (Advanced tab) is set to **Mod logs** or **Detailed debug
+  logs**, and nothing is logged with **None**. There is no extra in-mod
+  debug toggle.
+- Button → task group capture is adapted from
   [taskbar-volume-control-per-app](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-volume-control-per-app.wh.cpp);
-  thumbnail HWND mapping from
+  button windows and preview cards use the public WindowsUdk task
+  interfaces, as in
+  [taskbar-active-window-highlight](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-active-window-highlight.wh.cpp);
+  the flyout `ItemsRepeater` handling follows
   [taskbar-thumbnail-reorder](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-thumbnail-reorder.wh.cpp).
 */
 // ==/WindhawkModReadme==
@@ -6850,8 +6855,8 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
             true,
         },
         {
-            // Optional: capture the live Thumbnails collection (same as
-            // taskbar-thumbnail-reorder).
+            // Optional: flyout retargeted to another button; clear and
+            // repaint its cards (symbol as in taskbar-thumbnail-reorder).
             {LR"(private: void __cdecl winrt::Taskbar::implementation::HoverFlyoutModel::TargetItemKey(struct winrt::hstring const &))"},
             &HoverFlyoutModel_TargetItemKey_Original,
             HoverFlyoutModel_TargetItemKey_Hook,
