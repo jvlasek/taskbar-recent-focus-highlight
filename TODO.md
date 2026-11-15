@@ -1,6 +1,6 @@
-# Next release
+# 0.12.0 submission backlog
 
-Baseline: 0.11.1. This is a backlog, not a list of confirmed defects or a
+Current: 0.11.22 (baseline of this list was 0.11.1). This is a backlog, not a list of confirmed defects or a
 commitment to ship every item in the next release.
 
 ## Known visual issue
@@ -24,7 +24,7 @@ commitment to ship every item in the next release.
   native hover visible, e.g. lower plate opacity) or the plate should win.
   Verify unload/settings change still restore any native brush we touched.
 
-- [ ] **Closing a ranked preview does not repaint the remaining ranks.**
+- [x] **Closing a ranked preview does not repaint the remaining ranks.**
   Repro: multi-window flyout (Calculator, 12 windows), close the rank-2
   window from the flyout; the old rank 3 keeps its rank-3 tint instead of
   taking the rank-2 look. Log `manual-20261115-142933-523175`, 14:54:12-17:
@@ -60,12 +60,18 @@ commitment to ship every item in the next release.
   `TaskItemThumbnail` (likely its view model), and pass 1 never matches:
   every preview rank so far rested on the index fallback. This is probably
   the main preview-reliability bug, not only a close-time issue.
+  **Done (0.11.2/0.11.3), verified live 2026-11-15:** view-model resolve
+  fixed the shifted pairing; `ElementClearing` repaints right after a close.
+  Remaining caveat moved to the full-pane hover item below.
 
 - [ ] Investigate hover behavior with full-pane highlighting. Capture the
   affected style/theme, active and inactive states, native child order and
   ZIndex, and before/during/after-hover screenshots before choosing a fix.
   Preserve native glyphs, badges, progress and running indicators; move or
   repaint only our overlays. Include Taskbar Styler full-cell hover plates.
+  Also seen 2026-11-15: a window's whole-pane highlight fully replaces the
+  preview title tint on that card.
+
 
 ## Automated regression framework and dedicated VM image
 
@@ -77,15 +83,22 @@ commitment to ship every item in the next release.
   consequence of passing runtime tests.
 
 - [ ] Establish a Windows-build compatibility baseline, including 26H2.
-  Record OS build, Taskbar.View.dll/taskbar.dll versions and hashes, and
-  resolved required/optional symbols alongside live test results. Compare
-  pre/post-update binaries; identical files do not prove identical behavior
-  when feature activation changes the executed paths.
-- [ ] Audit private task-item ABI assumptions against that baseline:
-  QueryViaVtable, task-item array offsets, interface projections, and the
-  immersive GetThumbnailWindow getter. Bounded probing is not proof of safety
-  on another build. Prefer known symbol-resolved interfaces where evidence
-  supports them; keep missing identity fail-closed and add no guessing fallback.
+  Record OS build, Taskbar.View.dll / windowsudk.shellcommon.dll versions and
+  hashes, and resolved required/optional symbols alongside live test results
+  (no taskbar.dll symbols since 0.11.20). Compare pre/post-update binaries;
+  identical files do not prove identical behavior when feature activation
+  changes the executed paths.
+- [ ] Audit the remaining private assumptions against that baseline. Gone
+  since 0.11.18-0.11.20: QueryViaVtable, task-item array offsets, the
+  GetNumItems probe, ReportClicked sentinel, GetThumbnailWindow. Left:
+  Taskbar.View.dll symbol hooks (decorated names), the
+  `TaskListWindowViewModel` -> TaskItem/TaskGroup getters, the
+  IsMultiWindow + `ITaskGroup::IsRunning` capture used to reach a button's
+  TaskGroup, the `Window: 0x…` AutomationId parse (Never Combine), and the
+  WindowsUdk IIDs / vtable slots copied from windowsudk.winmd. Keep missing
+  identity fail-closed and add no guessing fallback. Possible follow-up:
+  replace the IsRunning capture with a public lookup (button AppId ->
+  `TaskbarAppsList.Groups`).
 - [ ] Validate 0.11.1 grouped-window close behavior: close the sampled window
   while siblings remain, including same-process and separate-process groups.
   Check identity continuity, eventual async resolution, and slot release when
@@ -126,7 +139,7 @@ first, then the low-risk preview fixes, then identity.
     content?). `EXPLORER-OTHER` — we accepted a window Explorer does not
     call active (owned dialogs / tool windows; check owner/tool fields).
   - `no mod key` — Explorer active window our resolver rejects.
-- [ ] Preview cards: resolve HWND via card -> `ThumbnailSource` -> view model
+- [x] Preview cards: resolve HWND via card -> `ThumbnailSource` -> view model
   -> `TaskItemThumbnail.ParentItem.WindowId` as pass 0; keep ctor map and
   GetAt as fallbacks until logs show they are never needed.
   **Implemented on this branch, needs live check:** startup logs
@@ -134,11 +147,15 @@ first, then the low-risk preview fixes, then identity.
   with `vm=` filled. Watch for `view model ... != ctor map` (disagreement)
   and the one-time `card DataContext class=` line (explains the old miss).
   Retest the close-ranked-preview bug above.
-- [ ] Preview cards: hook `TaskItemThumbnailView::put_ThumbnailSource` so
+  **Done:** verified live (100% `how=viewmodel`); ctor map and GetAt
+  fallbacks removed in 0.11.19.
+- [x] Preview cards: hook `TaskItemThumbnailView::put_ThumbnailSource` so
   recycled cards repaint (suspected cause of stale/missing preview marks).
   **Implemented on this branch** (coalesced flyout refresh). Check whether
   closing a card fires it; if not, close still waits for the decay tick.
-- [ ] Use `ActiveItem` as a third focus source next to WinEvents and the
+  **Done:** rebinds repaint via this hook; closes via `ElementClearing`
+  (0.11.3). Verified live 2026-11-15.
+- [x] Use `ActiveItem` as a third focus source next to WinEvents and the
   shell hook, if shadow logs show `MOD-MISSED` cases it would cover and no
   `HWND-MISMATCH` for UWP.
   **2026-11-15:** not needed so far. No `MOD-MISSED` in any capture,
@@ -150,7 +167,8 @@ first, then the low-risk preview fixes, then identity.
   owned dialogs, fixed in 0.11.5-0.11.7. Shadow check removed in 0.11.21
   (revive from branch `shadow-appid-diagnostics` if a real miss shows up). Respect per-taskbar apps lists: only the list that
   reported a window may clear it.
-- [ ] Group windows via `TaskbarAppsList.Groups` items' `WindowId` instead of
+  **Closed, not adopted:** WinEvents + shell hook covered every case seen.
+- [x] Group windows via `TaskbarAppsList.Groups` items' `WindowId` instead of
   the `CTaskGroup::GetNumItems` offset probe. **0.11.8/0.11.9:** shadow
   comparison per button via `ITaskGroup.get_Items` (IIDs from
   windowsudk.winmd). First run: UWP differs only by CoreWindow (old) vs
@@ -171,8 +189,7 @@ first, then the low-risk preview fixes, then identity.
   confirmation (user decision 2026-11-15: clicks wait the 1 s preview minimum
   like any focus) and with it every taskbar.dll hook: HandleClick (required),
   CWindowTaskItem/CImmersiveTaskItem getters and four vftables,
-  QueryViaVtable, LoadLibrary/FreeLibrary of taskbar.dll. Phase 3: preview click confirmation
-  (HandleClick + vtable-probed GetWindowForThumbnailTaskItem).
+  QueryViaVtable, LoadLibrary/FreeLibrary of taskbar.dll.
 - [x] **Never Combine: one button = one window** (user, 2026-11-15).
   Verified on 0.11.15 (`manual-20261115-222407-856139`): 49 window buttons
   detected, ranks per window (Claude, Calculator window A, Calculator window
@@ -202,7 +219,7 @@ first, then the low-risk preview fixes, then identity.
   Lister are two apps now; requested 2026-11-15: one button = one app).
   Expect the TC `SPLIT` to disappear from shadow logs. Still open: apps
   whose AUMID is process-level only (not on the window) stay path-keyed.
-- [ ] Switch app keys to `TaskGroup.AppId` only after shadow logs are clean
+- [ ] (Deferred, not for 0.12.0) Switch app keys to `TaskGroup.AppId` only after shadow logs are clean
   (needs the shadow branch revived; not planned for 0.12.0).
   Keep window-level (WindowId) matching first so Never Combine buttons of one
   AppId do not all light up. Plan exclude-list migration (keys change from
@@ -218,8 +235,9 @@ first, then the low-risk preview fixes, then identity.
   with stale globals. A failed `Wh_ModInit` (returns FALSE) is silent in the
   UI: the toggle stays on, `Wh_ModUninit` is not called.
   Possible follow-up: periodic "still waiting on thread N" log while draining.
-- [ ] Active-only preview mode + single-window flyouts: not planned while
-  taskbar-active-window-highlight covers that use case.
+- [ ] Active-only preview mode + single-window flyouts: user decision
+  pending (parked 2026-11-15 until after the cleanup; mod is now about 309 KB
+  vs about 24 KB for taskbar-active-window-highlight, which covers this).
 
 ## Optional enhancement
 
