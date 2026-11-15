@@ -13,7 +13,9 @@ launch-key burst with flashing windows, first activations from the flyout
 frames; all 11 intervals of at least 1 s were confirmed by the mod, the other
 12 were shorter than the preview minimum. Shadow ActiveItem check: no
 `MOD-MISSED`. The first-activation gap did not reproduce with the shell-hook
-activation path in place.
+activation path in place. **Coverage caveat (user):** only one Calculator
+flashed on launch in this run, so the flashing first-activation path has a
+single sample; repeat until several windows flash before calling it fixed.
 
 Times below are local UTC+02:00; foreground.jsonl stores UTC.
 
