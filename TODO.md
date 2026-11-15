@@ -156,7 +156,13 @@ first, then the low-risk preview fixes, then identity.
   GetWindowFromTaskItem / the ReportClicked-sentinel native lookups (and the
   required symbols they need), and re-check UWP button identities
   (Settings / Store / Calculator must keep separate `APPID:` keys).
-- [ ] **Never Combine: one button = one window** (user, 2026-11-15). With
+- [ ] **Never Combine: one button = one window** (user, 2026-11-15).
+  Observed on 0.11.10: both VS Code buttons ("2 running windows") lit, since
+  each uncombined button listed the whole group and the path/AppId fallback
+  matched. **0.11.11:** an uncombined button (own TaskItem inside a group of
+  2+) lists only its own window; each window's app-level confirmation is
+  kept; an app with uncombined windows ranks one slot per confirmed window
+  (`perWindow`), matched only by exact window. Needs a live check. With
   combining off, each button is its own unit and should rank on its own
   window, not light up with every button of the same app. Check what a
   Never Combine button's window list contains (whole group or its own

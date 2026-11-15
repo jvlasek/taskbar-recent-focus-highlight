@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.10
+// @version         0.11.11
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -478,6 +478,9 @@ struct AppFocusInfo {
     ULONGLONG lastConfirmedFocusTick = 0;
     // True once we saw a TaskListButton for this path (path cache / bind).
     bool seenOnTaskbar = false;
+    // Rank unit is one window (lastHwnd), not the app: set on the per-window
+    // slots RecomputeRanks makes for uncombined buttons (Never Combine).
+    bool perWindow = false;
 };
 
 struct PendingFocus {
@@ -533,7 +536,24 @@ struct GuidEqual {
 };
 
 // App + window recency for one virtual desktop (session-wide, not per-monitor).
+// App-level (min-focus) confirmation of one window. Only used to split an
+// app into per-window rank slots when its windows have their own taskbar
+// buttons ("Never combine" / "combine when full"): one button = one unit.
+struct WindowAppFocus {
+    std::wstring key;
+    std::wstring title;
+    DWORD pid = 0;
+    ULONGLONG tick = 0;
+};
+
+// Windows that own a taskbar button inside a multi-window group (an
+// uncombined button). Written by the UI capture, read by RecomputeRanks.
+// Lock order: g_stateMutex, then g_uncombinedMutex (never the reverse).
+std::mutex g_uncombinedMutex;
+std::unordered_set<HWND, HwndHash> g_uncombinedWindows;
+
 struct DesktopRecencyState {
+    std::unordered_map<HWND, WindowAppFocus, HwndHash> windowAppFocus;
     std::unordered_map<std::wstring, AppFocusInfo> appFocusMap;
     std::vector<AppFocusInfo> rankedApps;
     std::unordered_map<HWND, WindowFocusInfo, HwndHash> windowFocusMap;
@@ -1780,6 +1800,59 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
         ++it;
     }
 
+    // Per-window slots. Drop dead/recycled/forgotten windows first.
+    for (auto it = desk.windowAppFocus.begin(); it != desk.windowAppFocus.end();) {
+        const bool keep = IsWindow(it->first) &&
+                          HwndMatchesStoredPid(it->first, it->second.pid) &&
+                          desk.appFocusMap.count(it->second.key) &&
+                          !IsTickDecayed(it->second.tick, decayMs, now);
+        it = keep ? std::next(it) : desk.windowAppFocus.erase(it);
+    }
+    {
+        std::unordered_set<HWND, HwndHash> uncombined;
+        {
+            std::lock_guard<std::mutex> lock(g_uncombinedMutex);
+            for (auto it = g_uncombinedWindows.begin();
+                 it != g_uncombinedWindows.end();) {
+                it = IsWindow(*it) ? std::next(it) : g_uncombinedWindows.erase(it);
+            }
+            uncombined = g_uncombinedWindows;
+        }
+        if (!uncombined.empty()) {
+            // An app is split when any of its confirmed windows has its own
+            // button; each confirmed window then is its own unit.
+            std::vector<AppFocusInfo> expanded;
+            for (auto& app : candidates) {
+                bool split = false;
+                for (const auto& [hwnd, w] : desk.windowAppFocus) {
+                    if (w.key == app.key && uncombined.count(hwnd)) {
+                        split = true;
+                        break;
+                    }
+                }
+                if (!split) {
+                    expanded.push_back(std::move(app));
+                    continue;
+                }
+                for (const auto& [hwnd, w] : desk.windowAppFocus) {
+                    if (w.key != app.key) {
+                        continue;
+                    }
+                    AppFocusInfo unit = app;
+                    unit.perWindow = true;
+                    unit.lastHwnd = hwnd;
+                    unit.lastPid = w.pid;
+                    unit.lastConfirmedFocusTick = w.tick;
+                    if (!w.title.empty()) {
+                        unit.lastWindowTitle = w.title;
+                    }
+                    expanded.push_back(std::move(unit));
+                }
+            }
+            candidates = std::move(expanded);
+        }
+    }
+
     std::sort(candidates.begin(), candidates.end(),
               [](const AppFocusInfo& a, const AppFocusInfo& b) {
                   return a.lastConfirmedFocusTick > b.lastConfirmedFocusTick;
@@ -2207,6 +2280,23 @@ std::wstring GetButtonAutomationAppId(FrameworkElement button) {
 bool IdentityMatchesRank(const ButtonIdentity& ident,
                          const AppFocusInfo& info) {
     const std::wstring& rankCls = info.classUpper;
+
+    // Per-window slot: only the button that lists exactly this window (an
+    // uncombined button lists just its own). No path/AppId fallback, or every
+    // button of the app would light up (Never Combine, 2026-11-15).
+    if (info.perWindow) {
+        if (!info.lastHwnd || !info.lastPid ||
+            !HwndMatchesStoredPid(info.lastHwnd, info.lastPid)) {
+            return false;
+        }
+        for (const auto& g : ident.groupWindows) {
+            if (g.hwnd == info.lastHwnd && g.pid == info.lastPid) {
+                return true;
+            }
+        }
+        return ident.sampleHwnd == info.lastHwnd &&
+               ident.samplePid == info.lastPid;
+    }
 
     auto hwndOnButton = [&](HWND h) -> bool {
         if (!h) {
@@ -4089,8 +4179,10 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         // TaskGroup's Items, each -> ITaskItem.WindowId. UWP gives the
         // ApplicationFrameWindow, the HWND focus tracking uses.
         auto udkItem = GetWindowsUdkTaskItemFromTaskListButton(el);
+        HWND ownWindow = nullptr;
         if (udkItem) {
             if (HWND h = HwndFromUdkTaskItem(udkItem.get())) {
+                ownWindow = h;
                 udkWindows.push_back(h);
                 udkAvailable = true;
             }
@@ -4108,6 +4200,27 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
                     }
                 }
             }
+        }
+        // Uncombined button: its own window item inside a group of several
+        // windows (Never combine / combine when full). The button stands for
+        // that window only, so list just it.
+        const bool uncombined = ownWindow && udkWindows.size() > 1;
+        {
+            bool changed = false;
+            std::lock_guard<std::mutex> lock(g_uncombinedMutex);
+            if (uncombined) {
+                changed = g_uncombinedWindows.insert(ownWindow).second;
+            } else if (ownWindow) {
+                changed = g_uncombinedWindows.erase(ownWindow) > 0;
+            }
+            if (changed) {
+                Wh_Log(L"Button windows: button=%p own=%p of %zu -> %s",
+                       data.buttonId, ownWindow, udkWindows.size(),
+                       uncombined ? L"uncombined (own slot)" : L"combined");
+            }
+        }
+        if (uncombined) {
+            udkWindows.assign(1, ownWindow);
         }
         if (!udkWindows.empty()) {
             usedUdk = true;
@@ -4727,7 +4840,13 @@ void ApplyAllHighlights_UIThread(bool allowIdentityRefresh) {
     Wh_Log(L"ApplyAllHighlights: %zu tracked buttons, %zu ranks desktop=%s",
            live.size(), ranks.size(), GuidToLogString(deskId).c_str());
     for (size_t i = 0; i < ranks.size(); ++i) {
-        Wh_Log(L"  rank list[%zu]: %s", i + 1, ranks[i].displayName.c_str());
+        if (ranks[i].perWindow) {
+            Wh_Log(L"  rank list[%zu]: %s window %p \"%s\"", i + 1,
+                   ranks[i].displayName.c_str(), ranks[i].lastHwnd,
+                   ranks[i].lastWindowTitle.c_str());
+        } else {
+            Wh_Log(L"  rank list[%zu]: %s", i + 1, ranks[i].displayName.c_str());
+        }
     }
 
     if (g_unloading.load() || ranks.empty()) {
@@ -8149,6 +8268,13 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         info.classUpper = classUpper;
         info.appIdUpper = appIdUpper;
         info.lastConfirmedFocusTick = now;
+        {
+            WindowAppFocus& w = desk.windowAppFocus[pending.hwnd];
+            w.key = pending.key;
+            w.title = pending.windowTitle;
+            w.pid = info.lastPid;
+            w.tick = now;
+        }
 
         // Preview min-focus is independent: do not stamp the current HWND
         // here. A window switch just before the app deadline must wait out
