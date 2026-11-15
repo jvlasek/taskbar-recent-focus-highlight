@@ -108,8 +108,11 @@ Explorer already knows the active window and each window's app; we rebuild
 both. Prefer its state where evidence supports it. Order matters: shadow
 first, then the low-risk preview fixes, then identity.
 
-- [ ] **Shadow AppId diagnostics (branch `shadow-appid-diagnostics`).**
-  Log-only. Hooks `TaskbarController::OnAppsListActiveItemChanged` and
+- [x] **Shadow AppId diagnostics** — done and removed in 0.11.21; the code
+  stays on branch `shadow-appid-diagnostics` (0.11.20, `508ade8`) and can be
+  revived from there. Result: no `MOD-MISSED`, no unexplained `MERGE`; the
+  TC/Lister `SPLIT` led to 0.11.4, the dialog mismatches to 0.11.5-0.11.7.
+  Original plan, for reference: log-only. Hooks `TaskbarController::OnAppsListActiveItemChanged` and
   records Explorer's active `WindowId` + `AppId`. Log lines start with
   `Shadow AppId:` / `Shadow focus:`. Run about a week with normal use,
   including Total Commander + Lister, Calculator, Terminal, Settings,
@@ -144,8 +147,8 @@ first, then the low-risk preview fixes, then identity.
   so the flashing path has one sample). Second run
   `focus-20261115-181122-546017`: two activations without any foreground
   WinEvent, both caught via the shell hook. The only mismatches were
-  owned dialogs, fixed in 0.11.5-0.11.7. Keep the shadow check; revisit if a
-  real miss shows up. Respect per-taskbar apps lists: only the list that
+  owned dialogs, fixed in 0.11.5-0.11.7. Shadow check removed in 0.11.21
+  (revive from branch `shadow-appid-diagnostics` if a real miss shows up). Respect per-taskbar apps lists: only the list that
   reported a window may clear it.
 - [ ] Group windows via `TaskbarAppsList.Groups` items' `WindowId` instead of
   the `CTaskGroup::GetNumItems` offset probe. **0.11.8/0.11.9:** shadow
@@ -199,7 +202,8 @@ first, then the low-risk preview fixes, then identity.
   Lister are two apps now; requested 2026-11-15: one button = one app).
   Expect the TC `SPLIT` to disappear from shadow logs. Still open: apps
   whose AUMID is process-level only (not on the window) stay path-keyed.
-- [ ] Switch app keys to `TaskGroup.AppId` only after shadow logs are clean.
+- [ ] Switch app keys to `TaskGroup.AppId` only after shadow logs are clean
+  (needs the shadow branch revived; not planned for 0.12.0).
   Keep window-level (WindowId) matching first so Never Combine buttons of one
   AppId do not all light up. Plan exclude-list migration (keys change from
   paths/AUMIDs).
