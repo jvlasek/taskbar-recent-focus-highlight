@@ -100,8 +100,15 @@ first, then the low-risk preview fixes, then identity.
 - [ ] Preview cards: resolve HWND via card -> `ThumbnailSource` -> view model
   -> `TaskItemThumbnail.ParentItem.WindowId` as pass 0; keep ctor map and
   GetAt as fallbacks until logs show they are never needed.
+  **Implemented on this branch, needs live check:** startup logs
+  `Preview resolve: view model on`; siblings should show `how=viewmodel`
+  with `vm=` filled. Watch for `view model ... != ctor map` (disagreement)
+  and the one-time `card DataContext class=` line (explains the old miss).
+  Retest the close-ranked-preview bug above.
 - [ ] Preview cards: hook `TaskItemThumbnailView::put_ThumbnailSource` so
   recycled cards repaint (suspected cause of stale/missing preview marks).
+  **Implemented on this branch** (coalesced flyout refresh). Check whether
+  closing a card fires it; if not, close still waits for the decay tick.
 - [ ] Use `ActiveItem` as a third focus source next to WinEvents and the
   shell hook, if shadow logs show `MOD-MISSED` cases it would cover and no
   `HWND-MISMATCH` for UWP. Respect per-taskbar apps lists: only the list that

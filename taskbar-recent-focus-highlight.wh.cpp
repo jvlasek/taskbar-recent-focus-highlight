@@ -4693,6 +4693,90 @@ HWND ResolveHwndFromThumbnailModel(
     return nullptr;
 }
 
+// ---------------------------------------------------------------------------
+// WindowsUdk.UI.Shell / Taskbar.View interfaces (Explorer's own bindings)
+// ---------------------------------------------------------------------------
+// IIDs and method order from windowsudk.winmd; Taskbar.* IIDs are guid_v
+// constants from Taskbar.View.dll symbols. Same declarations as
+// taskbar-active-window-highlight (EphremTil17, GPL-3.0). A changed interface
+// changes its IID, the QueryInterface fails and the card stays unresolved.
+
+constexpr GUID IID_Wudk_ITaskItemThumbnailView = {
+    0xF093D5DE, 0xB516, 0x55A2, {0xB1, 0x37, 0x4E, 0x12, 0x5E, 0x37, 0xCA, 0xF4}};
+constexpr GUID IID_Wudk_ITaskItemThumbnailViewModel = {
+    0xA5D30F97, 0x5BC4, 0x58AE, {0xB4, 0x48, 0xB1, 0x54, 0x8A, 0x1A, 0x92, 0x9D}};
+constexpr GUID IID_Wudk_ITaskItemThumbnail = {
+    0xD7DC08AE, 0x776E, 0x5871, {0xBC, 0xEE, 0x25, 0x0D, 0xBC, 0x94, 0xD0, 0x37}};
+
+// Leading members only; declared order matches windowsudk.winmd.
+struct WudkITaskItemAbi : ::IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_AppId(HSTRING* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_UniqueId(UINT64* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_WindowId(UINT64* value) = 0;
+};
+struct WudkITaskItemThumbnailAbi : ::IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_DisplayName(HSTRING* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AccessibleName(HSTRING* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ParentItem(WudkITaskItemAbi** value) = 0;
+};
+
+// Interface getters of Taskbar.View.dll types (optional symbols). Called with
+// the interface pointer obtained by QueryInterface for that interface's IID.
+using WudkGetObject_t = int32_t(WINAPI*)(void* pThis, void** value);
+WudkGetObject_t TaskItemThumbnailView_get_ThumbnailSource;
+WudkGetObject_t TaskItemThumbnailViewModel_get_TaskItemThumbnail;
+
+// Strongest resolve: the window Explorer itself bound to this card.
+// card -> ThumbnailSource (view model) -> TaskItemThumbnail -> ParentItem
+// -> WindowId. Per card, no ctor timing, no index; for UWP the WindowId is
+// the ApplicationFrameWindow (shadow log 2026-11-15), matching focus.
+HWND ResolveHwndFromCardViewModel(FrameworkElement const& card) {
+    if (!card || !TaskItemThumbnailView_get_ThumbnailSource ||
+        !TaskItemThumbnailViewModel_get_TaskItemThumbnail) {
+        return nullptr;
+    }
+    try {
+        auto* unknown = static_cast<::IUnknown*>(winrt::get_abi(card));
+        winrt::com_ptr<::IUnknown> view;
+        if (FAILED(unknown->QueryInterface(IID_Wudk_ITaskItemThumbnailView,
+                                           view.put_void()))) {
+            return nullptr;
+        }
+        winrt::com_ptr<::IUnknown> source;
+        if (TaskItemThumbnailView_get_ThumbnailSource(view.get(),
+                                                      source.put_void()) < 0 ||
+            !source) {
+            return nullptr;
+        }
+        winrt::com_ptr<::IUnknown> viewModel;
+        if (FAILED(source->QueryInterface(IID_Wudk_ITaskItemThumbnailViewModel,
+                                          viewModel.put_void()))) {
+            return nullptr;
+        }
+        winrt::com_ptr<::IUnknown> thumbnailObject;
+        if (TaskItemThumbnailViewModel_get_TaskItemThumbnail(
+                viewModel.get(), thumbnailObject.put_void()) < 0 ||
+            !thumbnailObject) {
+            return nullptr;
+        }
+        winrt::com_ptr<WudkITaskItemThumbnailAbi> thumbnail;
+        if (FAILED(thumbnailObject->QueryInterface(IID_Wudk_ITaskItemThumbnail,
+                                                   thumbnail.put_void()))) {
+            return nullptr;
+        }
+        winrt::com_ptr<WudkITaskItemAbi> item;
+        UINT64 windowId = 0;
+        if (FAILED(thumbnail->get_ParentItem(item.put())) || !item ||
+            FAILED(item->get_WindowId(&windowId))) {
+            return nullptr;
+        }
+        HWND hwnd = reinterpret_cast<HWND>(windowId);
+        return IsWindow(hwnd) ? hwnd : nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 HWND ResolveHwndForThumbnailView(FrameworkElement thumbView,
                                  void** outTaskGroup = nullptr) {
     if (outTaskGroup) {
@@ -5688,12 +5772,16 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     }
 
     // HWND pipeline (this flyout only — not a global window ladder):
+    //   0. ViewModel — Explorer's own card binding (ParentItem.WindowId).
+    //      Per card, cannot shift when cards are removed or recycled.
     //   1. TaskItem — DataContext ↔ ctor map (COM identity, per card).
+    //      On 26100-era builds the DataContext never matched (0 of 300+
+    //      cards, 2026-11-15); kept as fallback and for comparison logs.
     //   2. Repeater index + Thumbnails.GetAt — holes only. The collection is
     //      cleared on TargetItemKey entry and recaptured for this target;
     //      still skip GetAt if it disagrees with a DataContext HWND.
     // No unique-title fallback. A card that misses both stays unmarked.
-    enum class ResolveHow : int { None = 0, Repeater, TaskItem };
+    enum class ResolveHow : int { None = 0, Repeater, TaskItem, ViewModel };
     struct Scored {
         FrameworkElement view{nullptr};
         HWND hwnd = nullptr;
@@ -5701,6 +5789,8 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         ULONGLONG confirmSeq = 0;
         ResolveHow how = ResolveHow::None;
         int rank = 0;  // 1-based flyout rank; 0 = not highlighted
+        HWND viaViewModel = nullptr;  // diagnostics: each resolver's answer
+        HWND viaCtorMap = nullptr;
     };
     std::vector<Scored> scored(siblings.size());
     std::unordered_set<HWND> usedHwnds;
@@ -5738,9 +5828,41 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         scored[i].view = siblings[i];
     }
 
-    // Pass 1: DataContext ↔ ctor map. Exact, per card, cannot go stale.
+    // Pass 0: card view model -> ParentItem.WindowId.
+    for (size_t i = 0; i < siblings.size(); ++i) {
+        HWND hwnd = ResolveHwndFromCardViewModel(siblings[i]);
+        scored[i].viaViewModel = hwnd;
+        if (hwnd && !usedHwnds.count(hwnd)) {
+            stampRecency(i, hwnd);
+            scored[i].how = ResolveHow::ViewModel;
+            usedHwnds.insert(hwnd);
+        }
+    }
+
+    // Pass 1: DataContext ↔ ctor map, holes only. Always evaluated so the
+    // log can compare it with pass 0.
+    static bool s_loggedDataContextClass = false;
     for (size_t i = 0; i < siblings.size(); ++i) {
         HWND hwnd = ResolveHwndForThumbnailView(siblings[i]);
+        scored[i].viaCtorMap = hwnd;
+        if (!hwnd && !s_loggedDataContextClass) {
+            s_loggedDataContextClass = true;
+            try {
+                auto dc = siblings[i].DataContext();
+                Wh_Log(L"Preview resolve: ctor map miss; card DataContext "
+                       L"class=%s",
+                       dc ? winrt::get_class_name(dc).c_str() : L"(null)");
+            } catch (...) {
+            }
+        }
+        if (scored[i].hwnd) {
+            if (hwnd && hwnd != scored[i].hwnd) {
+                Wh_Log(L"Preview resolve: card %zu view model %p != ctor map "
+                       L"%p (using view model)",
+                       i, scored[i].hwnd, hwnd);
+            }
+            continue;
+        }
         if (hwnd && IsWindow(hwnd) && !usedHwnds.count(hwnd)) {
             stampRecency(i, hwnd);
             scored[i].how = ResolveHow::TaskItem;
@@ -5794,7 +5916,8 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         };
         if (indexBindTrusted) {
             for (size_t i = 0; i < siblings.size(); ++i) {
-                if (scored[i].how != ResolveHow::TaskItem) {
+                if (scored[i].how != ResolveHow::TaskItem &&
+                    scored[i].how != ResolveHow::ViewModel) {
                     continue;
                 }
                 const int idx = getAtIndexForSibling(i);
@@ -5873,6 +5996,9 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
                 case ResolveHow::TaskItem:
                     how = L"taskitem";
                     break;
+                case ResolveHow::ViewModel:
+                    how = L"viewmodel";
+                    break;
                 default:
                     break;
             }
@@ -5883,11 +6009,12 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
             } catch (...) {
             }
             Wh_Log(L"  sibling[%zu]: hwnd=%p tick=%llu how=%s rank=%d%s "
-                   L"name=\"%s\"",
+                   L"vm=%p map=%p name=\"%s\"",
                    i, scored[i].hwnd,
                    static_cast<unsigned long long>(scored[i].tick), how,
                    scored[i].rank,
-                   scored[i].rank > 0 ? L" [GLOW]" : L"", name.c_str());
+                   scored[i].rank > 0 ? L" [GLOW]" : L"",
+                   scored[i].viaViewModel, scored[i].viaCtorMap, name.c_str());
         }
     }
 
@@ -6432,6 +6559,34 @@ void WINAPI TaskItemThumbnailView_OnApplyTemplate_Hook(void* pThis) {
     }
 }
 
+// A card was bound to a (possibly different) window: realized, recycled by
+// the ItemsRepeater, or rebound after another card was removed. OnApplyTemplate
+// only runs on first realization, so without this a reused card kept the
+// previous window's rank paint until the flyout reopened.
+using TaskItemThumbnailView_put_ThumbnailSource_t = int32_t(WINAPI*)(void* pThis,
+                                                                     void* source);
+TaskItemThumbnailView_put_ThumbnailSource_t
+    TaskItemThumbnailView_put_ThumbnailSource_Original;
+int32_t WINAPI TaskItemThumbnailView_put_ThumbnailSource_Hook(void* pThis,
+                                                              void* source) {
+    const int32_t result =
+        TaskItemThumbnailView_put_ThumbnailSource_Original(pThis, source);
+    if (g_unloading.load() || !SettingsSnap()->previewHighlightEnabled) {
+        return result;
+    }
+    try {
+        FrameworkElement card = nullptr;
+        static_cast<::IUnknown*>(pThis)->QueryInterface(
+            winrt::guid_of<FrameworkElement>(), winrt::put_abi(card));
+        if (card) {
+            // Coalesced: a flyout binding N cards schedules one refresh.
+            SchedulePreviewFlyoutRefresh(card);
+        }
+    } catch (...) {
+    }
+    return result;
+}
+
 // Clicks request fresh identity metadata without waiting for it on the UI thread.
 using TaskListButton_OnPointerPressed_t = int(WINAPI*)(void* pThis, void* pArgs);
 TaskListButton_OnPointerPressed_t TaskListButton_OnPointerPressed_Original;
@@ -6494,11 +6649,7 @@ constexpr GUID IID_Shadow_ITaskbarAppsList = {
     0xABD50A67, 0x1E54, 0x536C, {0x82, 0x27, 0xB4, 0xF1, 0xA1, 0x25, 0xA7, 0xFE}};
 
 // Leading members only; declared order matches windowsudk.winmd.
-struct ShadowITaskItemAbi : ::IInspectable {
-    virtual HRESULT STDMETHODCALLTYPE get_AppId(HSTRING* value) = 0;
-    virtual HRESULT STDMETHODCALLTYPE get_UniqueId(UINT64* value) = 0;
-    virtual HRESULT STDMETHODCALLTYPE get_WindowId(UINT64* value) = 0;
-};
+using ShadowITaskItemAbi = WudkITaskItemAbi;
 struct ShadowITaskbarAppsListAbi : ::IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_Groups(::IInspectable** value) = 0;
     virtual HRESULT STDMETHODCALLTYPE get_ActiveGroup(::IInspectable** value) = 0;
@@ -6873,6 +7024,26 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
             true,
         },
         {
+            // Optional: card view model -> window (preview resolve pass 0).
+            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::Taskbar::implementation::TaskItemThumbnailView,struct winrt::Taskbar::ITaskItemThumbnailView>::get_ThumbnailSource(void * *))"},
+            &TaskItemThumbnailView_get_ThumbnailSource,
+            nullptr,
+            true,
+        },
+        {
+            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::Taskbar::implementation::TaskItemThumbnailViewModel,struct winrt::Taskbar::ITaskItemThumbnailViewModel>::get_TaskItemThumbnail(void * *))"},
+            &TaskItemThumbnailViewModel_get_TaskItemThumbnail,
+            nullptr,
+            true,
+        },
+        {
+            // Optional: repaint when a card is rebound to another window.
+            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::Taskbar::implementation::TaskItemThumbnailView,struct winrt::Taskbar::ITaskItemThumbnailView>::put_ThumbnailSource(void *))"},
+            &TaskItemThumbnailView_put_ThumbnailSource_Original,
+            TaskItemThumbnailView_put_ThumbnailSource_Hook,
+            true,
+        },
+        {
             // Optional, shadow diagnostics only: Explorer's active task item.
             {LR"(private: void __cdecl winrt::Taskbar::implementation::TaskbarController::OnAppsListActiveItemChanged(struct winrt::WindowsUdk::UI::Shell::TaskbarAppsList const &,struct winrt::Windows::Foundation::IInspectable const &))"},
             &TaskbarController_OnAppsListActiveItemChanged_Original,
@@ -6885,6 +7056,14 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
         Wh_Log(L"HookSymbols failed for Taskbar.View.dll");
         return false;
     }
+
+    Wh_Log(L"Preview resolve: view model %s, rebind repaint %s",
+           (TaskItemThumbnailView_get_ThumbnailSource &&
+            TaskItemThumbnailViewModel_get_TaskItemThumbnail)
+               ? L"on"
+               : L"unavailable",
+           TaskItemThumbnailView_put_ThumbnailSource_Original ? L"on"
+                                                              : L"unavailable");
 
     if (kShadowAppIdDiagnostics) {
         g_shadowEnabled = TaskbarController_OnAppsListActiveItemChanged_Original !=
