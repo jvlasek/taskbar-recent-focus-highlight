@@ -5,6 +5,36 @@ commitment to ship every item in the next release.
 
 ## Known visual issue
 
+- [ ] **Closing a ranked preview does not repaint the remaining ranks.**
+  Repro: multi-window flyout (Calculator, 12 windows), close the rank-2
+  window from the flyout; the old rank 3 keeps its rank-3 tint instead of
+  taking the rank-2 look. Log `manual-20261115-142933-523175`, 14:54:12-17:
+  ranks are recomputed correctly (old rank 3 `A2A01B0` -> rank 2), but the
+  repaint at 14:54:17 came from `OnDecayTimer` ("Preview decay: windows 15 ->
+  14"), about 5 s after the close, not from the close itself. Nothing in the
+  flyout refresh path fires when a card is removed, so the stale paint lasts
+  until the next decay tick (up to 30 s), retarget or reopen. Fix: refresh
+  the flyout when its window set shrinks (card removal / ItemsRepeater
+  ElementClearing, or window destroy for a mapped HWND), plus the planned
+  `put_ThumbnailSource` hook for cards that get rebound.
+  **Update (user):** it stays wrong as long as the flyout is open, also after
+  the logged 14:54:17 repaint (`rank 2 ... intensity=60`); only clicking the
+  taskbar icon (retarget/reopen) fixes it. So the paint lands on the wrong
+  card. Every sibling in that flyout resolved `how=repeater`, none
+  `how=taskitem`: the DataContext/ctor map missed all 12 Calculator cards and
+  only the index fallback (repeater index -> `Thumbnails.GetAt`) was used.
+  After a removal the repeater can hold recycled/removed elements with stale
+  indices, so the HWND-to-card pairing shifts even though the size check
+  passes. Fix with the view-model resolve (card -> `ThumbnailSource` -> view
+  model -> `ParentItem.WindowId`) as pass 0; it is per card and cannot shift.
+  Also log why pass 1 misses (no DataContext vs no ctor-map entry).
+  Whole session: 217 `how=repeater`, 97 `how=none`, **0 `how=taskitem`**,
+  although the ctor hooks are installed and the map is full (12 maps for 12
+  cards). So on this build the card DataContext is not the
+  `TaskItemThumbnail` (likely its view model), and pass 1 never matches:
+  every preview rank so far rested on the index fallback. This is probably
+  the main preview-reliability bug, not only a close-time issue.
+
 - [ ] Investigate hover behavior with full-pane highlighting. Capture the
   affected style/theme, active and inactive states, native child order and
   ZIndex, and before/during/after-hover screenshots before choosing a fix.
