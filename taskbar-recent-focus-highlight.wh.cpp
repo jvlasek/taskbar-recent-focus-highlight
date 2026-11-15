@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.2
+// @version         0.11.3
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -4884,6 +4884,139 @@ std::vector<FrameworkElement> CollectSiblingThumbnailViews(
 // automation peer may not refresh after a thumbnail reorder).
 // outSourceIndex is parallel to the returned views and holds the ItemsSource
 // index (skips of unrealized elements must not shift GetAt).
+// ---------------------------------------------------------------------------
+// Flyout ItemsRepeater: repaint when a card is removed
+// ---------------------------------------------------------------------------
+// Closing a window from the flyout removes its card without rebinding the
+// others (no put_ThumbnailSource, no OnApplyTemplate), so the remaining
+// ranks kept their old paint until focus changed or the flyout reopened
+// (capture manual-20261115-152151, 15:23:03 -> 15:23:20). ElementClearing
+// fires when the repeater removes or recycles a card. Subscribed once per
+// repeater on its UI thread; revoked there at unload.
+
+namespace muxc = winrt::Microsoft::UI::Xaml::Controls;
+
+void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor);
+
+struct RepeaterClearingWatch {
+    winrt::weak_ref<muxc::ItemsRepeater> repeater;
+    winrt::event_token token{};
+};
+std::mutex g_repeaterWatchMutex;
+std::unordered_map<void*, RepeaterClearingWatch> g_repeaterWatches;
+
+void WatchRepeaterElementClearing_UIThread(muxc::ItemsRepeater const& repeater) {
+    if (!repeater || g_unloading.load()) {
+        return;
+    }
+    void* id = InspectableIdentity(repeater);
+    if (!id) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_repeaterWatchMutex);
+        // A dead repeater's address can be reused by a new one: drop it.
+        for (auto it = g_repeaterWatches.begin(); it != g_repeaterWatches.end();) {
+            bool dead = true;
+            try {
+                dead = !it->second.repeater.get();
+            } catch (...) {
+            }
+            it = dead ? g_repeaterWatches.erase(it) : std::next(it);
+        }
+        if (g_repeaterWatches.count(id)) {
+            return;
+        }
+    }
+    winrt::event_token token{};
+    try {
+        token = repeater.ElementClearing(
+            [](muxc::ItemsRepeater const& sender,
+               muxc::ItemsRepeaterElementClearingEventArgs const& args) {
+                if (g_unloading.load() ||
+                    !SettingsSnap()->previewHighlightEnabled) {
+                    return;
+                }
+                try {
+                    FrameworkElement anchor = nullptr;
+                    if (auto el = args.Element()) {
+                        anchor = el.try_as<FrameworkElement>();
+                    }
+                    if (!anchor) {
+                        anchor = sender.try_as<FrameworkElement>();
+                    }
+                    // Low priority, after layout: the card set has changed by
+                    // then. Coalesced with other refresh requests.
+                    SchedulePreviewFlyoutRefresh(anchor);
+                } catch (...) {
+                }
+            });
+    } catch (...) {
+        return;
+    }
+    if (!token) {
+        return;
+    }
+    bool raced = false;
+    {
+        std::lock_guard<std::mutex> lock(g_repeaterWatchMutex);
+        raced = !g_repeaterWatches
+                     .emplace(id, RepeaterClearingWatch{winrt::make_weak(repeater),
+                                                        token})
+                     .second;
+    }
+    if (raced) {
+        try {
+            repeater.ElementClearing(token);
+        } catch (...) {
+        }
+    } else {
+        Wh_Log(L"Preview: watching flyout repeater %p for card removal", id);
+    }
+}
+
+// Unload: revoke the watches owned by this dispatcher; keep the others for
+// their own dispatcher's pass.
+void RevokeRepeaterWatchesOnThisDispatcher() {
+    std::unordered_map<void*, RepeaterClearingWatch> taken;
+    {
+        std::lock_guard<std::mutex> lock(g_repeaterWatchMutex);
+        taken.swap(g_repeaterWatches);
+    }
+    std::unordered_map<void*, RepeaterClearingWatch> keep;
+    for (auto& [id, watch] : taken) {
+        muxc::ItemsRepeater repeater{nullptr};
+        try {
+            repeater = watch.repeater.get();
+        } catch (...) {
+        }
+        if (!repeater) {
+            continue;  // gone; nothing to revoke
+        }
+        bool mine = false;
+        try {
+            auto dispatcher = repeater.Dispatcher();
+            mine = dispatcher && dispatcher.HasThreadAccess();
+        } catch (...) {
+        }
+        if (!mine) {
+            keep.emplace(id, std::move(watch));
+            continue;
+        }
+        try {
+            repeater.ElementClearing(watch.token);
+        } catch (...) {
+            Wh_Log(L"ERROR: ElementClearing revoke failed");
+        }
+    }
+    if (!keep.empty()) {
+        std::lock_guard<std::mutex> lock(g_repeaterWatchMutex);
+        for (auto& [id, watch] : keep) {
+            g_repeaterWatches.emplace(id, std::move(watch));
+        }
+    }
+}
+
 std::vector<FrameworkElement> CollectRepeaterThumbnailViews(
     FrameworkElement thumbView,
     std::vector<int>* outSourceIndex) {
@@ -4901,6 +5034,7 @@ std::vector<FrameworkElement> CollectRepeaterThumbnailViews(
     if (!repeater) {
         return out;
     }
+    WatchRepeaterElementClearing_UIThread(repeater);
     try {
         auto itemsSourceView = repeater.ItemsSourceView();
         const int count = itemsSourceView ? itemsSourceView.Count() : 0;
@@ -8754,6 +8888,7 @@ void Wh_ModUninit() {
             ClearAllHighlights_UIThread();
             ClearAllThumbnailHighlights_UIThread();
             RevokeIconPanelLayoutWatchesOnThisDispatcher();
+            RevokeRepeaterWatchesOnThisDispatcher();
         })) {
         Wh_Log(L"ERROR: UI cleanup did not finish on every dispatcher");
     }
@@ -8762,6 +8897,15 @@ void Wh_ModUninit() {
         if (!g_layoutWatches.empty()) {
             Wh_Log(L"ERROR: %zu IconPanel SizeChanged watches not revoked",
                    g_layoutWatches.size());
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_repeaterWatchMutex);
+        // Entries left here belong to repeaters still alive on a dispatcher
+        // the drain did not reach.
+        if (!g_repeaterWatches.empty()) {
+            Wh_Log(L"ERROR: %zu flyout ElementClearing watches not revoked",
+                   g_repeaterWatches.size());
         }
     }
 

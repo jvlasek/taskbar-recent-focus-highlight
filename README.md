@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Version:** v0.11.2 — preview cards resolved through Explorer's own view
+**Version:** v0.11.3 — flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
 model (exact per card; see [investigation notes](doc/investigation-notes.md));
 log-only shadow AppId diagnostics. v0.11.1 base: foreground WinEvents plus validated shell activation
 notifications; no foreground recovery polling. Targeted Calculator recordings

@@ -28,6 +28,13 @@ commitment to ship every item in the next release.
   passes. Fix with the view-model resolve (card -> `ThumbnailSource` -> view
   model -> `ParentItem.WindowId`) as pass 0; it is per card and cannot shift.
   Also log why pass 1 misses (no DataContext vs no ctor-map entry).
+  **0.11.2/0.11.3 status:** view-model resolve verified live (152/152 cards
+  `how=viewmodel`, DataContext is null on these cards). Ranks after a close
+  are now correct, but the 0.11.2 capture showed no refresh for 17 s after
+  the close (`put_ThumbnailSource` does not fire on removal). 0.11.3 adds an
+  `ItemsRepeater.ElementClearing` watch; needs a live check that the repaint
+  follows the close immediately (`Preview: watching flyout repeater` line,
+  then a `Preview resolve` right after the close).
   Whole session: 217 `how=repeater`, 97 `how=none`, **0 `how=taskitem`**,
   although the ctor hooks are installed and the map is full (12 maps for 12
   cards). So on this build the card DataContext is not the
