@@ -3,7 +3,17 @@
 Evidence: `tests/uwspy/captures/focus-20261002-160114-719232`.
 Mod diagnostic version: 0.10.12. Observer: `foreground_observer.c`.
 User reproduced after repeated keyboard launches, with some windows flashing.
-Pinned/right-click launches did not reproduce in this session.
+"Keyboard launch" means the dedicated **Launch Calculator** key of a Microsoft
+Natural keyboard (remapped from a WWW key on this machine), not Win+R or Start
+search. Pinned/right-click launches did not reproduce in this session.
+
+**Re-test 2026-11-15 (0.11.7, `focus-20261115-180821-833502`):** the same
+launch-key burst with flashing windows, first activations from the flyout
+(some after a pause). Observer: 23 Calculator foreground intervals across 13
+frames; all 11 intervals of at least 1 s were confirmed by the mod, the other
+12 were shorter than the preview minimum. Shadow ActiveItem check: no
+`MOD-MISSED`. The first-activation gap did not reproduce with the shell-hook
+activation path in place.
 
 Times below are local UTC+02:00; foreground.jsonl stores UTC.
 
