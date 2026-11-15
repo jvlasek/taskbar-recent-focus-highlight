@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.24
+// @version         0.11.25
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -7942,7 +7942,69 @@ void StopWinEventHookThread() {
 // Settings load
 // ---------------------------------------------------------------------------
 
-void LoadSettings() {
+// Settings transition 0.11 -> 0.12 (remove a release or two after 0.12.0).
+// 0.11.1 had one preview style for all ranks, `previews.style`
+// (plateTitle = default hybrid, plate, titleBg, titleBar). 0.11.16 split it
+// into `previews.topStyle` + `previews.restStyle`. Windhawk keeps the old
+// stored value and has no migration mechanism (m417z, Discord 2026-11-16), so
+// a user who had picked a non-default style would silently get the new
+// defaults. When both new keys are unset or still at their defaults, use the
+// old choice for both ranks until the user first saves settings: from then on
+// the settings page is what they see. A mod cannot write its own settings, so
+// the state lives in mod storage: 0 = not checked yet, 1 = legacy style in
+// use, 2 = done. Older dev-only values (e.g. "ring") and the old default map
+// to nothing.
+constexpr wchar_t kLegacyPreviewStyleState[] = L"legacyPreviewStyleState";
+
+bool LegacyPreviewStyle(PreviewStyle& out) {
+    auto legacy = WindhawkUtils::StringSetting::make(L"previews.style");
+    const PCWSTR v = legacy.get();
+    if (wcscmp(v, L"plate") == 0) {
+        out = PreviewStyle::Plate;
+    } else if (wcscmp(v, L"titleBg") == 0) {
+        out = PreviewStyle::TitleBg;
+    } else if (wcscmp(v, L"titleBar") == 0) {
+        out = PreviewStyle::TitleBar;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+void ApplyLegacyPreviewStyle(Settings& s, bool userSavedSettings) {
+    int state = Wh_GetIntValue(kLegacyPreviewStyleState, 0);
+    if (state == 2) {
+        return;
+    }
+    if (userSavedSettings) {
+        if (state == 1) {
+            Wh_Log(L"Settings: legacy previews.style no longer applied "
+                   L"(settings saved)");
+        }
+        Wh_SetIntValue(kLegacyPreviewStyleState, 2);
+        return;
+    }
+    PreviewStyle legacy = PreviewStyle::Plate;
+    const bool haveLegacy = LegacyPreviewStyle(legacy);
+    if (state == 0) {
+        auto top = WindhawkUtils::StringSetting::make(L"previews.topStyle");
+        auto rest = WindhawkUtils::StringSetting::make(L"previews.restStyle");
+        const bool newAtDefaults =
+            (!*top.get() || wcscmp(top.get(), L"plate") == 0) &&
+            (!*rest.get() || wcscmp(rest.get(), L"titleBg") == 0);
+        state = (haveLegacy && newAtDefaults) ? 1 : 2;
+        Wh_SetIntValue(kLegacyPreviewStyleState, state);
+    }
+    if (state == 1 && haveLegacy) {
+        s.previewTopStyle = legacy;
+        s.previewRestStyle = legacy;
+        Wh_Log(L"Settings: using legacy previews.style=%s for all ranks until "
+               L"settings are saved",
+               PreviewStyleName(legacy));
+    }
+}
+
+void LoadSettings(bool userSavedSettings) {
     Settings s;
 
     s.highlightCount = Wh_GetIntSetting(L"highlightCount");
@@ -8124,6 +8186,7 @@ void LoadSettings() {
         parsePreviewStyle(L"previews.topStyle", PreviewStyle::Plate, false);
     s.previewRestStyle =
         parsePreviewStyle(L"previews.restStyle", PreviewStyle::TitleBg, true);
+    ApplyLegacyPreviewStyle(s, userSavedSettings);
     s.previewOutlineThickness = (std::max)(
         1, (std::min)(8, Wh_GetIntSetting(L"previews.outlineThickness")));
     s.previewOutlineFillOpacity = (std::max)(
@@ -8165,7 +8228,7 @@ BOOL Wh_ModInit() {
     Wh_Log(L"> init " WH_MOD_VERSION);
 
     g_unloading = false;
-    LoadSettings();
+    LoadSettings(/*userSavedSettings=*/false);
     {
         auto settings = SettingsSnap();
         if (settings->highlightCount <= 0 &&
@@ -8291,7 +8354,7 @@ void Wh_ModUninit() {
 void Wh_ModSettingsChanged() {
     Wh_Log(L">");
 
-    LoadSettings();
+    LoadSettings(/*userSavedSettings=*/true);
 
     std::vector<HWND> windowHwnds;
     {
