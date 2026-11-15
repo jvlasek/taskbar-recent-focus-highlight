@@ -5,6 +5,20 @@ commitment to ship every item in the next release.
 
 ## Known visual issue
 
+- [ ] **Hovering a rank-1 preview loses its whole-card plate.** Reported
+  2026-11-15 on 0.11.3: the title-bar tint (ranks 2+) survives hover, but the
+  rank-1 plate is replaced by Windows' own hover highlight. Cause: the plate
+  tints the card's native `BackgroundBorder.Background`, which the card's
+  PointerOver visual state sets too, so hover wins; the title tint lives in
+  our own overlay host and is untouched. Fix: paint the plate as our own
+  element instead, as taskbar-active-window-highlight does — a `Border`
+  inserted right above `BackgroundBorder`, `IsHitTestVisible=False`, with
+  Width/Height/Margin/alignment/CornerRadius bound to it (follows Styler
+  themes). Same element can provide the "outline" style from the Explorer
+  plan below. Decide whether hover should show on top of the plate (keep
+  native hover visible, e.g. lower plate opacity) or the plate should win.
+  Verify unload/settings change still restore any native brush we touched.
+
 - [ ] **Closing a ranked preview does not repaint the remaining ranks.**
   Repro: multi-window flyout (Calculator, 12 windows), close the rank-2
   window from the flyout; the old rank 3 keeps its rank-3 tint instead of
