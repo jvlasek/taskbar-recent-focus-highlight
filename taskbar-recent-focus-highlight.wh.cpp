@@ -2,12 +2,12 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.17
+// @version         0.11.18
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lole32 -loleaut32 -lruntimeobject -luuid -lshell32 -ladvapi32 -ldwmapi
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -luuid -lshell32 -ladvapi32 -ldwmapi
 // ==/WindhawkMod==
 // -loleaut32 is required: WinRT hresult_error calls SysFreeString / SysStringLen.
 
@@ -290,7 +290,6 @@ to clear highlights.
 #include <windhawk_utils.h>
 
 #include <cmath>
-#include <commctrl.h>
 #include <initguid.h>
 #include <inspectable.h>
 #include <propkey.h>
@@ -3752,12 +3751,7 @@ void TrackButton_UIThread(FrameworkElement button) {
 thread_local bool g_captureTaskGroup = false;
 thread_local void* g_capturedTaskGroup = nullptr;
 
-WCHAR g_clickSentinel[] = L"wh-rfh-click-sentinel";
-thread_local void* g_clickSentinel_TaskGroup = nullptr;
-thread_local void* g_clickSentinel_TaskItem = nullptr;
-
 constexpr int kMaxVtableProbeSlots = 32;
-constexpr size_t kMaxTaskItemsArrayOffset = 64;
 
 void* QueryViaVtable(void* object, void* vtable) {
     if (!object || !vtable) {
@@ -3894,11 +3888,11 @@ bool CollectUdkGroupWindows(void* udkTaskGroup, std::vector<HWND>& out) {
     }
 }
 
-// Which path produced a button's window list (0.11.10). Explorer's public
-// TaskGroup.Items is authoritative; the old private path (native CTaskGroup,
-// GetNumItems offset probe, vtable-probed GetWindowFromTaskItem) runs only
-// when the public interfaces are unavailable or return nothing. Each fallback
-// that finds windows is logged once per button state; a tally every 200.
+// Where a button's window list came from. Since 0.11.18 only Explorer's
+// public TaskGroup.Items / TaskItem.WindowId (the private native path —
+// CTaskGroup via a fake ReportClicked, GetNumItems offset probe — was removed
+// after 0 fallbacks across the 0.11.10-0.11.17 captures). A button with no
+// public list counts as empty; a tally is logged every 200 captures.
 // (0.11.8/0.11.9 shadow comparison: the only differences were the old path's
 // UWP CoreWindow vs Explorer's frame, and a hidden SOLIDWORKS
 // swThumbnailWnd helper that Explorer does not count.)
@@ -4020,33 +4014,6 @@ bool WINAPI ITaskGroup_IsRunning_Hook(void* pThis) {
                : false;
 }
 
-using CTaskGroup_GetNumItems_t = int(WINAPI*)(void* pThis);
-CTaskGroup_GetNumItems_t CTaskGroup_GetNumItems;
-
-HDPA GetTaskItemsArray(void* taskGroup) {
-    if (!CTaskGroup_GetNumItems || !taskGroup) {
-        return nullptr;
-    }
-    static size_t offset = []() -> size_t {
-        constexpr int kIntArraySize = 256;
-        int arrayOfInts[kIntArraySize];
-        int* arrayOfIntPtrs[kIntArraySize];
-        for (int i = 0; i < kIntArraySize; i++) {
-            arrayOfInts[i] = i;
-            arrayOfIntPtrs[i] = &arrayOfInts[i];
-        }
-        const int raw = CTaskGroup_GetNumItems(arrayOfIntPtrs);
-        if (raw < 0 || raw >= kIntArraySize) {
-            return static_cast<size_t>(-1);
-        }
-        return static_cast<size_t>(raw);
-    }();
-    if (offset >= kMaxTaskItemsArrayOffset) {
-        return nullptr;
-    }
-    return (HDPA)((void**)taskGroup)[offset];
-}
-
 using CTaskListWnd_HandleClick_t = HRESULT(WINAPI*)(void* pThis,
                                                     void* taskGroup,
                                                     void* taskItem,
@@ -4061,11 +4028,6 @@ HRESULT WINAPI CTaskListWnd_HandleClick_Hook(void* pThis,
                                              void* taskGroup,
                                              void* taskItem,
                                              void** launcherOptions) {
-    if (launcherOptions && *launcherOptions == &g_clickSentinel) {
-        g_clickSentinel_TaskGroup = taskGroup;
-        g_clickSentinel_TaskItem = taskItem;
-        return S_OK;
-    }
     const HRESULT hr = CTaskListWnd_HandleClick_Original
                            ? CTaskListWnd_HandleClick_Original(
                                  pThis, taskGroup, taskItem, launcherOptions)
@@ -4082,36 +4044,6 @@ HRESULT WINAPI CTaskListWnd_HandleClick_Hook(void* pThis,
         }
     }
     return hr;
-}
-
-using TaskItem_ReportClicked_t = int(WINAPI*)(void* pThis, void* param);
-TaskItem_ReportClicked_t TaskItem_ReportClicked_Original;
-
-using TaskGroup_ReportClicked_t = int(WINAPI*)(void* pThis, void* param);
-TaskGroup_ReportClicked_t TaskGroup_ReportClicked_Original;
-
-void* GetNativeTaskItemFromWindowsUdkTaskItem(void* windowsUdkTaskItem) {
-    if (!TaskItem_ReportClicked_Original || !windowsUdkTaskItem) {
-        return nullptr;
-    }
-    void* prev = g_clickSentinel_TaskItem;
-    g_clickSentinel_TaskItem = nullptr;
-    TaskItem_ReportClicked_Original(windowsUdkTaskItem, &g_clickSentinel);
-    void* result = g_clickSentinel_TaskItem;
-    g_clickSentinel_TaskItem = prev;
-    return result;
-}
-
-void* GetNativeTaskGroupFromWindowsUdkTaskGroup(void* windowsUdkTaskGroup) {
-    if (!TaskGroup_ReportClicked_Original || !windowsUdkTaskGroup) {
-        return nullptr;
-    }
-    void* prev = g_clickSentinel_TaskGroup;
-    g_clickSentinel_TaskGroup = nullptr;
-    TaskGroup_ReportClicked_Original(windowsUdkTaskGroup, &g_clickSentinel);
-    void* result = g_clickSentinel_TaskGroup;
-    g_clickSentinel_TaskGroup = prev;
-    return result;
 }
 
 winrt::com_ptr<IUnknown> GetWindowsUdkTaskItemFromTaskListButton(
@@ -4177,47 +4109,6 @@ HWND GetWindowFromTaskItem(void* taskItem) {
         return CWindowTaskItem_GetWindow(windowTaskItem);
     }
     return nullptr;
-}
-
-// Button → PID via taskband (volume-mod approach).
-DWORD GetProcessIdFromTaskListButton(UIElement element) {
-    try {
-        auto windowsUdkTaskItem =
-            GetWindowsUdkTaskItemFromTaskListButton(element);
-        if (windowsUdkTaskItem) {
-            void* nativeTaskItem = GetNativeTaskItemFromWindowsUdkTaskItem(
-                windowsUdkTaskItem.get());
-            if (nativeTaskItem) {
-                HWND hWnd = GetWindowFromTaskItem(nativeTaskItem);
-                if (hWnd) {
-                    DWORD processId = 0;
-                    GetWindowThreadProcessId(hWnd, &processId);
-                    return processId;
-                }
-            }
-        }
-
-        void* windowsUdkTaskGroup =
-            GetWindowsUdkTaskGroupFromTaskListButton(element);
-        if (windowsUdkTaskGroup) {
-            void* nativeTaskGroup =
-                GetNativeTaskGroupFromWindowsUdkTaskGroup(windowsUdkTaskGroup);
-            if (nativeTaskGroup) {
-                HDPA taskItemsArray = GetTaskItemsArray(nativeTaskGroup);
-                if (taskItemsArray && DPA_GetPtrCount(taskItemsArray) > 0) {
-                    void* taskItem = DPA_GetPtr(taskItemsArray, 0);
-                    HWND hWnd = GetWindowFromTaskItem(taskItem);
-                    if (hWnd) {
-                        DWORD processId = 0;
-                        GetWindowThreadProcessId(hWnd, &processId);
-                        return processId;
-                    }
-                }
-            }
-        }
-    } catch (...) {
-    }
-    return 0;
 }
 
 // Capture only UI-affine taskbar identity here. Slow metadata reads are queued.
@@ -4311,41 +4202,6 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
             if (!groupWindows.empty()) {
                 hwnd = groupWindows.front().hwnd;
                 GetWindowThreadProcessId(hwnd, &pid);
-            }
-        } else {
-            // Fallback: private native path (taskbar.dll layout).
-            if (udkItem) {
-                void* native =
-                    GetNativeTaskItemFromWindowsUdkTaskItem(udkItem.get());
-                hwnd = GetWindowFromTaskItem(native);
-                if (hwnd) {
-                    GetWindowThreadProcessId(hwnd, &pid);
-                    rememberWindow(hwnd);
-                }
-            }
-            if (windowsUdkTaskGroup) {
-                void* nativeTaskGroup = GetNativeTaskGroupFromWindowsUdkTaskGroup(
-                    windowsUdkTaskGroup);
-                if (nativeTaskGroup) {
-                    HDPA taskItemsArray = GetTaskItemsArray(nativeTaskGroup);
-                    if (taskItemsArray) {
-                        const int n = DPA_GetPtrCount(taskItemsArray);
-                        for (int i = 0; i < n; ++i) {
-                            HWND h = GetWindowFromTaskItem(
-                                DPA_GetPtr(taskItemsArray, i));
-                            rememberWindow(h);
-                            if (!hwnd && h && IsWindow(h)) {
-                                hwnd = h;
-                            }
-                            if (!pid && h) {
-                                GetWindowThreadProcessId(h, &pid);
-                            }
-                        }
-                    }
-                }
-            }
-            if (!pid) {
-                pid = GetProcessIdFromTaskListButton(el);
             }
         }
     } catch (...) {
@@ -8046,10 +7902,6 @@ bool HookTaskbarDllSymbols() {
 
     WindhawkUtils::SYMBOL_HOOK taskbarDllHooks[] = {
         {
-            {LR"(public: virtual int __cdecl CTaskGroup::GetNumItems(void))"},
-            &CTaskGroup_GetNumItems,
-        },
-        {
             {LR"(public: virtual struct HWND__ * __cdecl CWindowTaskItem::GetWindow(void))"},
             &CWindowTaskItem_GetWindow,
         },
@@ -8087,14 +7939,6 @@ bool HookTaskbarDllSymbols() {
             {LR"(public: virtual long __cdecl CTaskListWnd::HandleClick(struct ITaskGroup *,struct ITaskItem *,struct winrt::Windows::System::LauncherOptions const &))"},
             &CTaskListWnd_HandleClick_Original,
             CTaskListWnd_HandleClick_Hook,
-        },
-        {
-            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::WindowsUdk::UI::Shell::implementation::TaskItem,struct winrt::WindowsUdk::UI::Shell::ITaskItem>::ReportClicked(void *))"},
-            &TaskItem_ReportClicked_Original,
-        },
-        {
-            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::WindowsUdk::UI::Shell::implementation::TaskGroup,struct winrt::WindowsUdk::UI::Shell::ITaskGroup>::ReportClicked(void *))"},
-            &TaskGroup_ReportClicked_Original,
         },
         {
             // Optional: older XAML thumbnail model ctor.

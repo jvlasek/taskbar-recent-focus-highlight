@@ -157,10 +157,13 @@ first, then the low-risk preview fixes, then identity.
   SOLIDWORKS `swThumbnailWnd` tool window (its taskbar thumbnail proxy;
   Explorer does not count it). **0.11.10: public list is authoritative**;
   private path only as a logged fallback (`Button windows: FALLBACK`).
-  Next, once logs show no fallbacks: drop GetTaskItemsArray /
-  GetWindowFromTaskItem / the ReportClicked-sentinel native lookups (and the
-  required symbols they need), and re-check UWP button identities
-  (Settings / Store / Calculator must keep separate `APPID:` keys).
+  **0.11.18 (cleanup phase 1):** removed GetTaskItemsArray (GetNumItems
+  offset probe), the ReportClicked-sentinel native lookups,
+  GetProcessIdFromTaskListButton and the fallback branch; drops the required
+  symbols CTaskGroup::GetNumItems and TaskItem/TaskGroup ReportClicked, and
+  -lcomctl32. Phase 2: preview passes 1/2 (ctor map, index + Thumbnails) and
+  snap-group detection via view model. Phase 3: preview click confirmation
+  (HandleClick + vtable-probed GetWindowForThumbnailTaskItem).
 - [x] **Never Combine: one button = one window** (user, 2026-11-15).
   Verified on 0.11.15 (`manual-20261115-222407-856139`): 49 window buttons
   detected, ranks per window (Claude, Calculator window A, Calculator window
