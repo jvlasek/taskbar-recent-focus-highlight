@@ -147,7 +147,15 @@ first, then the low-risk preview fixes, then identity.
   comparison per button via `ITaskGroup.get_Items` (IIDs from
   windowsudk.winmd). First run: UWP differs only by CoreWindow (old) vs
   frame (public) — 0.11.9 compares after child->root; SOLIDWORKS had one
-  extra old-path window (details logged from 0.11.9 on).
+  extra old-path window (details logged from 0.11.9 on). 0.11.9 result: the
+  only differences were UWP CoreWindow (old) vs frame (public) and a hidden
+  SOLIDWORKS `swThumbnailWnd` tool window (its taskbar thumbnail proxy;
+  Explorer does not count it). **0.11.10: public list is authoritative**;
+  private path only as a logged fallback (`Button windows: FALLBACK`).
+  Next, once logs show no fallbacks: drop GetTaskItemsArray /
+  GetWindowFromTaskItem / the ReportClicked-sentinel native lookups (and the
+  required symbols they need), and re-check UWP button identities
+  (Settings / Store / Calculator must keep separate `APPID:` keys).
 - [ ] **Never Combine: one button = one window** (user, 2026-11-15). With
   combining off, each button is its own unit and should rank on its own
   window, not light up with every button of the same app. Check what a

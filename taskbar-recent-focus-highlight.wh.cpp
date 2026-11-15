@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.9
+// @version         0.11.10
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -3734,12 +3734,18 @@ bool CollectUdkGroupWindows(void* udkTaskGroup, std::vector<HWND>& out) {
     }
 }
 
-// Shadow comparison (0.11.8): the old private path stays authoritative; this
-// logs when the public path would give a different window set for a button.
-// One line per button state change, plus a running tally.
-std::mutex g_udkCompareMutex;
-std::unordered_map<void*, std::wstring> g_udkCompareLast;
-unsigned g_udkCompareAgree = 0, g_udkCompareDiffer = 0, g_udkCompareUnavailable = 0;
+// Which path produced a button's window list (0.11.10). Explorer's public
+// TaskGroup.Items is authoritative; the old private path (native CTaskGroup,
+// GetNumItems offset probe, vtable-probed GetWindowFromTaskItem) runs only
+// when the public interfaces are unavailable or return nothing. Each fallback
+// that finds windows is logged once per button state; a tally every 200.
+// (0.11.8/0.11.9 shadow comparison: the only differences were the old path's
+// UWP CoreWindow vs Explorer's frame, and a hidden SOLIDWORKS
+// swThumbnailWnd helper that Explorer does not count.)
+std::mutex g_buttonWindowsMutex;
+std::unordered_map<void*, std::wstring> g_buttonWindowsLast;
+unsigned g_buttonWindowsUdk = 0, g_buttonWindowsFallback = 0,
+         g_buttonWindowsEmpty = 0;
 
 // Content windows (UWP CoreWindow) compare as their top-level frame: the old
 // path returns the CoreWindow, Explorer's public list the frame (0.11.8 log).
@@ -3778,88 +3784,53 @@ std::wstring UdkCompareDescribe(HWND h) {
     return buf;
 }
 
-std::wstring HwndSetText(std::vector<HWND> v) {
-    std::sort(v.begin(), v.end());
-    std::wstring out;
-    for (HWND h : v) {
-        wchar_t buf[24];
-        swprintf_s(buf, L"%s%p", out.empty() ? L"" : L" ", h);
-        out += buf;
+void NoteButtonWindowsSource(void* buttonId,
+                             bool usedUdk,
+                             bool udkAvailable,
+                             const std::vector<CapturedWindow>& windows) {
+    bool logLine = false, logTally = false;
+    unsigned udk = 0, fallback = 0, empty = 0;
+    std::wstring signature;
+    if (!usedUdk && !windows.empty()) {
+        signature = udkAvailable ? L"empty" : L"unavailable";
+        for (const auto& w : windows) {
+            wchar_t buf[24];
+            swprintf_s(buf, L" %p", w.hwnd);
+            signature += buf;
+        }
     }
-    return out;
-}
-
-void ShadowCompareButtonWindows(void* buttonId,
-                                const std::vector<HWND>& oldWindows,
-                                const std::vector<HWND>& udkWindows,
-                                bool udkAvailable) {
-    // Pinned, not running: no group/item on either path. Nothing to compare.
-    if (!udkAvailable && oldWindows.empty() && udkWindows.empty()) {
-        udkAvailable = true;
-    }
-    auto rooted = [](const std::vector<HWND>& in) {
-        std::vector<HWND> out;
-        for (HWND h : in) {
-            HWND r = UdkCompareRoot(h);
-            if (std::find(out.begin(), out.end(), r) == out.end()) {
-                out.push_back(r);
+    {
+        std::lock_guard<std::mutex> lock(g_buttonWindowsMutex);
+        if (usedUdk) {
+            ++g_buttonWindowsUdk;
+        } else if (windows.empty()) {
+            ++g_buttonWindowsEmpty;
+        } else {
+            ++g_buttonWindowsFallback;
+            auto& last = g_buttonWindowsLast[buttonId];
+            logLine = last != signature;
+            last = signature;
+            if (g_buttonWindowsLast.size() > 512) {
+                g_buttonWindowsLast.clear();
             }
         }
-        return out;
-    };
-    const std::vector<HWND> oldRooted = rooted(oldWindows);
-    const std::vector<HWND> newRooted = rooted(udkWindows);
-    const std::wstring oldText = HwndSetText(oldRooted);
-    const std::wstring newText = HwndSetText(newRooted);
-    const bool agree = udkAvailable && oldText == newText;
-    const std::wstring signature =
-        (udkAvailable ? L"" : L"n/a ") + oldText + L" / " + newText;
-    bool logLine = false;
-    unsigned agreeCount = 0, differCount = 0, unavailableCount = 0;
-    bool logTally = false;
-    {
-        std::lock_guard<std::mutex> lock(g_udkCompareMutex);
-        if (!udkAvailable) {
-            ++g_udkCompareUnavailable;
-        } else if (agree) {
-            ++g_udkCompareAgree;
-        } else {
-            ++g_udkCompareDiffer;
-        }
-        auto& last = g_udkCompareLast[buttonId];
-        if (!agree && last != signature) {
-            logLine = true;
-        }
-        last = signature;
-        if (g_udkCompareLast.size() > 512) {
-            g_udkCompareLast.clear();
-        }
-        agreeCount = g_udkCompareAgree;
-        differCount = g_udkCompareDiffer;
-        unavailableCount = g_udkCompareUnavailable;
-        logTally = ((agreeCount + differCount + unavailableCount) % 200) == 1;
+        udk = g_buttonWindowsUdk;
+        fallback = g_buttonWindowsFallback;
+        empty = g_buttonWindowsEmpty;
+        logTally = ((udk + fallback + empty) % 200) == 1;
     }
     if (logLine) {
-        Wh_Log(L"Button windows: %s button=%p old=%zu udk=%zu (after "
-               L"child->root)",
-               udkAvailable ? L"DIFFER" : L"UDK-UNAVAILABLE", buttonId,
-               oldRooted.size(), newRooted.size());
-        for (HWND h : oldRooted) {
-            if (std::find(newRooted.begin(), newRooted.end(), h) ==
-                newRooted.end()) {
-                Wh_Log(L"  only old: %s", UdkCompareDescribe(h).c_str());
-            }
-        }
-        for (HWND h : newRooted) {
-            if (std::find(oldRooted.begin(), oldRooted.end(), h) ==
-                oldRooted.end()) {
-                Wh_Log(L"  only udk: %s", UdkCompareDescribe(h).c_str());
-            }
+        Wh_Log(L"Button windows: FALLBACK to private path button=%p (public "
+               L"list %s), %zu window(s)",
+               buttonId, udkAvailable ? L"empty" : L"unavailable",
+               windows.size());
+        for (const auto& w : windows) {
+            Wh_Log(L"  old: %s", UdkCompareDescribe(w.hwnd).c_str());
         }
     }
     if (logTally) {
-        Wh_Log(L"Button windows tally: agree=%u differ=%u udk-unavailable=%u",
-               agreeCount, differCount, unavailableCount);
+        Wh_Log(L"Button windows tally: public=%u fallback=%u empty=%u", udk,
+               fallback, empty);
     }
 }
 
@@ -4111,23 +4082,17 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
     };
     std::vector<HWND> udkWindows;
     bool udkAvailable = false;
+    bool usedUdk = false;
     try {
         UIElement el = button.as<UIElement>();
-        // Prefer full resolve (also captures HWND via item path).
+        // Public path: the button's TaskItem (single window) and its
+        // TaskGroup's Items, each -> ITaskItem.WindowId. UWP gives the
+        // ApplicationFrameWindow, the HWND focus tracking uses.
         auto udkItem = GetWindowsUdkTaskItemFromTaskListButton(el);
         if (udkItem) {
             if (HWND h = HwndFromUdkTaskItem(udkItem.get())) {
                 udkWindows.push_back(h);
                 udkAvailable = true;
-            }
-        }
-        if (udkItem) {
-            void* native =
-                GetNativeTaskItemFromWindowsUdkTaskItem(udkItem.get());
-            hwnd = GetWindowFromTaskItem(native);
-            if (hwnd) {
-                GetWindowThreadProcessId(hwnd, &pid);
-                rememberWindow(hwnd);
             }
         }
         void* windowsUdkTaskGroup =
@@ -4143,43 +4108,60 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
                     }
                 }
             }
-            void* nativeTaskGroup =
-                GetNativeTaskGroupFromWindowsUdkTaskGroup(windowsUdkTaskGroup);
-            if (nativeTaskGroup) {
-                HDPA taskItemsArray = GetTaskItemsArray(nativeTaskGroup);
-                if (taskItemsArray) {
-                    const int n = DPA_GetPtrCount(taskItemsArray);
-                    for (int i = 0; i < n; ++i) {
-                        HWND h = GetWindowFromTaskItem(
-                            DPA_GetPtr(taskItemsArray, i));
-                        rememberWindow(h);
-                        if (!hwnd && h && IsWindow(h)) {
-                            hwnd = h;
-                        }
-                        if (!pid && h) {
-                            GetWindowThreadProcessId(h, &pid);
+        }
+        if (!udkWindows.empty()) {
+            usedUdk = true;
+            for (HWND h : udkWindows) {
+                rememberWindow(h);
+            }
+            if (!groupWindows.empty()) {
+                hwnd = groupWindows.front().hwnd;
+                GetWindowThreadProcessId(hwnd, &pid);
+            }
+        } else {
+            // Fallback: private native path (taskbar.dll layout).
+            if (udkItem) {
+                void* native =
+                    GetNativeTaskItemFromWindowsUdkTaskItem(udkItem.get());
+                hwnd = GetWindowFromTaskItem(native);
+                if (hwnd) {
+                    GetWindowThreadProcessId(hwnd, &pid);
+                    rememberWindow(hwnd);
+                }
+            }
+            if (windowsUdkTaskGroup) {
+                void* nativeTaskGroup = GetNativeTaskGroupFromWindowsUdkTaskGroup(
+                    windowsUdkTaskGroup);
+                if (nativeTaskGroup) {
+                    HDPA taskItemsArray = GetTaskItemsArray(nativeTaskGroup);
+                    if (taskItemsArray) {
+                        const int n = DPA_GetPtrCount(taskItemsArray);
+                        for (int i = 0; i < n; ++i) {
+                            HWND h = GetWindowFromTaskItem(
+                                DPA_GetPtr(taskItemsArray, i));
+                            rememberWindow(h);
+                            if (!hwnd && h && IsWindow(h)) {
+                                hwnd = h;
+                            }
+                            if (!pid && h) {
+                                GetWindowThreadProcessId(h, &pid);
+                            }
                         }
                     }
                 }
             }
-        }
-        if (!pid) {
-            pid = GetProcessIdFromTaskListButton(el);
+            if (!pid) {
+                pid = GetProcessIdFromTaskListButton(el);
+            }
         }
     } catch (...) {
         pid = 0;
         hwnd = nullptr;
         groupWindows.clear();
+        usedUdk = false;
     }
 
-    {
-        std::vector<HWND> oldWindows;
-        for (const auto& g : groupWindows) {
-            oldWindows.push_back(g.hwnd);
-        }
-        ShadowCompareButtonWindows(data.buttonId, oldWindows, udkWindows,
-                                   udkAvailable);
-    }
+    NoteButtonWindowsSource(data.buttonId, usedUdk, udkAvailable, groupWindows);
 
     data.hwnd = hwnd;
     data.pid = hwnd ? PidFromHwnd(hwnd) : pid;
