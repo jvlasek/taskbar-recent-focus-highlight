@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.6
+// @version         0.11.7
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -1303,16 +1303,32 @@ HWND NormalizeFocusHwnd(HWND hWnd) {
     // (shadow log 2026-11-15: #32770 owned by TLister). Credit the owner, or
     // a Lister dialog — no AUMID, so path-keyed — counted as Total Commander.
     // Same process only; WS_EX_APPWINDOW asks for its own button, keep it.
+    // Climb GW_OWNER step by step and keep the highest *visible* owner:
+    // GA_ROOTOWNER would end at a hidden application window (Delphi's
+    // TApplication above Lister's TSEARCHTEXT find box, 0.11.6 capture), and
+    // that hidden window has no button. Stop early at an owner that asks for
+    // its own button (WS_EX_APPWINDOW).
     if (!(GetWindowLong(hWnd, GWL_EXSTYLE) & WS_EX_APPWINDOW)) {
-        HWND owner = GetAncestor(hWnd, GA_ROOTOWNER);
-        if (owner && owner != hWnd && IsWindow(owner) &&
-            IsWindowVisible(owner)) {
-            DWORD pid = 0, ownerPid = 0;
-            GetWindowThreadProcessId(hWnd, &pid);
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hWnd, &pid);
+        HWND best = nullptr;
+        HWND owner = GetWindow(hWnd, GW_OWNER);
+        for (int depth = 0; owner && depth < 8; ++depth) {
+            DWORD ownerPid = 0;
             GetWindowThreadProcessId(owner, &ownerPid);
-            if (pid && pid == ownerPid) {
-                return owner;
+            if (!pid || ownerPid != pid) {
+                break;
             }
+            if (IsWindowVisible(owner)) {
+                best = owner;
+                if (GetWindowLong(owner, GWL_EXSTYLE) & WS_EX_APPWINDOW) {
+                    break;
+                }
+            }
+            owner = GetWindow(owner, GW_OWNER);
+        }
+        if (best && IsWindow(best)) {
+            return best;
         }
     }
     return hWnd;
