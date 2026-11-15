@@ -143,7 +143,16 @@ first, then the low-risk preview fixes, then identity.
   real miss shows up. Respect per-taskbar apps lists: only the list that
   reported a window may clear it.
 - [ ] Group windows via `TaskbarAppsList.Groups` items' `WindowId` instead of
-  the `CTaskGroup::GetNumItems` offset probe.
+  the `CTaskGroup::GetNumItems` offset probe. **0.11.8/0.11.9:** shadow
+  comparison per button via `ITaskGroup.get_Items` (IIDs from
+  windowsudk.winmd). First run: UWP differs only by CoreWindow (old) vs
+  frame (public) — 0.11.9 compares after child->root; SOLIDWORKS had one
+  extra old-path window (details logged from 0.11.9 on).
+- [ ] **Never Combine: one button = one window** (user, 2026-11-15). With
+  combining off, each button is its own unit and should rank on its own
+  window, not light up with every button of the same app. Check what a
+  Never Combine button's window list contains (whole group or its own
+  window) and whether ranks then need to be per window for those buttons.
 - [x] 0.11.4: windows with an explicit AUMID are keyed `APPID:…` (TC vs
   Lister are two apps now; requested 2026-11-15: one button = one app).
   Expect the TC `SPLIT` to disappear from shadow logs. Still open: apps
