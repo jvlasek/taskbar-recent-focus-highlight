@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.14
+// @version         0.11.15
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -3775,62 +3775,6 @@ constexpr GUID IID_Wudk_ITaskItem = {
     0xB081D9D6, 0x9B45, 0x5363, {0x8A, 0x4D, 0x85, 0x4A, 0xDD, 0x6A, 0xBE, 0x7E}};
 constexpr GUID IID_Wudk_ITaskGroup = {
     0xA152E779, 0x93DF, 0x5BE2, {0xAF, 0x2C, 0xD3, 0x42, 0x45, 0x2B, 0x0C, 0xE0}};
-constexpr GUID IID_Wudk_ITaskGroup3 = {
-    0xA30B9CA4, 0x3C17, 0x57D4, {0xBD, 0x28, 0xF7, 0xD0, 0x8D, 0xDD, 0xD0, 0x5A}};
-
-struct WudkITaskGroup3Abi : ::IInspectable {
-    virtual HRESULT STDMETHODCALLTYPE get_IsExpanded(boolean* value) = 0;
-};
-
-// Diagnostics (0.11.12): what a button in a multi-window group is bound to.
-// Never Combine buttons showed no own TaskItem in 0.11.11 (both VS Code
-// buttons: same sample HWND, group=2). Logged once per button.
-std::mutex g_groupButtonDiagMutex;
-std::unordered_set<void*> g_groupButtonDiagLogged;
-
-void LogGroupButtonDiagnostics(void* buttonId,
-                               FrameworkElement const& button,
-                               bool haveWindowViewModel,
-                               void* udkTaskGroup,
-                               size_t groupWindowCount) {
-    {
-        std::lock_guard<std::mutex> lock(g_groupButtonDiagMutex);
-        if (g_groupButtonDiagLogged.size() > 256 ||
-            !g_groupButtonDiagLogged.insert(buttonId).second) {
-            return;
-        }
-    }
-    std::wstring dcClass = L"(null)";
-    try {
-        if (auto dc = button.DataContext()) {
-            dcClass = winrt::get_class_name(dc).c_str();
-        }
-    } catch (...) {
-        dcClass = L"(error)";
-    }
-    int expanded = -1;
-    try {
-        winrt::com_ptr<WudkITaskGroup3Abi> group3;
-        if (udkTaskGroup &&
-            SUCCEEDED(static_cast<::IUnknown*>(udkTaskGroup)->QueryInterface(
-                IID_Wudk_ITaskGroup3, group3.put_void()))) {
-            boolean value = 0;
-            if (SUCCEEDED(group3->get_IsExpanded(&value))) {
-                expanded = value ? 1 : 0;
-            }
-        }
-    } catch (...) {
-    }
-    std::wstring name;
-    try {
-        name = Automation::AutomationProperties::GetName(button).c_str();
-    } catch (...) {
-    }
-    Wh_Log(L"Group button diag: button=%p windows=%zu windowVM=%d "
-           L"isExpanded=%d dataContext=%s name=\"%s\"",
-           buttonId, groupWindowCount, haveWindowViewModel ? 1 : 0, expanded,
-           dcClass.c_str(), name.c_str());
-}
 
 struct WudkITaskItemAbi : ::IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_AppId(HSTRING* value) = 0;
@@ -4297,43 +4241,21 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
                 }
             }
         }
-        if (udkWindows.size() > 1) {
-            LogGroupButtonDiagnostics(data.buttonId, button, udkItem != nullptr,
-                                      windowsUdkTaskGroup, udkWindows.size());
-        }
-        // Diagnostics (0.11.14): what a "Window: 0x…" button resolves to.
-        // 0.11.13 never saw one reach the uncombined check (Calculator).
+        // Uncombined button (Never combine / combine when full): it stands
+        // for one window. Explorer marks it with AutomationId
+        // "Window: 0x<hwnd>" (combined buttons: "Appid: …") and binds it to
+        // that window's own TaskItem, without a group view model (0.11.14
+        // diag: windowVM=1 groupVM=0, one window). Require both to agree.
+        // (0.11.11-0.11.13 wrongly required a group of 2+ windows here.)
+        bool uncombined = false;
         if (HWND idWindow = GetButtonAutomationWindow(button)) {
-            bool first = false;
-            {
-                std::lock_guard<std::mutex> lock(g_groupButtonDiagMutex);
-                first = g_groupButtonDiagLogged.size() <= 256 &&
-                        g_groupButtonDiagLogged.insert(data.buttonId).second;
-            }
-            if (first) {
-                const bool inList =
-                    std::find(udkWindows.begin(), udkWindows.end(), idWindow) !=
-                    udkWindows.end();
-                Wh_Log(L"Window button diag: button=%p idWindow=%p windowVM=%d "
-                       L"groupVM=%d udkWindows=%zu idInList=%d",
-                       data.buttonId, idWindow, udkItem ? 1 : 0,
-                       windowsUdkTaskGroup ? 1 : 0, udkWindows.size(),
-                       inList ? 1 : 0);
+            if (ownWindow ? ownWindow == idWindow
+                          : std::find(udkWindows.begin(), udkWindows.end(),
+                                      idWindow) != udkWindows.end()) {
+                ownWindow = idWindow;
+                uncombined = true;
             }
         }
-        // Uncombined button: one window of a group of several (Never combine
-        // / combine when full). The button stands for that window only, so
-        // list just it. Explorer gives it no own TaskItem (0.11.11 log); its
-        // window is in the AutomationId. Accept it only if it is one of the
-        // group's windows.
-        if (!ownWindow && udkWindows.size() > 1) {
-            HWND fromId = GetButtonAutomationWindow(button);
-            if (fromId && std::find(udkWindows.begin(), udkWindows.end(),
-                                    fromId) != udkWindows.end()) {
-                ownWindow = fromId;
-            }
-        }
-        const bool uncombined = ownWindow && udkWindows.size() > 1;
         {
             bool changed = false;
             std::lock_guard<std::mutex> lock(g_uncombinedMutex);
@@ -4343,8 +4265,8 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
                 changed = g_uncombinedWindows.erase(ownWindow) > 0;
             }
             if (changed) {
-                Wh_Log(L"Button windows: button=%p own=%p of %zu -> %s",
-                       data.buttonId, ownWindow, udkWindows.size(),
+                Wh_Log(L"Button windows: button=%p own=%p -> %s",
+                       data.buttonId, ownWindow,
                        uncombined ? L"uncombined (own slot)" : L"combined");
             }
         }

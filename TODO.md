@@ -168,7 +168,11 @@ first, then the low-risk preview fixes, then identity.
   (`captures/uwspy-nevercombine`): each window button's AutomationId is
   `Window: 0x<hwnd>`, the group button's `Appid: <AUMID>`; nothing else
   differs (DataContext null on all). **0.11.13** takes the own window from
-  that AutomationId, validated against the group's public Items. With
+  that AutomationId, validated against the group's public Items. Still
+  nothing split: diagnostics (0.11.12/0.11.14) showed group buttons have
+  `isExpanded=1`, and window buttons have their own TaskItem but **no group
+  view model** (one window). **0.11.15:** uncombined = `Window:` id that
+  matches the button's own TaskItem window; diagnostics removed. With
   combining off, each button is its own unit and should rank on its own
   window, not light up with every button of the same app. Check what a
   Never Combine button's window list contains (whole group or its own
