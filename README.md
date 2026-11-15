@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Version:** v0.11.4 — apps keyed by window AppUserModelID when the window has one (one taskbar button = one app; Total Commander and its Lister are separate); v0.11.3: flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
+**Version:** v0.11.5 — dialogs count for their owner window; jump lists / Start menu ignored as shell UI; v0.11.4: apps keyed by window AppUserModelID when the window has one (one taskbar button = one app; Total Commander and its Lister are separate); v0.11.3: flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
 model (exact per card; see [investigation notes](doc/investigation-notes.md));
 log-only shadow AppId diagnostics. v0.11.1 base: foreground WinEvents plus validated shell activation
 notifications; no foreground recovery polling. Targeted Calculator recordings

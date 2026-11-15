@@ -15,7 +15,7 @@ def function(signature):
 helpers = '\n'.join(function(x) for x in (
     'std::wstring StripAppIdPrefix(', 'std::wstring CanonicalAppId(',
     'bool IsAppIdKey(', 'std::wstring MakeAppKey(', 'std::wstring PathFromAppKey(',
-    'std::wstring AppIdFromAppKey('))
+    'std::wstring AppIdFromAppKey(', 'bool IsShellHostFileName('))
 cpp = r'''
 #include <cassert>
 #include <cwchar>
@@ -48,6 +48,10 @@ int main() {
     // AutomationId-style prefix is canonicalized like the button side.
     assert(MakeAppKey(tc, L"Appid: com.squirrel.Discord.Discord") ==
            L"APPID:COM.SQUIRREL.DISCORD.DISCORD");
+    // Shell UI is transient, not an app (jump lists, Start menu).
+    assert(IsShellHostFileName(L"SHELLEXPERIENCEHOST.EXE"));
+    assert(IsShellHostFileName(L"STARTMENUEXPERIENCEHOST.EXE"));
+    assert(!IsShellHostFileName(L"TOTALCMD64.EXE"));
 }
 '''.replace('// HELPERS', helpers)
 with tempfile.TemporaryDirectory(prefix='windhawk-appkey-') as folder:

@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.4
+// @version         0.11.5
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -1295,7 +1295,24 @@ HWND NormalizeFocusHwnd(HWND hWnd) {
     if (GetWindowLong(hWnd, GWL_STYLE) & WS_CHILD) {
         HWND root = GetAncestor(hWnd, GA_ROOT);
         if (root && IsWindow(root)) {
-            return root;
+            hWnd = root;
+        }
+    }
+    // Owned windows (dialogs such as Lister's Find box) have no taskbar
+    // button of their own; Explorer reports their owner as the active item
+    // (shadow log 2026-11-15: #32770 owned by TLister). Credit the owner, or
+    // a Lister dialog — no AUMID, so path-keyed — counted as Total Commander.
+    // Same process only; WS_EX_APPWINDOW asks for its own button, keep it.
+    if (!(GetWindowLong(hWnd, GWL_EXSTYLE) & WS_EX_APPWINDOW)) {
+        HWND owner = GetAncestor(hWnd, GA_ROOTOWNER);
+        if (owner && owner != hWnd && IsWindow(owner) &&
+            IsWindowVisible(owner)) {
+            DWORD pid = 0, ownerPid = 0;
+            GetWindowThreadProcessId(hWnd, &pid);
+            GetWindowThreadProcessId(owner, &ownerPid);
+            if (pid && pid == ownerPid) {
+                return owner;
+            }
         }
     }
     return hWnd;
@@ -1479,9 +1496,13 @@ bool ShouldIgnoreHwnd(HWND hWnd) {
 }
 
 bool IsShellHostFileName(const std::wstring& fileNameUpper) {
+    // ShellExperienceHost: jump lists, Action Center, clock/calendar flyout
+    // (2026-11-15: "Jump List for Total Commander" cancelled TC's min-focus).
+    // StartMenuExperienceHost was misspelled before 0.11.5 and never matched.
     return fileNameUpper == L"EXPLORER.EXE" ||
            fileNameUpper == L"SEARCHHOST.EXE" ||
-           fileNameUpper == L"STARTMENUXPERIENCEHOST.EXE" ||
+           fileNameUpper == L"STARTMENUEXPERIENCEHOST.EXE" ||
+           fileNameUpper == L"SHELLEXPERIENCEHOST.EXE" ||
            fileNameUpper == L"SHELLHOST.EXE" ||
            fileNameUpper == L"TEXTINPUTHOST.EXE";
 }
