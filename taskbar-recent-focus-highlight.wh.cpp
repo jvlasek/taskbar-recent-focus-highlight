@@ -6889,10 +6889,13 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
     if (kShadowAppIdDiagnostics) {
         g_shadowEnabled = TaskbarController_OnAppsListActiveItemChanged_Original !=
                           nullptr;
-        Wh_Log(g_shadowEnabled.load()
-                   ? L"Shadow AppId diagnostics on (log only)"
-                   : L"Shadow AppId diagnostics off: OnAppsListActiveItemChanged "
-                     L"not found");
+        // Wh_Log pastes a prefix onto the format: literals only, no ?:.
+        if (g_shadowEnabled.load()) {
+            Wh_Log(L"Shadow AppId diagnostics on (log only)");
+        } else {
+            Wh_Log(L"Shadow AppId diagnostics off: OnAppsListActiveItemChanged "
+                   L"not found");
+        }
     }
 
     if (TaskItemThumbnailView_OnApplyTemplate_Original) {
