@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.13
+// @version         0.11.14
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -4300,6 +4300,26 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         if (udkWindows.size() > 1) {
             LogGroupButtonDiagnostics(data.buttonId, button, udkItem != nullptr,
                                       windowsUdkTaskGroup, udkWindows.size());
+        }
+        // Diagnostics (0.11.14): what a "Window: 0x…" button resolves to.
+        // 0.11.13 never saw one reach the uncombined check (Calculator).
+        if (HWND idWindow = GetButtonAutomationWindow(button)) {
+            bool first = false;
+            {
+                std::lock_guard<std::mutex> lock(g_groupButtonDiagMutex);
+                first = g_groupButtonDiagLogged.size() <= 256 &&
+                        g_groupButtonDiagLogged.insert(data.buttonId).second;
+            }
+            if (first) {
+                const bool inList =
+                    std::find(udkWindows.begin(), udkWindows.end(), idWindow) !=
+                    udkWindows.end();
+                Wh_Log(L"Window button diag: button=%p idWindow=%p windowVM=%d "
+                       L"groupVM=%d udkWindows=%zu idInList=%d",
+                       data.buttonId, idWindow, udkItem ? 1 : 0,
+                       windowsUdkTaskGroup ? 1 : 0, udkWindows.size(),
+                       inList ? 1 : 0);
+            }
         }
         // Uncombined button: one window of a group of several (Never combine
         // / combine when full). The button stands for that window only, so
