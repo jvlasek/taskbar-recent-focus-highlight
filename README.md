@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Version:** v0.11.3 — flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
+**Version:** v0.11.4 — apps keyed by window AppUserModelID when the window has one (one taskbar button = one app; Total Commander and its Lister are separate); v0.11.3: flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
 model (exact per card; see [investigation notes](doc/investigation-notes.md));
 log-only shadow AppId diagnostics. v0.11.1 base: foreground WinEvents plus validated shell activation
 notifications; no foreground recovery polling. Targeted Calculator recordings
@@ -212,13 +212,13 @@ limits (updated 2026-10-04).
 
 | Side | What we get | Example |
 |------|-------------|---------|
-| **Focus tracking** | `HWND` → process path, or AppUserModelID for UWP hosts | `C:\…\WindowsTerminal.exe` / `APPID:WINDOWS.IMMERSIVECONTROLPANEL_…` |
+| **Focus tracking** | `HWND` → window AppUserModelID if set (UWP hosts, Lister, …), else process path | `C:\…\WindowsTerminal.exe` / `APPID:WINDOWS.IMMERSIVECONTROLPANEL_…` |
 | **Taskbar UI** | XAML `TaskListButton` | Automation name `"Windows Terminal"` |
 
 Buttons are not HWNDs. The mod:
 
-1. Keeps a **recency list per virtual desktop**, keyed by process path
-   (Win32) or `APPID:` + AUMID (ApplicationFrameHost / WWAHost).
+1. Keeps a **recency list per virtual desktop**, keyed by `APPID:` + the
+   window AUMID when it has one (UWP hosts, Lister, …), else process path.
 2. **Matches** buttons via taskband path cache (HWND / AUMID / full path
    only). Missing identity → no glow.
 3. **Paints** only matched **running** buttons (`IsRunning`, plus a short
@@ -249,7 +249,7 @@ without an HWND stay unmarked.
 |-------|----------|-----|
 | App min focus | Default 8s | A new app waits this long. Default re-focus of an app already in the list is immediate |
 | Preview min focus | Default 1s (separate) | Snappier for multi-window |
-| Rank key | Full process path (UPPER); `APPID:…` for AFH/WWAHost | Distinct installs; UWP apps share a host exe |
+| Rank key | `APPID:…` when the window has an AUMID (0.11.4+); else full process path (UPPER) | Distinct installs; UWP apps share a host exe |
 | Window key | HWND + PID | Recycled handles don’t inherit recency |
 | Virtual desktops | Separate app + window maps per desktop GUID | Workspaces don’t share recency |
 | Icon default style | Side bar (left on bottom/top, under icon on left/right) | Stays off the native running pill on all four edges |

@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.3). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.4). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -52,8 +52,12 @@ bridge them.
 
 The app recency map is keyed by **uppercase full path**, except UWP windows
 hosted by `ApplicationFrameHost.exe` / `WWAHost.exe`, which use `APPID:` +
-AppUserModelID. Win32 keeps path-only keys (Windhawk’s editor is still
-VSCodium.exe even when the window AppId is RAMENSOFTWARE.WINDHAWK).
+AppUserModelID. Since 0.11.4 the same applies to **any** window with an
+explicit AUMID (one taskbar button = one app: Explorer groups by AUMID).
+Total Commander's Lister (`LISTER{…}`) is its own app, apart from TC's
+exe-grouped main window; Windhawk's editor is `APPID:RAMENSOFTWARE.WINDHAWK`
+rather than its VSCodium.exe path. Windows without an AUMID keep the path
+key. Excluding an exe still excludes its own-AUMID windows.
 
 ### World B — taskbar XAML buttons
 

@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.3
+// @version         0.11.4
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -1379,11 +1379,16 @@ std::wstring DisplayNameFromAppId(const std::wstring& appIdUpper) {
 
 std::wstring MakeAppKey(const std::wstring& pathUpper,
                         const std::wstring& appIdUpper) {
-    // Win32: path only. Windhawk's editor is VSCodium.exe with AppId
-    // RAMENSOFTWARE.WINDHAWK — that is still one taskbar button.
-    // UWP hosts (ApplicationFrameHost / WWAHost) share one exe for many
-    // apps; key those by AppUserModelID so Calculator ≠ Settings.
-    if (IsUwpHostPath(pathUpper) && !appIdUpper.empty()) {
+    // One taskbar button = one app. Explorer groups windows by
+    // AppUserModelID: a window with an explicit AUMID gets that group's
+    // button, others group by exe. So key by the window AUMID when there is
+    // one, else by path. UWP hosts (ApplicationFrameHost / WWAHost) share one
+    // exe for many apps (Calculator ≠ Settings); Win32 windows can set their
+    // own too (Total Commander's Lister: LISTER{…} vs TC's exe group).
+    // Before 0.11.4 Win32 was path-only, so TC and Lister shared one recency
+    // slot although they are two buttons. Shadow log 2026-11-15: every other
+    // app maps to one Explorer AppId, so this splits only real splits.
+    if (!appIdUpper.empty()) {
         return std::wstring(L"APPID:") + CanonicalAppId(appIdUpper);
     }
     return pathUpper;
@@ -1590,7 +1595,11 @@ bool ResolveAppIdentity(HWND hWnd,
         }
     }
 
-    if (IsExcludedKey(key, ToUpper(displayName), appIdUpper)) {
+    // An exe on the exclude list also excludes its own-AUMID windows (the
+    // key is APPID:… then, so check the path separately).
+    if (IsExcludedKey(key, ToUpper(displayName), appIdUpper) ||
+        (key != pathUpper &&
+         IsExcludedKey(pathUpper, ToUpper(displayName), appIdUpper))) {
         Wh_Log(L"Excluded: %s", displayName.c_str());
         return false;
     }
@@ -7599,11 +7608,15 @@ bool StillPendingForeground(const PendingFocus& pending,
         if (IsTransientForeground(foreground)) {
             return false;
         }
-        // ApplicationFrameHost: same PID is not the same app.
-        if (IsAppIdKey(pending.key)) {
-            std::wstring fgId =
+        // Same PID is not the same app when the windows' AUMIDs put them
+        // in different taskbar groups (UWP hosts; TC main window vs Lister).
+        {
+            const std::wstring fgId =
                 CanonicalAppId(ToUpper(GetWindowAppUserModelId(foreground)));
-            if (fgId != AppIdFromAppKey(pending.key)) {
+            const bool sameApp = IsAppIdKey(pending.key)
+                                     ? fgId == AppIdFromAppKey(pending.key)
+                                     : fgId.empty();
+            if (!sameApp) {
                 return false;
             }
         }
