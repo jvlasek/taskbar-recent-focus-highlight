@@ -46,6 +46,49 @@ commitment to ship every item in the next release.
 - [ ] Check preview rank-2/rank-3 opacity and icon frame/full placement across
   native and Styler themes. Membership checks are not pixel-level visual tests.
 
+## Explorer-side state (from taskbar-active-window-highlight, PR #7421)
+
+Explorer already knows the active window and each window's app; we rebuild
+both. Prefer its state where evidence supports it. Order matters: shadow
+first, then the low-risk preview fixes, then identity.
+
+- [ ] **Shadow AppId diagnostics (branch `shadow-appid-diagnostics`).**
+  Log-only. Hooks `TaskbarController::OnAppsListActiveItemChanged` and
+  records Explorer's active `WindowId` + `AppId`. Log lines start with
+  `Shadow AppId:` / `Shadow focus:`. Run about a week with normal use,
+  including Total Commander + Lister, Calculator, Terminal, Settings,
+  VSCodium/Windhawk, Never Combine and a second monitor. Read:
+  - `SPLIT` — one mod key, several AppIds. Expected for TC/Lister (agreed:
+    they should be two apps with two slots). Any other split: inspect.
+  - `MERGE` — several mod keys, one AppId. Blocks the switch for that app
+    until explained.
+  - `MOD-MISSED` — Explorer activation we never accepted (Calculator
+    WinEvent gap?). `HWND-MISMATCH` — same PID, different HWND (UWP frame vs
+    content?). `EXPLORER-OTHER` — we accepted a window Explorer does not
+    call active (owned dialogs / tool windows; check owner/tool fields).
+  - `no mod key` — Explorer active window our resolver rejects.
+- [ ] Preview cards: resolve HWND via card -> `ThumbnailSource` -> view model
+  -> `TaskItemThumbnail.ParentItem.WindowId` as pass 0; keep ctor map and
+  GetAt as fallbacks until logs show they are never needed.
+- [ ] Preview cards: hook `TaskItemThumbnailView::put_ThumbnailSource` so
+  recycled cards repaint (suspected cause of stale/missing preview marks).
+- [ ] Use `ActiveItem` as a third focus source next to WinEvents and the
+  shell hook, if shadow logs show `MOD-MISSED` cases it would cover and no
+  `HWND-MISMATCH` for UWP. Respect per-taskbar apps lists: only the list that
+  reported a window may clear it.
+- [ ] Group windows via `TaskbarAppsList.Groups` items' `WindowId` instead of
+  the `CTaskGroup::GetNumItems` offset probe.
+- [ ] Switch app keys to `TaskGroup.AppId` only after shadow logs are clean.
+  Keep window-level (WindowId) matching first so Never Combine buttons of one
+  AppId do not all light up. Plan exclude-list migration (keys change from
+  paths/AUMIDs).
+- [ ] Optional: "outline" preview style — own Border above `BackgroundBorder`,
+  geometry/corner radius bound to it, `{ThemeResource SystemAccentColor}`.
+- [ ] Unload: replace `INFINITE` waits (focus thread stop, dispatcher drain)
+  with bounded waits.
+- [ ] Active-only preview mode + single-window flyouts: not planned while
+  taskbar-active-window-highlight covers that use case.
+
 ## Optional enhancement
 
 - [ ] Evaluate Composition DropShadow for true glow only after correctness

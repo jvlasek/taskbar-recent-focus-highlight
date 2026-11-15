@@ -271,6 +271,7 @@ to clear highlights.
 #include <cmath>
 #include <commctrl.h>
 #include <initguid.h>
+#include <inspectable.h>
 #include <propkey.h>
 #include <objbase.h>
 #include <shellapi.h>
@@ -297,12 +298,16 @@ to clear highlights.
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 using namespace winrt::Windows::UI::Xaml;
@@ -764,11 +769,15 @@ constexpr UINT WM_APP_REFRESH_ACCENT = WM_APP + 5;
 constexpr UINT WM_APP_PREVIEW_CLICK = WM_APP + 6;
 constexpr UINT WM_APP_SETTINGS_CHANGED = WM_APP + 7;
 constexpr UINT WM_APP_RESOLVE_BUTTON = WM_APP + 8;
+// Shadow AppId diagnostics: Explorer active-item reports queued for the
+// focus thread (log only; see ShadowDrainActiveReports).
+constexpr UINT WM_APP_SHADOW_ACTIVE_ITEM = WM_APP + 9;
 
 constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
+constexpr UINT_PTR kShadowCheckTimerId = 5;
 // Owned and accessed only by the focus thread.
 UINT g_shellHookMessage = 0;
 constexpr UINT kDecayCheckIntervalMs = 30 * 1000;
@@ -825,6 +834,9 @@ void RequestApplyPreviewVisuals();
 void RefreshButtonHighlight(FrameworkElement button);
 void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor);
 void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk);
+void ShadowNoteModFocus(HWND hWnd, const std::wstring& key);
+void ShadowDrainActiveReports();
+void ShadowRunCrossCheck();
 
 struct IconPanelLayoutWatch {
     winrt::weak_ref<FrameworkElement> panel;
@@ -6450,6 +6462,358 @@ int WINAPI TaskListButton_OnPointerPressed_Hook(void* pThis, void* pArgs) {
     return ret;
 }
 
+// ---------------------------------------------------------------------------
+// Shadow AppId diagnostics (branch shadow-appid-diagnostics; log only)
+// ---------------------------------------------------------------------------
+// Question: would Explorer's own TaskItem.AppId and active task item be safe
+// replacements for our path/AUMID keys and our foreground tracking? This
+// section never changes ranks or paint. It records, on the focus thread:
+//
+//   1. Which Explorer AppIds each mod key is seen with, and the reverse.
+//      Keys use different spellings, so we compare partitions, not strings:
+//      SPLIT = one mod key, several AppIds (expected for TC + Lister);
+//      MERGE = several mod keys, one AppId (would lose a distinction).
+//   2. Explorer active window vs mod-accepted foreground, kShadowCrossCheckMs
+//      after either changes: MOD-MISSED (Explorer saw an activation we never
+//      accepted — the Calculator WinEvent gap), EXPLORER-OTHER (we accepted a
+//      window Explorer does not report as active), HWND-MISMATCH (same PID,
+//      different HWND — e.g. UWP frame vs content).
+//
+// Source: TaskbarController::OnAppsListActiveItemChanged and the
+// WindowsUdk.UI.Shell interfaces as used by taskbar-active-window-highlight
+// (EphremTil17, GPL-3.0). IIDs/method order from windowsudk.winmd. A missing
+// symbol or failed QueryInterface turns this off; the mod runs as before.
+
+constexpr bool kShadowAppIdDiagnostics = true;
+constexpr UINT kShadowCrossCheckMs = 750;
+constexpr size_t kShadowMaxKeys = 256;
+constexpr size_t kShadowMaxQueued = 64;
+constexpr size_t kShadowMaxLoggedGaps = 256;
+
+constexpr GUID IID_Shadow_ITaskbarAppsList = {
+    0xABD50A67, 0x1E54, 0x536C, {0x82, 0x27, 0xB4, 0xF1, 0xA1, 0x25, 0xA7, 0xFE}};
+
+// Leading members only; declared order matches windowsudk.winmd.
+struct ShadowITaskItemAbi : ::IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_AppId(HSTRING* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_UniqueId(UINT64* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_WindowId(UINT64* value) = 0;
+};
+struct ShadowITaskbarAppsListAbi : ::IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Groups(::IInspectable** value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ActiveGroup(::IInspectable** value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ActiveItem(ShadowITaskItemAbi** value) = 0;
+};
+
+struct ShadowIdentityMaps {
+    std::map<std::wstring, std::set<std::wstring>> keyToAppIds;
+    std::map<std::wstring, std::set<std::wstring>> appIdToKeys;
+};
+
+enum ShadowPairResult : unsigned {
+    kShadowSeen = 0,
+    kShadowNewPair = 1,
+    kShadowSplit = 2,
+    kShadowMerge = 4,
+    kShadowFull = 8,
+};
+
+// Pure bookkeeping (unit-tested). appId is compared uppercased.
+unsigned ShadowRecordPair(ShadowIdentityMaps& maps,
+                          const std::wstring& key,
+                          const std::wstring& appIdUpper) {
+    if (key.empty() || appIdUpper.empty()) {
+        return kShadowSeen;
+    }
+    auto kit = maps.keyToAppIds.find(key);
+    if (kit != maps.keyToAppIds.end() && kit->second.count(appIdUpper)) {
+        return kShadowSeen;
+    }
+    const bool newKey = kit == maps.keyToAppIds.end();
+    const bool newAppId = !maps.appIdToKeys.count(appIdUpper);
+    if ((newKey && maps.keyToAppIds.size() >= kShadowMaxKeys) ||
+        (newAppId && maps.appIdToKeys.size() >= kShadowMaxKeys)) {
+        return kShadowFull;
+    }
+    auto& ids = maps.keyToAppIds[key];
+    ids.insert(appIdUpper);
+    auto& keys = maps.appIdToKeys[appIdUpper];
+    keys.insert(key);
+    unsigned result = kShadowNewPair;
+    if (ids.size() > 1) {
+        result |= kShadowSplit;
+    }
+    if (keys.size() > 1) {
+        result |= kShadowMerge;
+    }
+    return result;
+}
+
+std::wstring ShadowJoin(const std::set<std::wstring>& items) {
+    std::wstring out;
+    for (const auto& item : items) {
+        if (!out.empty()) {
+            out += L" | ";
+        }
+        out += item;
+    }
+    return out;
+}
+
+struct ShadowActiveReport {
+    HWND hwnd = nullptr;  // Explorer WindowId; null = no active item
+    std::wstring appId;
+    void* source = nullptr;  // reporting apps list (one per taskbar)
+    ULONGLONG tick = 0;
+};
+
+std::mutex g_shadowQueueMutex;
+std::deque<ShadowActiveReport> g_shadowQueue;
+std::atomic<bool> g_shadowEnabled{false};
+
+// Focus-thread state below; not touched from any other thread.
+ShadowIdentityMaps g_shadowMaps;
+bool g_shadowFullLogged = false;
+HWND g_shadowExplorerActive = nullptr;
+void* g_shadowExplorerSource = nullptr;
+ULONGLONG g_shadowExplorerTick = 0;
+HWND g_shadowModAccepted = nullptr;
+ULONGLONG g_shadowModTick = 0;
+HWND g_shadowCheckExplorer = nullptr;  // Explorer reported; did we accept it?
+HWND g_shadowCheckMod = nullptr;       // We accepted; did Explorer report it?
+std::set<std::pair<int, HWND>> g_shadowLoggedGaps;
+std::set<std::wstring> g_shadowLoggedUnkeyed;
+
+void ShadowArmCrossCheck() {
+    if (HWND hwnd = HookThreadWindow()) {
+        SetTimer(hwnd, kShadowCheckTimerId, kShadowCrossCheckMs, nullptr);
+    }
+}
+
+std::wstring ShadowWindowDesc(HWND hwnd) {
+    if (!hwnd) {
+        return L"(none)";
+    }
+    if (!IsWindow(hwnd)) {
+        return L"(gone)";
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    const LONG exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+    wchar_t buf[96];
+    swprintf_s(buf, L" pid=%u owner=%p tool=%d", pid,
+               GetWindow(hwnd, GW_OWNER),
+               (exStyle & WS_EX_TOOLWINDOW) ? 1 : 0);
+    return L"class=" + GetWindowClassName(hwnd) + buf;
+}
+
+// Once per (kind, HWND) so a recurring mismatch does not flood the log.
+bool ShadowFirstGap(int kind, HWND hwnd) {
+    if (g_shadowLoggedGaps.size() >= kShadowMaxLoggedGaps) {
+        return false;
+    }
+    return g_shadowLoggedGaps.insert({kind, hwnd}).second;
+}
+
+// UI thread (taskbar). Cheap: two QIs, three getters, one queue push.
+void ShadowCaptureActiveItem(IUnknown* appsListAbi) {
+    winrt::com_ptr<ShadowITaskbarAppsListAbi> appsList;
+    if (!appsListAbi ||
+        FAILED(appsListAbi->QueryInterface(IID_Shadow_ITaskbarAppsList,
+                                           appsList.put_void()))) {
+        return;
+    }
+    winrt::com_ptr<ShadowITaskItemAbi> item;
+    if (FAILED(appsList->get_ActiveItem(item.put()))) {
+        return;
+    }
+    ShadowActiveReport report;
+    report.source = appsListAbi;
+    report.tick = GetTickCount64();
+    if (item) {
+        UINT64 windowId = 0;
+        if (FAILED(item->get_WindowId(&windowId))) {
+            return;
+        }
+        report.hwnd = reinterpret_cast<HWND>(windowId);
+        winrt::hstring appId;
+        if (SUCCEEDED(item->get_AppId(
+                reinterpret_cast<HSTRING*>(winrt::put_abi(appId))))) {
+            report.appId = appId.c_str();
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_shadowQueueMutex);
+        if (g_shadowQueue.size() >= kShadowMaxQueued) {
+            g_shadowQueue.pop_front();
+        }
+        g_shadowQueue.push_back(std::move(report));
+    }
+    PostToHookThread(WM_APP_SHADOW_ACTIVE_ITEM);
+}
+
+void ShadowHandleActiveReport(const ShadowActiveReport& report) {
+    if (!report.hwnd) {
+        // Taskbar/desktop focus, or another taskbar's list with nothing
+        // active. Only the list that reported the window may clear it.
+        if (!g_shadowExplorerSource || g_shadowExplorerSource == report.source) {
+            g_shadowExplorerActive = nullptr;
+            g_shadowExplorerSource = nullptr;
+            g_shadowExplorerTick = report.tick;
+        }
+        return;
+    }
+    g_shadowExplorerActive = report.hwnd;
+    g_shadowExplorerSource = report.source;
+    g_shadowExplorerTick = report.tick;
+    g_shadowCheckExplorer = report.hwnd;
+    ShadowArmCrossCheck();
+
+    ProcessImagePathCacheScope pathCacheScope;
+    const HWND normalized = NormalizeFocusHwnd(report.hwnd);
+    if (normalized != report.hwnd && ShadowFirstGap(3, report.hwnd)) {
+        Wh_Log(L"Shadow AppId: Explorer WindowId %p normalizes to %p (%s)",
+               report.hwnd, normalized, ShadowWindowDesc(report.hwnd).c_str());
+    }
+    std::wstring key, displayName;
+    DWORD pid = 0;
+    if (!normalized ||
+        !ResolveAppIdentity(normalized, key, displayName, pid)) {
+        if (g_shadowLoggedUnkeyed.size() < kShadowMaxLoggedGaps &&
+            g_shadowLoggedUnkeyed.insert(report.appId).second) {
+            Wh_Log(L"Shadow AppId: no mod key for Explorer active %p appId=%s (%s)",
+                   report.hwnd, report.appId.c_str(),
+                   ShadowWindowDesc(report.hwnd).c_str());
+        }
+        return;
+    }
+    if (report.appId.empty()) {
+        return;
+    }
+    const std::wstring appIdUpper = ToUpper(report.appId);
+    const unsigned result = ShadowRecordPair(g_shadowMaps, key, appIdUpper);
+    if (result & kShadowFull) {
+        if (!g_shadowFullLogged) {
+            g_shadowFullLogged = true;
+            Wh_Log(L"Shadow AppId: map full (%zu keys); new pairs not recorded",
+                   kShadowMaxKeys);
+        }
+        return;
+    }
+    if (!(result & kShadowNewPair)) {
+        return;
+    }
+    Wh_Log(L"Shadow AppId: pair key=%s appId=%s hwnd=%p (%s)", key.c_str(),
+           report.appId.c_str(), report.hwnd,
+           ShadowWindowDesc(report.hwnd).c_str());
+    if (result & kShadowSplit) {
+        Wh_Log(L"Shadow AppId: SPLIT key=%s -> {%s}", key.c_str(),
+               ShadowJoin(g_shadowMaps.keyToAppIds[key]).c_str());
+    }
+    if (result & kShadowMerge) {
+        Wh_Log(L"Shadow AppId: MERGE appId=%s <- {%s}", report.appId.c_str(),
+               ShadowJoin(g_shadowMaps.appIdToKeys[appIdUpper]).c_str());
+    }
+}
+
+// Focus thread.
+void ShadowDrainActiveReports() {
+    if (!g_shadowEnabled.load() || g_unloading.load()) {
+        return;
+    }
+    std::deque<ShadowActiveReport> reports;
+    {
+        std::lock_guard<std::mutex> lock(g_shadowQueueMutex);
+        reports.swap(g_shadowQueue);
+    }
+    for (const auto& report : reports) {
+        try {
+            ShadowHandleActiveReport(report);
+        } catch (...) {
+        }
+    }
+}
+
+// Focus thread, from HandleForegroundChanged after identity resolved.
+void ShadowNoteModFocus(HWND hWnd, const std::wstring& /*key*/) {
+    if (!g_shadowEnabled.load() || !hWnd) {
+        return;
+    }
+    g_shadowModAccepted = hWnd;
+    g_shadowModTick = GetTickCount64();
+    g_shadowCheckMod = hWnd;
+    ShadowArmCrossCheck();
+}
+
+// Focus thread, kShadowCrossCheckMs after the latest report or acceptance.
+// Only judged while the window is still foreground, so fast switching does
+// not count as a miss.
+void ShadowRunCrossCheck() {
+    if (!g_shadowEnabled.load() || g_unloading.load()) {
+        return;
+    }
+    const HWND foreground = NormalizeFocusHwnd(GetForegroundWindow());
+    const ULONGLONG now = GetTickCount64();
+    const HWND checkExplorer = std::exchange(g_shadowCheckExplorer, nullptr);
+    const HWND checkMod = std::exchange(g_shadowCheckMod, nullptr);
+
+    if (checkExplorer && NormalizeFocusHwnd(checkExplorer) == foreground &&
+        g_shadowModAccepted != foreground) {
+        DWORD explorerPid = 0, modPid = 0;
+        GetWindowThreadProcessId(checkExplorer, &explorerPid);
+        if (g_shadowModAccepted && IsWindow(g_shadowModAccepted)) {
+            GetWindowThreadProcessId(g_shadowModAccepted, &modPid);
+        }
+        const bool samePid = explorerPid && explorerPid == modPid;
+        const int kind = samePid ? 2 : 0;
+        if (ShadowFirstGap(kind, checkExplorer)) {
+            Wh_Log(L"Shadow focus: %s Explorer active %p (%s); mod last "
+                   L"accepted %p (%s) %llu ms ago",
+                   samePid ? L"HWND-MISMATCH" : L"MOD-MISSED", checkExplorer,
+                   ShadowWindowDesc(checkExplorer).c_str(), g_shadowModAccepted,
+                   ShadowWindowDesc(g_shadowModAccepted).c_str(),
+                   g_shadowModTick ? now - g_shadowModTick : 0);
+        }
+    }
+    if (checkMod && checkMod == foreground && g_shadowExplorerActive != checkMod &&
+        NormalizeFocusHwnd(g_shadowExplorerActive) != checkMod) {
+        DWORD explorerPid = 0, modPid = 0;
+        GetWindowThreadProcessId(checkMod, &modPid);
+        if (g_shadowExplorerActive && IsWindow(g_shadowExplorerActive)) {
+            GetWindowThreadProcessId(g_shadowExplorerActive, &explorerPid);
+        }
+        const bool samePid = modPid && modPid == explorerPid;
+        const int kind = samePid ? 2 : 1;
+        if (ShadowFirstGap(kind, checkMod)) {
+            Wh_Log(L"Shadow focus: %s mod accepted %p (%s); Explorer active "
+                   L"%p (%s) %llu ms ago",
+                   samePid ? L"HWND-MISMATCH" : L"EXPLORER-OTHER", checkMod,
+                   ShadowWindowDesc(checkMod).c_str(), g_shadowExplorerActive,
+                   ShadowWindowDesc(g_shadowExplorerActive).c_str(),
+                   g_shadowExplorerTick ? now - g_shadowExplorerTick : 0);
+        }
+    }
+}
+
+using TaskbarController_OnAppsListActiveItemChanged_t =
+    void(WINAPI*)(void* pThis, void* appsList, void* args);
+TaskbarController_OnAppsListActiveItemChanged_t
+    TaskbarController_OnAppsListActiveItemChanged_Original;
+void WINAPI TaskbarController_OnAppsListActiveItemChanged_Hook(void* pThis,
+                                                               void* appsList,
+                                                               void* args) {
+    TaskbarController_OnAppsListActiveItemChanged_Original(pThis, appsList, args);
+    if (!g_shadowEnabled.load() || g_unloading.load() || !appsList) {
+        return;
+    }
+    try {
+        // `TaskbarAppsList const&` is a projected object holding one pointer:
+        // its default interface (verified by QI in the reference mod).
+        ShadowCaptureActiveItem(*static_cast<IUnknown**>(appsList));
+    } catch (...) {
+    }
+}
+
 using HoverFlyoutModel_TargetItemKey_t = void(WINAPI*)(void* pThis,
                                                        void* param1);
 extern HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
@@ -6508,11 +6872,27 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
             HoverFlyoutModel_TargetItemKey_Hook,
             true,
         },
+        {
+            // Optional, shadow diagnostics only: Explorer's active task item.
+            {LR"(private: void __cdecl winrt::Taskbar::implementation::TaskbarController::OnAppsListActiveItemChanged(struct winrt::WindowsUdk::UI::Shell::TaskbarAppsList const &,struct winrt::Windows::Foundation::IInspectable const &))"},
+            &TaskbarController_OnAppsListActiveItemChanged_Original,
+            TaskbarController_OnAppsListActiveItemChanged_Hook,
+            true,
+        },
     };
 
     if (!HookSymbols(module, symbolHooks, ARRAYSIZE(symbolHooks))) {
         Wh_Log(L"HookSymbols failed for Taskbar.View.dll");
         return false;
+    }
+
+    if (kShadowAppIdDiagnostics) {
+        g_shadowEnabled = TaskbarController_OnAppsListActiveItemChanged_Original !=
+                          nullptr;
+        Wh_Log(g_shadowEnabled.load()
+                   ? L"Shadow AppId diagnostics on (log only)"
+                   : L"Shadow AppId diagnostics off: OnAppsListActiveItemChanged "
+                     L"not found");
     }
 
     if (TaskItemThumbnailView_OnApplyTemplate_Original) {
@@ -7331,6 +7711,8 @@ void HandleForegroundChanged(HWND hWnd) {
         return;
     }
 
+    ShadowNoteModFocus(hWnd, key);
+
     const ULONGLONG now = GetTickCount64();
     const int minSeconds = (std::max)(0, SettingsSnap()->minFocusSeconds);
 
@@ -7586,6 +7968,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
         case WM_APP_RESOLVE_BUTTON:
             ResolveOneButtonOnFocusThread();
             return 0;
+        case WM_APP_SHADOW_ACTIVE_ITEM:
+            ShadowDrainActiveReports();
+            return 0;
         case WM_APP_PREVIEW_CLICK:
             ConfirmPreviewFocusNow(reinterpret_cast<HWND>(wParam),
                                    static_cast<DWORD>(lParam));
@@ -7641,6 +8026,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                 OnPreviewMinFocusTimerElapsed();
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
+            } else if (wParam == kShadowCheckTimerId) {
+                KillTimer(hWnd, kShadowCheckTimerId);
+                ShadowRunCrossCheck();
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
@@ -7652,6 +8040,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
+            KillTimer(hWnd, kShadowCheckTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }
