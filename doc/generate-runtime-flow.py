@@ -69,8 +69,8 @@ box(776,642,656,135,'Thumbnail constructor → capture presented HWND',[
     'Ordinary: existing window getter. Store model + HWND + PID.'], '#dcfce7','#22a06b')
 wire('M1104 777 V802')
 box(776,802,656,135,'Flyout opens / template or target changes',[
-    'RefreshThumbnailFlyout_UIThread matches DataContext first;',
-    'current repeater + model collection fill unresolved holes.',
+    'RefreshThumbnailFlyout_UIThread: card view model -> WindowId first;',
+    'then DataContext map, then repeater + model collection fill holes.',
     'Validate HWND/PID; missing getter or match → leave unmarked.'])
 
 wire('M374 937 V995')

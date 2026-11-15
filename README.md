@@ -7,7 +7,9 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Version:** v0.11.1 — foreground WinEvents plus validated shell activation
+**Version:** v0.11.2 — preview cards resolved through Explorer's own view
+model (exact per card; see [investigation notes](doc/investigation-notes.md));
+log-only shadow AppId diagnostics. v0.11.1 base: foreground WinEvents plus validated shell activation
 notifications; no foreground recovery polling. Targeted Calculator recordings
 cover missing-event activation and a positive preview delay. See
 [results and coverage limits](doc/focus-shell-calculator-results.md).

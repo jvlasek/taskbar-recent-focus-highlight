@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.1). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.2). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -152,8 +152,16 @@ TaskItemThumbnailView::OnApplyTemplate → collect siblings → assign HWNDs →
 
 Resolve order in `RefreshThumbnailFlyout_UIThread`:
 
+0. **ViewModel** (0.11.2) — card → `ThumbnailSource` → `TaskItemThumbnailViewModel`
+   → `TaskItemThumbnail` → `ParentItem.WindowId`. Explorer's own binding, per
+   card; cannot shift when cards are removed or recycled. UWP gives the
+   `ApplicationFrameWindow`, same as focus. Optional symbols; log
+   `Preview resolve: view model on/unavailable`. `put_ThumbnailSource` hook
+   schedules a coalesced refresh when a card is rebound.
 1. **TaskItem** — `DataContext` ↔ ctor map (COM identity, per card). Exact;
-   cannot bind another flyout’s HWNDs.
+   cannot bind another flyout’s HWNDs. **Never matched on the 2026-11-15
+   capture** (0 of 300+ cards): kept as fallback and always evaluated so the
+   log can report `view model … != ctor map`.
 2. **Repeater index** — `ItemsRepeater.TryGetElement(i)` + `Thumbnails.GetAt(i)`
    + ctor map, **holes only**. `g_TaskGroup_Thumbnails` is a global captured
    on `TargetItemKey`. **Clear it on the way in** to that hook so it is

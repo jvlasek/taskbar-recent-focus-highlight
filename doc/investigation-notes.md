@@ -54,8 +54,17 @@ the model association. Later refreshes validate the captured HWND/PID rather
 than dereferencing an old task-item pointer. Missing optional support leaves
 the affected preview unmarked.
 
-The UI refresh first matches model/DataContext identity, then uses the current
-flyout's repeater/model correspondence for unresolved cards. Repeater order is
+Since 0.11.2 the UI refresh first asks the card's own view model
+(`ThumbnailSource` → `TaskItemThumbnail.ParentItem.WindowId`), then matches
+model/DataContext identity, then uses the current flyout's repeater/model
+correspondence for unresolved cards. Reason: the 2026-11-15 manual capture
+(`manual-20261115-142933-523175`) had 217 `how=repeater`, 97 `how=none` and
+**0 `how=taskitem`** resolves although the ctor map was full, so every preview
+rank rested on the index fallback. After closing a ranked card in a
+12-window Calculator flyout, the index pairing shifted and the rank-2 paint
+landed on the wrong card until the flyout was reopened. Explorer's
+`WindowId` for Calculator is the `ApplicationFrameWindow` (shadow log), the
+same frame HWND focus tracking uses. Repeater order is
 not a universal window identity; it is useful only with the corresponding
 current model collection. There is no title or construction-order guess in
 the mod. The explicit native click path also uses the thumbnail getter and
