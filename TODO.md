@@ -7,8 +7,10 @@ commitment to ship every item in the next release.
 
 - [x] **Hovering a rank-1 preview loses its whole-card plate.** 0.11.16:
   plate is our own Border above BackgroundBorder (hover changes the
-  background underneath and shows through the partial fill). Needs a live
-  check, with and without Taskbar Styler. Reported
+  background underneath and shows through the partial fill). 0.11.17:
+  title tint moved under the title text; Outline has its own fill opacity
+  (20). Approved live 2026-11-15 (Lister flyout: rank 1 outline, rank 2
+  title tint, crisp text). Still to check with Taskbar Styler. Reported
   2026-11-15 on 0.11.3: the title-bar tint (ranks 2+) survives hover, but the
   rank-1 plate is replaced by Windows' own hover highlight. Cause: the plate
   tints the card's native `BackgroundBorder.Background`, which the card's
