@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.11
+// @version         0.11.12
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -3735,6 +3735,62 @@ constexpr GUID IID_Wudk_ITaskItem = {
     0xB081D9D6, 0x9B45, 0x5363, {0x8A, 0x4D, 0x85, 0x4A, 0xDD, 0x6A, 0xBE, 0x7E}};
 constexpr GUID IID_Wudk_ITaskGroup = {
     0xA152E779, 0x93DF, 0x5BE2, {0xAF, 0x2C, 0xD3, 0x42, 0x45, 0x2B, 0x0C, 0xE0}};
+constexpr GUID IID_Wudk_ITaskGroup3 = {
+    0xA30B9CA4, 0x3C17, 0x57D4, {0xBD, 0x28, 0xF7, 0xD0, 0x8D, 0xDD, 0xD0, 0x5A}};
+
+struct WudkITaskGroup3Abi : ::IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsExpanded(boolean* value) = 0;
+};
+
+// Diagnostics (0.11.12): what a button in a multi-window group is bound to.
+// Never Combine buttons showed no own TaskItem in 0.11.11 (both VS Code
+// buttons: same sample HWND, group=2). Logged once per button.
+std::mutex g_groupButtonDiagMutex;
+std::unordered_set<void*> g_groupButtonDiagLogged;
+
+void LogGroupButtonDiagnostics(void* buttonId,
+                               FrameworkElement const& button,
+                               bool haveWindowViewModel,
+                               void* udkTaskGroup,
+                               size_t groupWindowCount) {
+    {
+        std::lock_guard<std::mutex> lock(g_groupButtonDiagMutex);
+        if (g_groupButtonDiagLogged.size() > 256 ||
+            !g_groupButtonDiagLogged.insert(buttonId).second) {
+            return;
+        }
+    }
+    std::wstring dcClass = L"(null)";
+    try {
+        if (auto dc = button.DataContext()) {
+            dcClass = winrt::get_class_name(dc).c_str();
+        }
+    } catch (...) {
+        dcClass = L"(error)";
+    }
+    int expanded = -1;
+    try {
+        winrt::com_ptr<WudkITaskGroup3Abi> group3;
+        if (udkTaskGroup &&
+            SUCCEEDED(static_cast<::IUnknown*>(udkTaskGroup)->QueryInterface(
+                IID_Wudk_ITaskGroup3, group3.put_void()))) {
+            boolean value = 0;
+            if (SUCCEEDED(group3->get_IsExpanded(&value))) {
+                expanded = value ? 1 : 0;
+            }
+        }
+    } catch (...) {
+    }
+    std::wstring name;
+    try {
+        name = Automation::AutomationProperties::GetName(button).c_str();
+    } catch (...) {
+    }
+    Wh_Log(L"Group button diag: button=%p windows=%zu windowVM=%d "
+           L"isExpanded=%d dataContext=%s name=\"%s\"",
+           buttonId, groupWindowCount, haveWindowViewModel ? 1 : 0, expanded,
+           dcClass.c_str(), name.c_str());
+}
 
 struct WudkITaskItemAbi : ::IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_AppId(HSTRING* value) = 0;
@@ -4200,6 +4256,10 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
                     }
                 }
             }
+        }
+        if (udkWindows.size() > 1) {
+            LogGroupButtonDiagnostics(data.buttonId, button, udkItem != nullptr,
+                                      windowsUdkTaskGroup, udkWindows.size());
         }
         // Uncombined button: its own window item inside a group of several
         // windows (Never combine / combine when full). The button stands for
