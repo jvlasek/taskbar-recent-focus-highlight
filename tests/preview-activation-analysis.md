@@ -17,6 +17,16 @@ activation path in place. **Coverage caveat (user):** only one Calculator
 flashed on launch in this run, so the flashing first-activation path has a
 single sample; repeat until several windows flash before calling it fixed.
 
+**Second re-test 2026-11-15 (0.11.7, `focus-20261115-181122-546017`):**
+launch key pressed while clicking elsewhere to keep focus away. 21 Calculator
+foreground intervals across 18 frames; every interval of at least 1 s was
+confirmed. Two activations reproduced the original gap: frames `A2044` and
+`52A36` came to the front with **no** `EVENT_SYSTEM_FOREGROUND` (observer saw
+`52A36` only by sampling), but each had a shell `HSHELL_WINDOWACTIVATED` (4),
+and the mod took both from the shell-hook path (`52A36`: candidate 18:12:24.050,
+confirmed 1 s later). No shadow `MOD-MISSED`. Conclusion: the gap still
+exists in Windows; the 0.11.0 shell activation path covers it.
+
 Times below are local UTC+02:00; foreground.jsonl stores UTC.
 
 | Time | Independent observer | Mod |

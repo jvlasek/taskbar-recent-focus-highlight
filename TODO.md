@@ -136,7 +136,9 @@ first, then the low-risk preview fixes, then identity.
   **2026-11-15:** not needed so far. No `MOD-MISSED` in any capture,
   including a Calculator launch-key burst (`focus-20261115-180821-833502`:
   observer intervals of at least 1 s all confirmed; only one window flashed,
-  so the flashing path has one sample). The only mismatches were
+  so the flashing path has one sample). Second run
+  `focus-20261115-181122-546017`: two activations without any foreground
+  WinEvent, both caught via the shell hook. The only mismatches were
   owned dialogs, fixed in 0.11.5-0.11.7. Keep the shadow check; revisit if a
   real miss shows up. Respect per-taskbar apps lists: only the list that
   reported a window may clear it.
