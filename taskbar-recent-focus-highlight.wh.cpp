@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.7
+// @version         0.11.8
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -3630,6 +3630,176 @@ using TryGetItemFromContainer_TaskListWindowViewModel_t =
 TryGetItemFromContainer_TaskListWindowViewModel_t
     TryGetItemFromContainer_TaskListWindowViewModel_Original;
 
+// ---------------------------------------------------------------------------
+// WindowsUdk.UI.Shell public interfaces: task groups and task items
+// ---------------------------------------------------------------------------
+// Layouts from windowsudk.winmd (C:\Windows\SystemApps\
+// MicrosoftWindows.UndockedDevKit_cw5n1h2txyewy, build 26100-era, read
+// 2026-11-15). Only the slots up to the last method we call are declared;
+// earlier slots are placeholders whose parameter types do not matter because
+// we never call them. A changed interface has a new IID, so QueryInterface
+// fails and callers fall back.
+
+constexpr GUID IID_Wudk_ITaskItem = {
+    0xB081D9D6, 0x9B45, 0x5363, {0x8A, 0x4D, 0x85, 0x4A, 0xDD, 0x6A, 0xBE, 0x7E}};
+constexpr GUID IID_Wudk_ITaskGroup = {
+    0xA152E779, 0x93DF, 0x5BE2, {0xAF, 0x2C, 0xD3, 0x42, 0x45, 0x2B, 0x0C, 0xE0}};
+
+struct WudkITaskItemAbi : ::IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_AppId(HSTRING* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_UniqueId(UINT64* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_WindowId(UINT64* value) = 0;
+};
+
+struct WudkITaskGroupAbi : ::IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_AppId(HSTRING* value) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_UniqueId(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_DisplayName(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AccessibleName(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Icon(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_OverlayIcon(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_OverlayIconDescription(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Badge(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsRequestingAttention(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Progress(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_VisualState(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_VisualState(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Bounds(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Bounds(void*) = 0;
+    // IVectorView<WindowsUdk.UI.Shell.TaskItem>
+    virtual HRESULT STDMETHODCALLTYPE get_Items(::IInspectable** value) = 0;
+};
+
+// Windows.Foundation.Collections.IVectorView<T> for a runtime-class T: the
+// element comes back as its default interface pointer. The parameterized IID
+// is not needed: get_Items already returns this interface.
+struct WudkIVectorViewAbi : ::IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE GetAt(UINT32 index, ::IInspectable** item) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Size(UINT32* size) = 0;
+};
+
+HWND HwndFromUdkTaskItem(::IUnknown* taskItem) {
+    if (!taskItem) {
+        return nullptr;
+    }
+    winrt::com_ptr<WudkITaskItemAbi> item;
+    UINT64 windowId = 0;
+    if (FAILED(taskItem->QueryInterface(IID_Wudk_ITaskItem, item.put_void())) ||
+        FAILED(item->get_WindowId(&windowId))) {
+        return nullptr;
+    }
+    HWND hwnd = reinterpret_cast<HWND>(windowId);
+    return IsWindow(hwnd) ? hwnd : nullptr;
+}
+
+// Public replacement for CTaskGroup's private item array: the group's
+// Items -> each item's WindowId. Returns false if the interfaces are not
+// available (caller keeps the old path).
+bool CollectUdkGroupWindows(void* udkTaskGroup, std::vector<HWND>& out) {
+    out.clear();
+    if (!udkTaskGroup) {
+        return false;
+    }
+    try {
+        winrt::com_ptr<WudkITaskGroupAbi> group;
+        if (FAILED(static_cast<::IUnknown*>(udkTaskGroup)->QueryInterface(
+                IID_Wudk_ITaskGroup, group.put_void()))) {
+            return false;
+        }
+        winrt::com_ptr<::IInspectable> itemsObject;
+        if (FAILED(group->get_Items(itemsObject.put())) || !itemsObject) {
+            return false;
+        }
+        auto* items = reinterpret_cast<WudkIVectorViewAbi*>(itemsObject.get());
+        UINT32 size = 0;
+        if (FAILED(items->get_Size(&size))) {
+            return false;
+        }
+        for (UINT32 i = 0; i < size && i < 256; ++i) {
+            winrt::com_ptr<::IInspectable> element;
+            if (FAILED(items->GetAt(i, element.put())) || !element) {
+                continue;
+            }
+            if (HWND hwnd = HwndFromUdkTaskItem(element.get())) {
+                if (std::find(out.begin(), out.end(), hwnd) == out.end()) {
+                    out.push_back(hwnd);
+                }
+            }
+        }
+        return true;
+    } catch (...) {
+        out.clear();
+        return false;
+    }
+}
+
+// Shadow comparison (0.11.8): the old private path stays authoritative; this
+// logs when the public path would give a different window set for a button.
+// One line per button state change, plus a running tally.
+std::mutex g_udkCompareMutex;
+std::unordered_map<void*, std::wstring> g_udkCompareLast;
+unsigned g_udkCompareAgree = 0, g_udkCompareDiffer = 0, g_udkCompareUnavailable = 0;
+
+std::wstring HwndSetText(std::vector<HWND> v) {
+    std::sort(v.begin(), v.end());
+    std::wstring out;
+    for (HWND h : v) {
+        wchar_t buf[24];
+        swprintf_s(buf, L"%s%p", out.empty() ? L"" : L" ", h);
+        out += buf;
+    }
+    return out;
+}
+
+void ShadowCompareButtonWindows(void* buttonId,
+                                const std::vector<HWND>& oldWindows,
+                                const std::vector<HWND>& udkWindows,
+                                bool udkAvailable) {
+    // Pinned, not running: no group/item on either path. Nothing to compare.
+    if (!udkAvailable && oldWindows.empty() && udkWindows.empty()) {
+        udkAvailable = true;
+    }
+    const std::wstring oldText = HwndSetText(oldWindows);
+    const std::wstring newText = HwndSetText(udkWindows);
+    const bool agree = udkAvailable && oldText == newText;
+    const std::wstring signature =
+        (udkAvailable ? L"" : L"n/a ") + oldText + L" / " + newText;
+    bool logLine = false;
+    unsigned agreeCount = 0, differCount = 0, unavailableCount = 0;
+    bool logTally = false;
+    {
+        std::lock_guard<std::mutex> lock(g_udkCompareMutex);
+        if (!udkAvailable) {
+            ++g_udkCompareUnavailable;
+        } else if (agree) {
+            ++g_udkCompareAgree;
+        } else {
+            ++g_udkCompareDiffer;
+        }
+        auto& last = g_udkCompareLast[buttonId];
+        if (!agree && last != signature) {
+            logLine = true;
+        }
+        last = signature;
+        if (g_udkCompareLast.size() > 512) {
+            g_udkCompareLast.clear();
+        }
+        agreeCount = g_udkCompareAgree;
+        differCount = g_udkCompareDiffer;
+        unavailableCount = g_udkCompareUnavailable;
+        logTally = ((agreeCount + differCount + unavailableCount) % 200) == 1;
+    }
+    if (logLine) {
+        Wh_Log(L"Button windows: %s button=%p old={%s} udk={%s}",
+               udkAvailable ? L"DIFFER" : L"UDK-UNAVAILABLE", buttonId,
+               oldText.c_str(), newText.c_str());
+    }
+    if (logTally) {
+        Wh_Log(L"Button windows tally: agree=%u differ=%u udk-unavailable=%u",
+               agreeCount, differCount, unavailableCount);
+    }
+}
+
 using TaskListWindowViewModel_get_TaskItem_t = int(WINAPI*)(void* pThis,
                                                             void** taskItem);
 TaskListWindowViewModel_get_TaskItem_t
@@ -3876,10 +4046,18 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         }
         groupWindows.push_back(CapturedWindow{h, PidFromHwnd(h)});
     };
+    std::vector<HWND> udkWindows;
+    bool udkAvailable = false;
     try {
         UIElement el = button.as<UIElement>();
         // Prefer full resolve (also captures HWND via item path).
         auto udkItem = GetWindowsUdkTaskItemFromTaskListButton(el);
+        if (udkItem) {
+            if (HWND h = HwndFromUdkTaskItem(udkItem.get())) {
+                udkWindows.push_back(h);
+                udkAvailable = true;
+            }
+        }
         if (udkItem) {
             void* native =
                 GetNativeTaskItemFromWindowsUdkTaskItem(udkItem.get());
@@ -3892,6 +4070,16 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         void* windowsUdkTaskGroup =
             GetWindowsUdkTaskGroupFromTaskListButton(el);
         if (windowsUdkTaskGroup) {
+            std::vector<HWND> groupHwnds;
+            if (CollectUdkGroupWindows(windowsUdkTaskGroup, groupHwnds)) {
+                udkAvailable = true;
+                for (HWND h : groupHwnds) {
+                    if (std::find(udkWindows.begin(), udkWindows.end(), h) ==
+                        udkWindows.end()) {
+                        udkWindows.push_back(h);
+                    }
+                }
+            }
             void* nativeTaskGroup =
                 GetNativeTaskGroupFromWindowsUdkTaskGroup(windowsUdkTaskGroup);
             if (nativeTaskGroup) {
@@ -3919,6 +4107,15 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         pid = 0;
         hwnd = nullptr;
         groupWindows.clear();
+    }
+
+    {
+        std::vector<HWND> oldWindows;
+        for (const auto& g : groupWindows) {
+            oldWindows.push_back(g.hwnd);
+        }
+        ShadowCompareButtonWindows(data.buttonId, oldWindows, udkWindows,
+                                   udkAvailable);
     }
 
     data.hwnd = hwnd;
@@ -4755,11 +4952,7 @@ constexpr GUID IID_Wudk_ITaskItemThumbnail = {
     0xD7DC08AE, 0x776E, 0x5871, {0xBC, 0xEE, 0x25, 0x0D, 0xBC, 0x94, 0xD0, 0x37}};
 
 // Leading members only; declared order matches windowsudk.winmd.
-struct WudkITaskItemAbi : ::IInspectable {
-    virtual HRESULT STDMETHODCALLTYPE get_AppId(HSTRING* value) = 0;
-    virtual HRESULT STDMETHODCALLTYPE get_UniqueId(UINT64* value) = 0;
-    virtual HRESULT STDMETHODCALLTYPE get_WindowId(UINT64* value) = 0;
-};
+// (WudkITaskItemAbi is declared with the task-group interfaces above.)
 struct WudkITaskItemThumbnailAbi : ::IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_DisplayName(HSTRING* value) = 0;
     virtual HRESULT STDMETHODCALLTYPE get_AccessibleName(HSTRING* value) = 0;
