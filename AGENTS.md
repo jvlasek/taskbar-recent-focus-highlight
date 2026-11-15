@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.16). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.17). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -217,7 +217,8 @@ Rules:
 | `titleBar` | Thin rect just under title baseline (~2px gap); 8px side inset |
 | `titleBg` | Soft wash; 4px corners (`CornerRadius{4,4,4,4}` — `{4}` is TopLeft only), 8px inset |
 | `plate` | 0.11.16+: own `Border` `WhRecentFocusThumbCard` inserted right after `BackgroundBorder` in its panel; Width/Height/Margin/alignment/CornerRadius bound to it; fill only. Survives the card's hover state (which rewrites `BackgroundBorder.Background`). Fallback without a BackgroundBorder: overlay-host rectangle. Native-brush restore code (`WhRecentFocusThumbNative`) kept only to undo pre-0.11.16 paint |
-| `outline` | Same overlay with accent `BorderBrush` and `previews.outlineThickness` |
+| `outline` | Same overlay with accent `BorderBrush` and `previews.outlineThickness`; fill from `previews.outlineFillOpacity` (default 20), not Tint opacity — with an 80 % tint the border vanished into the fill |
+| overlay host z-order | 0.11.17+: directly above `BackgroundBorder` (below title/thumbnail), so the title wash no longer dims the text; front only if no BackgroundBorder child |
 | `none` | Ranks 2+ only: not marked |
 
 Styles are chosen per rank: `previews.topStyle` (rank 1, default `plate`) and

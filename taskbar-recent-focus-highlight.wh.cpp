@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.16
+// @version         0.11.17
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -248,6 +248,12 @@ to clear highlights.
     - outlineThickness: 2
       $name: Outline thickness
       $description: Border width in pixels for the Outline style (1–8).
+    - outlineFillOpacity: 20
+      $name: Outline fill opacity
+      $description: >-
+        0–100. Fill inside the outline. Kept separate from Tint opacity: a
+        light fill lets the accent border read as an outline (Taskbar Active
+        Window Highlight uses 20). Per-rank intensity still scales it.
     - intensityRank1: 100
       $name: Intensity rank 1
       $description: Strength for the most recent window in the flyout (0–100)
@@ -430,6 +436,7 @@ struct Settings {
     PreviewStyle previewTopStyle = PreviewStyle::Plate;
     PreviewStyle previewRestStyle = PreviewStyle::TitleBg;
     int previewOutlineThickness = 2;
+    int previewOutlineFillOpacity = 20;
     std::unordered_set<std::wstring> excludedPrograms;
     // Bumped in PublishSettings so UVS can skip a no-op repaint.
     uint32_t generation = 0;
@@ -5919,6 +5926,44 @@ void ClearThumbnailHighlight(FrameworkElement thumbView) {
 
 // Preview panels use explicit insertion too: keep deferred-child index
 // notifications balanced with removal, even when inserting at the end.
+// Put el directly above the card's BackgroundBorder when that border is a
+// child of this panel: above the card background, below the title text and
+// thumbnail. Returns false if there is no such border here.
+bool PlaceAboveCardBackground(Controls::Panel panel, UIElement el) {
+    if (!panel || !el) {
+        return false;
+    }
+    try {
+        auto children = panel.Children();
+        int bg = -1;
+        for (uint32_t i = 0; i < children.Size(); ++i) {
+            auto fe = children.GetAt(i).try_as<FrameworkElement>();
+            if (fe && fe.Name() == L"BackgroundBorder") {
+                bg = static_cast<int>(i);
+                break;
+            }
+        }
+        if (bg < 0) {
+            return false;
+        }
+        uint32_t idx = 0;
+        if (!children.IndexOf(el, idx)) {
+            return false;
+        }
+        if (static_cast<int>(idx) == bg + 1) {
+            return true;
+        }
+        children.RemoveAt(idx);
+        if (static_cast<int>(idx) < bg) {
+            --bg;
+        }
+        children.InsertAt(static_cast<uint32_t>(bg + 1), el);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 void BringElementToFront(Controls::Panel panel, UIElement el) {
     if (!panel || !el) {
         return;
@@ -5981,7 +6026,12 @@ Controls::Grid EnsureThumbOverlayHost(Controls::Panel panel) {
     host.VerticalAlignment(VerticalAlignment::Stretch);
     host.IsHitTestVisible(false);
     ClearOurHostClip(host);
-    BringElementToFront(panel, host);
+    // Under the card content, right above its background (0.11.17): a title
+    // wash on top of the title made the text look dim at higher tint
+    // opacity. Front only if this template has no BackgroundBorder here.
+    if (!PlaceAboveCardBackground(panel, host)) {
+        BringElementToFront(panel, host);
+    }
     return host;
 }
 
@@ -6301,8 +6351,11 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         if (paintStyle == PreviewStyle::Plate ||
             paintStyle == PreviewStyle::Outline) {
             const bool outline = paintStyle == PreviewStyle::Outline;
-            const int fillA =
-                static_cast<int>(fillOpacitySetting * 2.55 * t + 0.5);
+            const int fillA = static_cast<int>(
+                (outline ? settings->previewOutlineFillOpacity
+                         : fillOpacitySetting) *
+                    2.55 * t +
+                0.5);
             const int strokeA = static_cast<int>(255 * t + 0.5);
             bool usedNative = !outline && fillOpacitySetting <= 0;
             if (!usedNative) {
@@ -9343,6 +9396,8 @@ void LoadSettings() {
         parsePreviewStyle(L"previews.restStyle", PreviewStyle::TitleBg, true);
     s.previewOutlineThickness = (std::max)(
         1, (std::min)(8, Wh_GetIntSetting(L"previews.outlineThickness")));
+    s.previewOutlineFillOpacity = (std::max)(
+        0, (std::min)(100, Wh_GetIntSetting(L"previews.outlineFillOpacity")));
 
     s.excludedPrograms.clear();
     for (int i = 0;; i++) {
