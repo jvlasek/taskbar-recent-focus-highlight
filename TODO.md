@@ -235,6 +235,10 @@ first, then the low-risk preview fixes, then identity.
   with stale globals. A failed `Wh_ModInit` (returns FALSE) is silent in the
   UI: the toggle stays on, `Wh_ModUninit` is not called.
   Possible follow-up: periodic "still waiting on thread N" log while draining.
+  2026-11-16 (0.11.25-0.11.27): `tests/run-dispatcher-tests.py` passed on
+  Windows (needs g++; fails on Linux by design), and dozens of live
+  unload/reload cycles in one Explorer session showed no crash or stuck
+  "Uninitializing..." window.
 - [ ] Active-only preview mode + single-window flyouts: user decision
   pending (parked 2026-11-15 until after the cleanup; mod is now about 309 KB
   vs about 24 KB for taskbar-active-window-highlight, which covers this).
