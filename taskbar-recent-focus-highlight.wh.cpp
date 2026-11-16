@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.34
+// @version         0.11.35
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -624,7 +624,10 @@ struct WindowAppFocus {
 // uncombined button). Written by the UI capture, read by RecomputeRanks.
 // Lock order: g_stateMutex, then g_uncombinedMutex (never the reverse).
 std::mutex g_uncombinedMutex;
-std::unordered_set<HWND, HwndHash> g_uncombinedWindows;
+// Per UI thread (one per taskbar dispatcher), so one taskbar's full pass
+// cannot drop another taskbar's windows; readers use the union.
+std::unordered_map<DWORD, std::unordered_set<HWND, HwndHash>>
+    g_uncombinedWindowsByThread;
 
 struct DesktopRecencyState {
     std::unordered_map<HWND, WindowAppFocus, HwndHash> windowAppFocus;
@@ -1839,11 +1842,13 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
         std::unordered_set<HWND, HwndHash> uncombined;
         {
             std::lock_guard<std::mutex> lock(g_uncombinedMutex);
-            for (auto it = g_uncombinedWindows.begin();
-                 it != g_uncombinedWindows.end();) {
-                it = IsWindow(*it) ? std::next(it) : g_uncombinedWindows.erase(it);
+            for (auto& [thread, windows] : g_uncombinedWindowsByThread) {
+                (void)thread;
+                for (auto it = windows.begin(); it != windows.end();) {
+                    it = IsWindow(*it) ? std::next(it) : windows.erase(it);
+                }
+                uncombined.insert(windows.begin(), windows.end());
             }
-            uncombined = g_uncombinedWindows;
         }
         if (!uncombined.empty()) {
             // An app is split when any of its confirmed windows has its own
@@ -3954,9 +3959,12 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
             bool changed = false;
             std::lock_guard<std::mutex> lock(g_uncombinedMutex);
             if (uncombined) {
-                changed = g_uncombinedWindows.insert(ownWindow).second;
+                changed = g_uncombinedWindowsByThread[GetCurrentThreadId()]
+                              .insert(ownWindow)
+                              .second;
             } else if (ownWindow) {
-                changed = g_uncombinedWindows.erase(ownWindow) > 0;
+                changed = g_uncombinedWindowsByThread[GetCurrentThreadId()]
+                              .erase(ownWindow) > 0;
             }
             if (changed) {
                 Wh_Log(L"Button windows: button=%p own=%p -> %s",
@@ -4346,6 +4354,25 @@ void ApplyAllHighlights_UIThread() {
         running[bi] = ButtonCountsAsRunning(live[bi]) ? 1 : 0;
         if (running[bi]) {
             idents[bi] = GetCachedButtonIdentity(live[bi]);
+        }
+    }
+    // The shown buttons are authoritative for which windows have their own
+    // slot: when Never Combine is switched off, no button is uncombined any
+    // more and per-window ranks merge back into one app rank (0.11.35).
+    // Captures add windows as they appear; this pass also drops them.
+    {
+        std::unordered_set<HWND, HwndHash> shownUncombined;
+        for (size_t bi = 0; bi < live.size(); ++bi) {
+            if (running[bi] && idents[bi].uncombined && idents[bi].sampleHwnd) {
+                shownUncombined.insert(idents[bi].sampleHwnd);
+            }
+        }
+        std::lock_guard<std::mutex> lock(g_uncombinedMutex);
+        auto& mine = g_uncombinedWindowsByThread[GetCurrentThreadId()];
+        if (shownUncombined != mine) {
+            Wh_Log(L"Uncombined windows (this taskbar): %zu -> %zu",
+                   mine.size(), shownUncombined.size());
+            mine = std::move(shownUncombined);
         }
     }
 
