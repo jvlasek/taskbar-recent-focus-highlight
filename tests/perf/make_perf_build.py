@@ -1,7 +1,13 @@
 """Make a timing-instrumented copy of the mod (perf build).
 
-Usage: python tests/perf/make_perf_build.py [source] [output]
+Usage: python tests/perf/make_perf_build.py [--quiet] [source] [output]
 Default: taskbar-recent-focus-highlight.wh.cpp -> tmp/perf/<name>.perf.wh.cpp
+(--quiet: <name>.perf-quiet.wh.cpp)
+
+--quiet turns every Wh_Log of the mod itself into a no-op (arguments are not
+evaluated), so only the PERF lines remain and the numbers exclude the mod's
+own logging. Use it for release baselines; the normal perf build shows the
+cost with Mod logs on.
 
 The copy keeps the mod id (settings stay shared) and gets "-perf" appended to
 its version. Paste it into Windhawk's editor, use the taskbar normally, and
@@ -48,9 +54,13 @@ SLOTS = [
 ]
 
 
-def build(text):
+def build(text, quiet=False):
     crlf = "\r\n" in text
-    lines = text.replace("\r\n", "\n").split("\n")
+    body = text.replace("\r\n", "\n")
+    if quiet:
+        # Only calls; the "#define Wh_Log" of other code is not in this file.
+        body = re.sub(r"\bWh_Log\(", "PERF_QUIET_LOG(", body)
+    lines = body.split("\n")
 
     def find_unique(sub):
         hits = [i for i, l in enumerate(lines) if sub in l]
@@ -84,10 +94,12 @@ def build(text):
     header = (HERE / "perf_header.inc").read_text(encoding="utf-8")
     header = header.replace("// PERF_SLOTS", slots)
     i = find_unique("using namespace winrt::Windows::UI::Xaml;")
-    lines[i + 1:i + 1] = ["", "#include <mutex>"] + header.rstrip("\n").split("\n")
+    quiet_macro = ["#define PERF_QUIET_LOG(...) ((void)0)"] if quiet else []
+    lines[i + 1:i + 1] = (["", "#include <mutex>"] + quiet_macro
+                          + header.rstrip("\n").split("\n"))
 
     i = next(n for n, l in enumerate(lines) if l.startswith("// @version"))
-    lines[i] = lines[i].rstrip() + "-perf"
+    lines[i] = lines[i].rstrip() + ("-perf-quiet" if quiet else "-perf")
     i = next(n for n, l in enumerate(lines) if l.startswith("// @name"))
     lines[i] = lines[i].rstrip() + " (perf build)"
 
@@ -96,11 +108,15 @@ def build(text):
 
 
 def main():
-    src = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "taskbar-recent-focus-highlight.wh.cpp"
-    dst = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "tmp" / "perf" / (src.name.replace(".wh.cpp", "") + ".perf.wh.cpp")
+    args = sys.argv[1:]
+    quiet = "--quiet" in args
+    args = [a for a in args if a != "--quiet"]
+    src = Path(args[0]) if args else ROOT / "taskbar-recent-focus-highlight.wh.cpp"
+    suffix = ".perf-quiet.wh.cpp" if quiet else ".perf.wh.cpp"
+    dst = Path(args[1]) if len(args) > 1 else ROOT / "tmp" / "perf" / (src.name.replace(".wh.cpp", "") + suffix)
     text = src.read_bytes().decode("utf-8")
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_bytes(build(text).encode("utf-8"))
+    dst.write_bytes(build(text, quiet).encode("utf-8"))
     print(f"{len(SLOTS)} scopes -> {dst}")
 
 

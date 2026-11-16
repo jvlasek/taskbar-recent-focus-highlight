@@ -38,6 +38,8 @@ struct Entry {
     ULONGLONG lastRunningTick = 0;
     int emptyResolveAttempts = 0, lastPaintRank = -1;
     ULONGLONG lastResolveTick = 0, resolveSerial = 0, resolveQueuedTick = 0;
+    ULONGLONG lastConfirmedTick = 0;
+    std::wstring automationId;
     std::optional<ButtonResolveData> resolveResult;
 };
 using ButtonPathCacheEntry = Entry;
@@ -166,6 +168,36 @@ int main() {
     auto recycled = button(1);
     assert(EnsureButtonPathCached(recycled, false, false).empty());
     assert(g_buttonPathCache.find(b->data.buttonId) == g_buttonPathCache.end());
+    // 0.11.31: an unchanged, resolved capture is not re-queued by full
+    // refreshes until kResolvedRecheckMs; a changed AutomationId or the
+    // recheck interval queues again; an unchanged result does not repaint.
+    {
+        image = L"STEADY.EXE";
+        auto st = button(3);
+        st->data.automationId = L"APP.ID";
+        EnsureButtonPathCached(st, true); worker();
+        assert(EnsureButtonPathCached(st, false, false) == L"STEADY.EXE");
+        g_buttonResolveQueue.clear(); g_buttonResolvePosted = false;
+        tick += kUnresolvedRetryMs + 1;
+        assert(EnsureButtonPathCached(st, false, true) == L"STEADY.EXE");
+        assert(g_buttonResolveQueue.empty());
+        st->data.automationId = L"OTHER.ID";
+        tick += kUnresolvedRetryMs + 1;
+        EnsureButtonPathCached(st, false, true);
+        assert(g_buttonResolveQueue.size() == 1);
+        int before = paints;
+        worker();  // same path/class/window: published without a repaint
+        assert(paints == before);
+        assert(EnsureButtonPathCached(st, false, false) == L"STEADY.EXE");
+        tick += kUnresolvedRetryMs + 1;
+        EnsureButtonPathCached(st, false, true);
+        assert(g_buttonResolveQueue.empty());
+        tick += kResolvedRecheckMs;
+        EnsureButtonPathCached(st, false, true);
+        assert(g_buttonResolveQueue.size() == 1);
+        worker(); EnsureButtonPathCached(st, false, false);
+        g_buttonResolveQueue.clear(); g_buttonResolvePosted = false;
+    }
     // Wrong PID in a group invalidates a result.
     auto a = button(2)->data, c = a;
     c.windows[0].pid = 99;

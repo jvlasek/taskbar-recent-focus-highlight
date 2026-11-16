@@ -16,6 +16,11 @@ for slot, _, _ in mpb.SLOTS:
     assert out.count(f"PERF_SCOPE({slot});") == 1, slot
 assert out.count("perf::Report(/*sinceLoad=*/true);") == 1
 assert "-perf\n" in out.split("// ==/WindhawkMod==")[0]
+quiet = mpb.build(source, quiet=True).replace("\r\n", "\n")
+q_head_end = quiet.index("// ======================= end of PERF BUILD header")
+assert "Wh_Log(" not in quiet[q_head_end:], "quiet build left a mod Wh_Log"
+assert "-perf-quiet\n" in quiet.split("// ==/WindhawkMod==")[0]
+assert quiet.count("PERF_QUIET_LOG(") == source.count("Wh_Log(") + 1  # + the #define
 
 start = out.index("namespace perf {")
 end = out.index("#define PERF_SCOPE")

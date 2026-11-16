@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.30
+// @version         0.11.31
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -642,6 +642,23 @@ struct ButtonResolveData {
     std::wstring windowClass;
 };
 constexpr ULONGLONG kButtonResolveDeadlineMs = 5000;
+// Safety recheck for a resolved identity whose capture has not changed.
+constexpr ULONGLONG kResolvedRecheckMs = 60000;
+
+bool SameCapturedWindowSet(const std::vector<CapturedWindow>& a,
+                           const std::vector<CapturedWindow>& b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (const auto& w : a) {
+        if (std::none_of(b.begin(), b.end(), [&](const CapturedWindow& x) {
+                return x.hwnd == w.hwnd && x.pid == w.pid;
+            })) {
+            return false;
+        }
+    }
+    return true;
+}
 constexpr size_t kMaxButtonResolveQueue = 128;
 std::mutex g_buttonResolveMutex;
 std::vector<ButtonResolveData> g_buttonResolveQueue;
@@ -666,6 +683,11 @@ struct ButtonPathCacheEntry {
     // Explorer can reuse TaskListButton when an executable is replaced.
     int emptyResolveAttempts = 0;  // capped while path and AUMID stay empty
     ULONGLONG lastResolveTick = 0;  // empty-identity retry throttle
+    // Last worker result that confirmed a non-empty identity, and the
+    // button's AutomationId (Explorer's AppId) at that time. An unchanged
+    // capture is not re-resolved until kResolvedRecheckMs (0.11.31).
+    ULONGLONG lastConfirmedTick = 0;
+    std::wstring automationId;
     ULONGLONG lastRunningTick = 0;  // last time IsRunning was true (Alt-Tab grace)
     bool observedRunning = false;   // last UI snapshot; not a 400ms heartbeat
     // Last ApplyAllHighlights assignment: -1 unknown, 0 none, >0 1-based rank.
@@ -4123,21 +4145,32 @@ void ResolveOneButtonOnFocusThread() {
            buttonId, serial, GetTickCount64() - data.queuedTick,
            data.path.c_str(), data.appId.c_str(), data.windowClass.c_str());
     bool published = false;
+    bool sameIdentity = false;
     if (!g_unloading.load()) {
         std::lock_guard<std::mutex> lock(g_buttonPathMutex);
         auto it = g_buttonPathCache.find(data.buttonId);
         if (it != g_buttonPathCache.end() &&
             it->second.resolveSerial == data.serial) {
+            const auto& e = it->second;
+            // Confirms what the button already shows: leave the result for the
+            // next natural consume instead of requesting a full rebind.
+            sameIdentity = (!data.path.empty() || !data.appId.empty()) &&
+                           e.pathUpper == data.path &&
+                           e.appIdUpper == data.appId &&
+                           e.classUpper == data.windowClass &&
+                           e.sampleHwnd == data.hwnd &&
+                           e.samplePid == data.pid;
             it->second.resolveResult = std::move(data);
             published = true;
         }
     }
     bool dispatched = false;
-    if (published) {
+    if (published && !sameIdentity) {
         dispatched = RequestIdentityCompletionApply();
     }
-    Wh_Log(L"Identity delivery: button=%p request=%llu published=%d dispatched=%d",
-           buttonId, serial, published, dispatched);
+    Wh_Log(L"Identity delivery: button=%p request=%llu published=%d "
+           L"unchanged=%d dispatched=%d",
+           buttonId, serial, published, sameIdentity, dispatched);
     {
         std::lock_guard<std::mutex> lock(g_buttonResolveMutex);
         g_buttonResolvePosted = !g_unloading.load() &&
@@ -4210,6 +4243,24 @@ std::wstring EnsureButtonPathCached(FrameworkElement button,
         auto& e = g_buttonPathCache[id];
         if (!e.button)
             e.button = winrt::make_weak(button);
+        // 0.11.31: a resolved identity whose fresh capture (sample window and
+        // PID, window set, AutomationId, running state) is unchanged is not
+        // sent to the worker again until kResolvedRecheckMs. Before, every
+        // full rebind re-queued each button older than 2 s and every result
+        // requested another rebind: perf run 2026-11-16, ~2000 worker
+        // resolves and 527 rebinds in 10 minutes with nothing changing.
+        const bool captureUnchanged =
+            !force && !result &&
+            (!e.pathUpper.empty() || !e.appIdUpper.empty()) &&
+            e.resolvedWhileRunning == data.running &&
+            e.sampleHwnd == data.hwnd && e.samplePid == data.pid &&
+            e.automationId == data.automationId &&
+            SameCapturedWindowSet(e.groupWindows, data.windows) &&
+            now - e.lastConfirmedTick < kResolvedRecheckMs;
+        if (captureUnchanged) {
+            e.lastResolveTick = now;
+            return e.pathUpper;
+        }
         if (result && e.resolveSerial != result->serial) {
             Wh_Log(L"Identity superseded: button=%p request=%llu current=%llu",
                    id, result->serial, e.resolveSerial);
@@ -4231,6 +4282,8 @@ std::wstring EnsureButtonPathCached(FrameworkElement button,
                 e.samplePid = result->pid;
                 e.groupWindows = result->windows;
                 e.emptyResolveAttempts = 0;
+                e.lastConfirmedTick = now;
+                e.automationId = data.automationId;
             } else if (e.pathUpper.empty()) {
                 e.appIdUpper = result->appId;
                 if (e.appIdUpper.empty()) {
@@ -4242,6 +4295,8 @@ std::wstring EnsureButtonPathCached(FrameworkElement button,
                     e.groupWindows = result->windows;
                     e.classUpper = result->windowClass;
                     e.emptyResolveAttempts = 0;
+                    e.lastConfirmedTick = now;
+                    e.automationId = data.automationId;
                 }
             }
         }

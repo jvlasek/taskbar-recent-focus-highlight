@@ -11,6 +11,9 @@ Run before every release and compare with the previous release's numbers.
 3. Use the taskbar normally for a while (switch apps, hover icons and
    previews, open/close windows, change virtual desktops). Then disable the
    mod once: that logs the since-load summary.
+   For a release baseline use `--quiet` (writes `….perf-quiet.wh.cpp`):
+   every other log line becomes a no-op, so the numbers exclude the mod's
+   own logging. Compare quiet with quiet, normal with normal.
 4. Keep the `PERF` lines (e.g. `findstr PERF windhawk.log`) with the release
    notes in `tests/perf/results/<version>.txt`.
 
