@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.35
+// @version         0.11.36
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -341,7 +341,6 @@ to clear highlights.
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -849,9 +848,12 @@ constexpr ULONGLONG kFullRebindDebounceMs = 300;
 // After min-focus elapsed, poll this often while Alt-Tab / tray holds FG.
 constexpr ULONGLONG kTransientRetryPollMs = 200;
 // A focused window whose taskbar button has not been captured yet: ask for
-// a full pass (captures every button) and retry this many times.
+// a full pass (captures every button) and retry, for up to 5 s (at mod load
+// Explorer reports its buttons one by one over a second or two). A window
+// that still has none is not retried again for kNoButtonRetryAfterMs.
 constexpr ULONGLONG kAppIdRetryMs = 200;
-constexpr int kAppIdRetryMax = 8;
+constexpr int kAppIdRetryMax = 25;
+constexpr ULONGLONG kNoButtonRetryAfterMs = 30000;
 
 // All glow layers live on our overlay (never BackgroundElement — hover/active
 // storyboards own that and constantly wipe our styles). Host Tag holds the
@@ -7105,12 +7107,19 @@ void HandleForegroundChanged(HWND hWnd);
 // one; they give up after kAppIdRetryMax tries and are remembered.
 HWND g_appIdRetryHwnd = nullptr;
 int g_appIdRetryCount = 0;
-std::set<HWND> g_noButtonHwnds;
+std::unordered_map<HWND, ULONGLONG, HwndHash> g_noButtonHwnds;  // -> when
 
 bool ScheduleAppIdRetry(HWND hWnd) {
     hWnd = NormalizeFocusHwnd(hWnd);
-    if (!hWnd || g_noButtonHwnds.count(hWnd)) {
+    if (!hWnd) {
         return false;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (auto it = g_noButtonHwnds.find(hWnd); it != g_noButtonHwnds.end()) {
+        if (now - it->second < kNoButtonRetryAfterMs) {
+            return false;
+        }
+        g_noButtonHwnds.erase(it);
     }
     if (hWnd != g_appIdRetryHwnd) {
         g_appIdRetryHwnd = hWnd;
@@ -7120,7 +7129,7 @@ bool ScheduleAppIdRetry(HWND hWnd) {
         if (g_noButtonHwnds.size() > 128) {
             g_noButtonHwnds.clear();
         }
-        g_noButtonHwnds.insert(hWnd);
+        g_noButtonHwnds[hWnd] = now;
         Wh_Log(L"No taskbar button lists window %p: not ranked", hWnd);
         g_appIdRetryHwnd = nullptr;
         return false;
