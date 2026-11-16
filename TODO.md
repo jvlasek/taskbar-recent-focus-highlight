@@ -243,6 +243,17 @@ first, then the low-risk preview fixes, then identity.
   pending (parked 2026-11-15 until after the cleanup; mod is now about 309 KB
   vs about 24 KB for taskbar-active-window-highlight, which covers this).
 
+- [x] SOLIDWORKS document cards (taskbar tabs) unmarked — closed as a
+  known limitation (2026-11-16, 0.11.28 diagnostics): every card logs
+  `unresolved: no-parent-item`, one per document, on a "1 running window"
+  button. windowsudk.winmd `ITaskItemThumbnail` 1-4 expose no window/tab
+  link; document switches are not focus changes. Never worked (2026-11-15
+  logs with the private ctor map: `map=0`).
+- [ ] Idea (not for 0.12.0): `ITaskItem3` / `ITaskGroup3` expose
+  `SystemRelativeLastActivatedTime` — Explorer's own last-activation time per
+  window / group. Could cross-check or one day replace our window recency for
+  preview ranks (it ignores our min-focus rule, so only as an input).
+
 ## Optional enhancement
 
 - [ ] Evaluate Composition DropShadow for true glow only after correctness

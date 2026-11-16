@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.28
+// @version         0.11.29
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -81,6 +81,10 @@ to clear highlights.
 - Preview cards match through Explorer's own card view model (the window the
   card shows). If that is unavailable, the card is left unmarked rather than
   guessed from its title.
+- Apps that show documents as taskbar tabs (e.g. SOLIDWORKS: one card per
+  open document, one real window) are not marked in previews: Explorer links
+  those cards to no window, and switching documents is not a window focus
+  change. Their taskbar icon is ranked normally.
 - File Explorer folder windows (`CabinetWClass`) are ranked like other apps.
   The taskbar, desktop, Start, and IME stay ignored.
 - Multi-monitor: the same rank is applied on every taskbar that shows that
