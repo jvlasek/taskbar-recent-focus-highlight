@@ -82,17 +82,21 @@ their tests (rewritten, not dropped).
 - **Stored state:** recency lives in memory only (mod storage holds just the
   0.11 → 0.12 preview-style transition flag), so there is nothing to migrate;
   the first run after update starts with empty ranks, as after any restart.
-- **Open question — `requireTaskbarButton` off:** windows without a button
-  have no AppId. Option A: keep a fallback path key for them (more code);
-  option B: rank only button windows and note it (setting then only affects
-  the "skip" log). Proposal: B, since an app without a button can never be
-  highlighted anyway; it would only use up a rank slot.
+- **`requireTaskbarButton` — decided 2026-11-16 (Jakub): remove the
+  setting.** Windows without a button have no AppId and are never ranked.
+  The setting was added because a tray-only Home Assistant widget window
+  stole recency; with AppId identity that case is the only behavior. A
+  stored value is simply ignored (no transition needed: default "on" was the
+  kept behavior). Mention in the changelog.
 
 ## Plan
 
 1. Add `get_AppId` capture + window→AppId map alongside today's identity;
    log both (shadow, no behavior change) — one live run to confirm keys
    and map coverage (any focus confirmation that finds no AppId is logged).
+   **Done in 0.11.32:** log lines `AppId shadow: <app> key=… -> appId=…`
+   (once per new pair, `[SPLIT]` / `[MERGE]` marks), `AppId shadow: MISS …`,
+   and `group AppId … != item AppId …` (should never appear).
 2. Switch ranking/matching to AppId; remove the async machinery.
 3. Rewrite the identity tests; perf build + quiet run vs the 0.11.31
    baseline; live checks above.

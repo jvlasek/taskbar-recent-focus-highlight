@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.31
+// @version         0.11.32
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -343,9 +343,11 @@ to clear highlights.
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -566,6 +568,34 @@ struct HwndHash {
     }
 };
 
+// AppId identity (branch appid-identity, step 1: shadow only). Explorer's
+// AppId per taskbar window, from the button captures (UI thread); read by
+// the focus worker. Upper case. Pruned of dead windows when it grows.
+std::mutex g_windowAppIdMutex;
+std::unordered_map<HWND, std::wstring, HwndHash> g_windowAppId;
+
+void PublishWindowAppIds(const std::vector<HWND>& windows,
+                         const std::wstring& appIdUpper) {
+    if (appIdUpper.empty() || windows.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
+    for (HWND h : windows) {
+        g_windowAppId[h] = appIdUpper;
+    }
+    if (g_windowAppId.size() > 512) {
+        for (auto it = g_windowAppId.begin(); it != g_windowAppId.end();) {
+            it = IsWindow(it->first) ? std::next(it) : g_windowAppId.erase(it);
+        }
+    }
+}
+
+std::wstring LookupWindowAppId(HWND hwnd) {
+    std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
+    auto it = g_windowAppId.find(hwnd);
+    return it == g_windowAppId.end() ? std::wstring{} : it->second;
+}
+
 struct GuidHash {
     size_t operator()(const GUID& g) const noexcept {
         size_t h = 0;
@@ -637,6 +667,7 @@ struct ButtonResolveData {
     bool running = false;
     std::vector<CapturedWindow> windows;
     std::wstring automationId;
+    std::wstring explorerAppId;  // ITaskGroup/ITaskItem AppId (upper case)
     std::wstring path;
     std::wstring appId;
     std::wstring windowClass;
@@ -664,6 +695,7 @@ std::mutex g_buttonResolveMutex;
 std::vector<ButtonResolveData> g_buttonResolveQueue;
 bool g_buttonResolvePosted = false;
 std::atomic<ULONGLONG> g_buttonResolveSerial{0};
+
 
 struct ButtonPathCacheEntry {
     ULONGLONG resolveSerial = 0;
@@ -3800,6 +3832,46 @@ HWND HwndFromUdkTaskItem(::IUnknown* taskItem) {
     return IsWindow(hwnd) ? hwnd : nullptr;
 }
 
+// Explorer's AppId (the key it groups taskbar buttons by): ITaskItem /
+// ITaskGroup get_AppId, slot 0 of both public interfaces. Upper case.
+std::wstring UdkTaskItemAppId(::IUnknown* taskItem) {
+    if (!taskItem) {
+        return {};
+    }
+    try {
+        winrt::com_ptr<WudkITaskItemAbi> item;
+        winrt::hstring id;
+        if (FAILED(taskItem->QueryInterface(IID_Wudk_ITaskItem,
+                                            item.put_void())) ||
+            FAILED(item->get_AppId(reinterpret_cast<HSTRING*>(
+                winrt::put_abi(id))))) {
+            return {};
+        }
+        return ToUpper(std::wstring(id));
+    } catch (...) {
+        return {};
+    }
+}
+
+std::wstring UdkTaskGroupAppId(void* udkTaskGroup) {
+    if (!udkTaskGroup) {
+        return {};
+    }
+    try {
+        winrt::com_ptr<WudkITaskGroupAbi> group;
+        winrt::hstring id;
+        if (FAILED(static_cast<::IUnknown*>(udkTaskGroup)->QueryInterface(
+                IID_Wudk_ITaskGroup, group.put_void())) ||
+            FAILED(group->get_AppId(reinterpret_cast<HSTRING*>(
+                winrt::put_abi(id))))) {
+            return {};
+        }
+        return ToUpper(std::wstring(id));
+    } catch (...) {
+        return {};
+    }
+}
+
 // Public replacement for CTaskGroup's private item array: the group's
 // Items -> each item's WindowId. Returns false if the interfaces are not
 // available (caller keeps the old path).
@@ -3949,6 +4021,8 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         // ApplicationFrameWindow, the HWND focus tracking uses.
         auto udkItem = GetWindowsUdkTaskItemFromTaskListButton(el);
         HWND ownWindow = nullptr;
+        std::wstring itemAppId = UdkTaskItemAppId(udkItem.get());
+        std::wstring groupAppId;
         if (udkItem) {
             if (HWND h = HwndFromUdkTaskItem(udkItem.get())) {
                 ownWindow = h;
@@ -3958,6 +4032,7 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         void* windowsUdkTaskGroup =
             GetWindowsUdkTaskGroupFromTaskListButton(el);
         if (windowsUdkTaskGroup) {
+            groupAppId = UdkTaskGroupAppId(windowsUdkTaskGroup);
             std::vector<HWND> groupHwnds;
             if (CollectUdkGroupWindows(windowsUdkTaskGroup, groupHwnds)) {
                 for (HWND h : groupHwnds) {
@@ -4000,6 +4075,13 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         if (uncombined) {
             udkWindows.assign(1, ownWindow);
         }
+        data.explorerAppId = !groupAppId.empty() ? groupAppId : itemAppId;
+        if (!groupAppId.empty() && !itemAppId.empty() &&
+            groupAppId != itemAppId) {
+            Wh_Log(L"AppId shadow: button=%p group AppId %s != item AppId %s",
+                   data.buttonId, groupAppId.c_str(), itemAppId.c_str());
+        }
+        PublishWindowAppIds(udkWindows, data.explorerAppId);
         if (!udkWindows.empty()) {
             usedUdk = true;
             for (HWND h : udkWindows) {
@@ -7231,6 +7313,41 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     RequestApplyPreviewVisuals();
 }
 
+// AppId identity, step 1 (shadow, log only): at each app confirmation,
+// compare our key with Explorer's AppId for that window. Partitions, not
+// spellings: SPLIT = one key, several AppIds (Explorer separates what we
+// merge, e.g. browser profiles); MERGE = one AppId, several keys (we
+// separate what Explorer groups). MISS = window not on any captured button.
+// Focus worker only.
+void ShadowCompareAppId(HWND hwnd, const std::wstring& key,
+                        const std::wstring& displayName) {
+    static std::map<std::wstring, std::set<std::wstring>> keyToAppIds;
+    static std::map<std::wstring, std::set<std::wstring>> appIdToKeys;
+    static std::set<HWND> missLogged;
+    const std::wstring appId = LookupWindowAppId(hwnd);
+    if (appId.empty()) {
+        if (missLogged.size() < 256 && missLogged.insert(hwnd).second) {
+            Wh_Log(L"AppId shadow: MISS %s hwnd=%p key=%s (no captured "
+                   L"button lists this window)",
+                   displayName.c_str(), hwnd, key.c_str());
+        }
+        return;
+    }
+    if (keyToAppIds.size() > 256 || appIdToKeys.size() > 256) {
+        return;
+    }
+    auto& ids = keyToAppIds[key];
+    auto& keys = appIdToKeys[appId];
+    const bool newPair = ids.insert(appId).second;
+    keys.insert(key);
+    if (!newPair) {
+        return;
+    }
+    Wh_Log(L"AppId shadow: %s key=%s -> appId=%s%s%s", displayName.c_str(),
+           key.c_str(), appId.c_str(), ids.size() > 1 ? L" [SPLIT]" : L"",
+           keys.size() > 1 ? L" [MERGE]" : L"");
+}
+
 void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     auto settings = SettingsSnap();
     if (g_unloading.load()) {
@@ -7332,6 +7449,8 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         }
         return;
     }
+
+    ShadowCompareAppId(pending.hwnd, pending.key, pending.displayName);
 
     const ULONGLONG now = GetTickCount64();
     {
