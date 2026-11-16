@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.36
+// @version         0.11.37
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -837,7 +837,6 @@ constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
-constexpr UINT_PTR kAppIdRetryTimerId = 6;
 // Owned and accessed only by the focus thread.
 UINT g_shellHookMessage = 0;
 constexpr UINT kDecayCheckIntervalMs = 30 * 1000;
@@ -847,13 +846,6 @@ constexpr ULONGLONG kIsRunningGraceMs = 400;
 constexpr ULONGLONG kFullRebindDebounceMs = 300;
 // After min-focus elapsed, poll this often while Alt-Tab / tray holds FG.
 constexpr ULONGLONG kTransientRetryPollMs = 200;
-// A focused window whose taskbar button has not been captured yet: ask for
-// a full pass (captures every button) and retry, for up to 5 s (at mod load
-// Explorer reports its buttons one by one over a second or two). A window
-// that still has none is not retried again for kNoButtonRetryAfterMs.
-constexpr ULONGLONG kAppIdRetryMs = 200;
-constexpr int kAppIdRetryMax = 25;
-constexpr ULONGLONG kNoButtonRetryAfterMs = 30000;
 
 // All glow layers live on our overlay (never BackgroundElement — hover/active
 // storyboards own that and constantly wipe our styles). Host Tag holds the
@@ -1480,7 +1472,7 @@ std::wstring MakeAppKey(const std::wstring& pathUpper,
 }
 
 std::wstring PathFromAppKey(const std::wstring& key) {
-    if (key.rfind(L"APPID:", 0) == 0) {
+    if (key.rfind(L"APPID:", 0) == 0 || key.rfind(L"WINDOW:", 0) == 0) {
         return {};
     }
     return key;
@@ -1491,6 +1483,17 @@ std::wstring AppIdFromAppKey(const std::wstring& key) {
         return {};
     }
     return key.substr(6);
+}
+
+// Window not (yet) listed by any captured taskbar button. Never ranked.
+std::wstring ProvisionalAppKey(HWND hwnd) {
+    wchar_t buf[40];
+    swprintf_s(buf, L"WINDOW:%p", hwnd);
+    return buf;
+}
+
+bool IsProvisionalAppKey(const std::wstring& key) {
+    return key.rfind(L"WINDOW:", 0) == 0;
 }
 
 std::wstring GetWindowTitle(HWND hWnd);
@@ -1606,8 +1609,11 @@ std::wstring GetWindowTitle(HWND hWnd) {
 
 // App key = APPID:<Explorer AppId> of the taskbar button that lists this
 // window (0.11.33; was the window AUMID or process path). A window that no
-// captured button lists yet returns false with *outNoButton set: the caller
-// asks for a full pass and retries; tray-only windows stay unranked.
+// captured button lists yet (just opened, or the mod just loaded and
+// Explorer has not reported its buttons) gets a provisional per-window key
+// (*outNoButton set). Its recency is kept and moved to the AppId key once a
+// button lists the window (AttributeProvisionalAppsLocked); a window that
+// never gets a button (tray widget) is never ranked and decays.
 bool ResolveAppIdentity(HWND hWnd,
                         std::wstring& outKey,
                         std::wstring& outDisplayName,
@@ -1692,13 +1698,15 @@ bool ResolveAppIdentity(HWND hWnd,
     }
 
     const std::wstring explorerAppId = LookupWindowAppId(hWnd);
+    std::wstring key;
     if (explorerAppId.empty()) {
         if (outNoButton) {
             *outNoButton = true;
         }
-        return false;
+        key = ProvisionalAppKey(hWnd);
+    } else {
+        key = std::wstring(L"APPID:") + explorerAppId;
     }
-    const std::wstring key = std::wstring(L"APPID:") + explorerAppId;
     // The exclude list may also name the Explorer AppId spelling.
     if (IsExcludedKey(key, ToUpper(displayName), appIdUpper, pathUpper)) {
         Wh_Log(L"Excluded: %s", displayName.c_str());
@@ -1794,8 +1802,54 @@ bool AppAppearsOnTaskbar(const std::wstring& key) {
     return false;
 }
 
+// Requires g_stateMutex. Moves recency recorded under a provisional
+// WINDOW: key to the APPID: key of the button that now lists that window
+// (newer confirmation wins when the app already has a record).
+void AttributeProvisionalAppsLocked(DesktopRecencyState& desk) {
+    std::vector<std::pair<std::wstring, std::wstring>> moves;  // old, new
+    for (const auto& [key, info] : desk.appFocusMap) {
+        if (!IsProvisionalAppKey(key) || !info.lastHwnd ||
+            !HwndMatchesStoredPid(info.lastHwnd, info.lastPid)) {
+            continue;
+        }
+        const std::wstring appId = LookupWindowAppId(info.lastHwnd);
+        if (!appId.empty()) {
+            moves.emplace_back(key, std::wstring(L"APPID:") + appId);
+        }
+    }
+    for (const auto& [oldKey, newKey] : moves) {
+        auto it = desk.appFocusMap.find(oldKey);
+        if (it == desk.appFocusMap.end()) {
+            continue;
+        }
+        AppFocusInfo moved = std::move(it->second);
+        desk.appFocusMap.erase(it);
+        moved.key = newKey;
+        Wh_Log(L"Attributed %s window %p to %s", moved.displayName.c_str(),
+               moved.lastHwnd, newKey.c_str());
+        auto& dst = desk.appFocusMap[newKey];
+        if (dst.key.empty() ||
+            moved.lastConfirmedFocusTick > dst.lastConfirmedFocusTick) {
+            dst = std::move(moved);
+        }
+        for (auto& [hwnd, w] : desk.windowAppFocus) {
+            (void)hwnd;
+            if (w.key == oldKey) {
+                w.key = newKey;
+            }
+        }
+        for (auto& [hwnd, w] : desk.windowFocusMap) {
+            (void)hwnd;
+            if (w.processKey == oldKey) {
+                w.processKey = newKey;
+            }
+        }
+    }
+}
+
 void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
     desk.rankedApps.clear();
+    AttributeProvisionalAppsLocked(desk);
 
     auto settings = SettingsSnap();
     if (g_unloading.load()) {
@@ -6722,7 +6776,11 @@ bool StillPendingForeground(const PendingFocus& pending,
         // different taskbar buttons (UWP hosts; TC main window vs Lister).
         {
             const std::wstring fgId = LookupWindowAppId(foreground);
-            if (fgId.empty() || fgId != AppIdFromAppKey(pending.key)) {
+            std::wstring pendingId = AppIdFromAppKey(pending.key);
+            if (pendingId.empty()) {
+                pendingId = LookupWindowAppId(pending.hwnd);
+            }
+            if (fgId.empty() || fgId != pendingId) {
                 return false;
             }
         }
@@ -7099,59 +7157,6 @@ void SchedulePreviewConfirm(bool windowAlreadyTracked) {
                  static_cast<ULONGLONG>(previewMin) * 1000ULL);
 }
 
-void HandleForegroundChanged(HWND hWnd);
-
-// Focus worker only. A focused window that no captured taskbar button lists
-// yet (just opened): request a full pass, which captures every button and
-// publishes its windows' AppIds, then retry. Tray-only windows never get
-// one; they give up after kAppIdRetryMax tries and are remembered.
-HWND g_appIdRetryHwnd = nullptr;
-int g_appIdRetryCount = 0;
-std::unordered_map<HWND, ULONGLONG, HwndHash> g_noButtonHwnds;  // -> when
-
-bool ScheduleAppIdRetry(HWND hWnd) {
-    hWnd = NormalizeFocusHwnd(hWnd);
-    if (!hWnd) {
-        return false;
-    }
-    const ULONGLONG now = GetTickCount64();
-    if (auto it = g_noButtonHwnds.find(hWnd); it != g_noButtonHwnds.end()) {
-        if (now - it->second < kNoButtonRetryAfterMs) {
-            return false;
-        }
-        g_noButtonHwnds.erase(it);
-    }
-    if (hWnd != g_appIdRetryHwnd) {
-        g_appIdRetryHwnd = hWnd;
-        g_appIdRetryCount = 0;
-    }
-    if (g_appIdRetryCount >= kAppIdRetryMax) {
-        if (g_noButtonHwnds.size() > 128) {
-            g_noButtonHwnds.clear();
-        }
-        g_noButtonHwnds[hWnd] = now;
-        Wh_Log(L"No taskbar button lists window %p: not ranked", hWnd);
-        g_appIdRetryHwnd = nullptr;
-        return false;
-    }
-    ++g_appIdRetryCount;
-    RequestApplyVisuals();
-    ArmHookTimer(kAppIdRetryTimerId, kAppIdRetryMs);
-    return true;
-}
-
-void OnAppIdRetryTimer() {
-    HWND want = g_appIdRetryHwnd;
-    if (!want || g_unloading.load()) {
-        return;
-    }
-    if (NormalizeFocusHwnd(GetForegroundWindow()) != want) {
-        g_appIdRetryHwnd = nullptr;
-        return;
-    }
-    HandleForegroundChanged(want);
-}
-
 void HandleForegroundChanged(HWND hWnd) {
     if (g_unloading.load()) {
         return;
@@ -7199,12 +7204,6 @@ void HandleForegroundChanged(HWND hWnd) {
     bool noButton = false;
     if (!ResolveAppIdentity(hWnd, key, displayName, processId, &windowTitle,
                             &appIdUpper, &pathUpper, &noButton)) {
-        // A brand-new window's button may not be captured yet: ask for a
-        // full pass and look again shortly. Keep the current pending app
-        // meanwhile; its own timer notices that focus left.
-        if (noButton && ScheduleAppIdRetry(hWnd)) {
-            return;
-        }
         CancelMinFocusTimer();
         CancelPreviewMinFocusTimer();
         bool ranksNonEmpty = false;
@@ -7220,8 +7219,10 @@ void HandleForegroundChanged(HWND hWnd) {
         return;
     }
 
-    if (hWnd == g_appIdRetryHwnd) {
-        g_appIdRetryHwnd = nullptr;
+    if (noButton) {
+        // Provisional key until a captured button lists this window: ask
+        // for a full pass now so a button that exists is captured soon.
+        RequestApplyVisuals();
     }
 
     const ULONGLONG now = GetTickCount64();
@@ -7535,9 +7536,6 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
                 RequestApplyVisuals();
-            } else if (wParam == kAppIdRetryTimerId) {
-                KillTimer(hWnd, kAppIdRetryTimerId);
-                OnAppIdRetryTimer();
             }
             return 0;
         case WM_DESTROY:
@@ -7545,7 +7543,6 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
-            KillTimer(hWnd, kAppIdRetryTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }

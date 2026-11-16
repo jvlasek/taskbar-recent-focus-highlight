@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.36). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.37). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -70,11 +70,14 @@ reports the new AppId. No worker round trip, serials, deadlines or rechecks
 2. checks the exclude list (names, paths, AUMIDs — unchanged setting);
 3. looks the window up in the window → AppId map: key = `APPID:<AppId>`.
 
-A window that no captured button lists yet (just opened) is not guessed:
-`ScheduleAppIdRetry` requests a full pass and retries (`kAppIdRetryMs` ×
-`kAppIdRetryMax`). A window that never gets a button (tray-only widgets,
-popups) is logged once (`No taskbar button lists window …`) and never ranked.
-This replaced the `requireTaskbarButton` setting (removed in 0.11.33).
+A window that no captured button lists yet (just opened, or the mod just
+loaded: Explorer reports a button only when its visual state updates) gets a
+provisional key `WINDOW:<hwnd>` and a full pass is requested. Its recency is
+kept and moved to `APPID:<AppId>` by `AttributeProvisionalAppsLocked` (start of
+every rank recompute) once a button lists the window. Provisional keys are
+never ranked, so a window that never gets a button (tray widgets, popups)
+just decays. This replaced the `requireTaskbarButton` setting (removed in
+0.11.33) and the 0.11.33–0.11.36 retry timer.
 
 Examples (shadow logs 2026-11-16): TC `{6D809377-…}\TOTALCMD\TOTALCMD64.EXE`,
 Lister `LISTER{CECFE544-…}`, VS Code `MICROSOFT.VISUALSTUDIOCODE`, Terminal
