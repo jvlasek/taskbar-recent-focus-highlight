@@ -141,6 +141,13 @@ int main() {
     ident.groupWindows.push_back({newWin, 42});
     assert(IdentityMatchesRank(ident, slot));
 
+    // Uncombined button + app-level rank: only the app's last window.
+    ButtonIdentity w1; w1.appIdUpper = tc; w1.uncombined = true;
+    w1.sampleHwnd = tcWin; w1.samplePid = 42; w1.groupWindows = {{tcWin, 42}};
+    ButtonIdentity w2 = w1; w2.sampleHwnd = newWin; w2.groupWindows = {{newWin, 42}};
+    AppFocusInfo appRank = tcRank; appRank.lastHwnd = tcWin; appRank.lastPid = 42;
+    assert(IdentityMatchesRank(w1, appRank));
+    assert(!IdentityMatchesRank(w2, appRank));
     // On the taskbar: a running button with that AppId.
     assert(AppAppearsOnTaskbar(L"APPID:" + tc));
     assert(!AppAppearsOnTaskbar(L"APPID:" + lister));

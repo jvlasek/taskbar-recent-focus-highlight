@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.33
+// @version         0.11.34
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -660,6 +660,7 @@ struct ButtonResolveData {
     bool running = false;
     std::vector<CapturedWindow> windows;
     std::wstring explorerAppId;  // ITaskGroup/ITaskItem AppId (upper case)
+    bool uncombined = false;     // Never Combine: stands for one window
 };
 
 
@@ -671,6 +672,7 @@ struct ButtonPathCacheEntry {
     HWND sampleHwnd = nullptr;  // first window of the button
     DWORD samplePid = 0;
     std::vector<CapturedWindow> groupWindows;
+    bool uncombined = false;  // own-window button (Never Combine)
     ULONGLONG lastRunningTick = 0;  // last time IsRunning was true (Alt-Tab grace)
     bool observedRunning = false;   // last UI snapshot; not a 400ms heartbeat
     // Last ApplyAllHighlights assignment: -1 unknown, 0 none, >0 1-based rank.
@@ -2134,6 +2136,7 @@ winrt::Windows::UI::Color ResolveGlowBaseColor(const Settings& settings) {
 
 struct ButtonIdentity {
     std::wstring appIdUpper;  // Explorer's AppId
+    bool uncombined = false;  // own-window button (Never Combine)
     HWND sampleHwnd = nullptr;
     DWORD samplePid = 0;
     std::vector<CapturedWindow> groupWindows;
@@ -2303,8 +2306,21 @@ bool IdentityMatchesRank(const ButtonIdentity& ident,
                ident.samplePid == info.lastPid;
     }
     // One taskbar button = one app = one Explorer AppId.
-    return !ident.appIdUpper.empty() &&
-           AppIdFromAppKey(info.key) == ident.appIdUpper;
+    if (ident.appIdUpper.empty() ||
+        AppIdFromAppKey(info.key) != ident.appIdUpper) {
+        return false;
+    }
+    // Uncombined buttons (Never Combine) each stand for one window. An
+    // app-level rank (window not confirmed on its own yet) lights only the
+    // button of the app's last focused window, not every window of the app
+    // (user report 2026-11-16: all Calculator buttons lit after switching
+    // to Never Combine).
+    if (ident.uncombined) {
+        return info.lastHwnd && info.lastPid &&
+               HwndMatchesStoredPid(info.lastHwnd, info.lastPid) &&
+               ident.sampleHwnd == info.lastHwnd;
+    }
+    return true;
 }
 
 // Best rank for a single button (1-based), or 0.
@@ -3951,6 +3967,7 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         if (uncombined) {
             udkWindows.assign(1, ownWindow);
         }
+        data.uncombined = uncombined;
         data.explorerAppId = !groupAppId.empty() ? groupAppId : itemAppId;
         if (!groupAppId.empty() && !itemAppId.empty() &&
             groupAppId != itemAppId) {
@@ -4025,7 +4042,11 @@ std::wstring EnsureButtonIdentity(FrameworkElement button) {
     } else if (windowsChanged) {
         e.lastPaintRank = -1;
     }
+    if (e.uncombined != data.uncombined) {
+        e.lastPaintRank = -1;
+    }
     e.appIdUpper = data.explorerAppId;
+    e.uncombined = data.uncombined;
     e.sampleHwnd = data.hwnd;
     e.samplePid = data.pid;
     e.groupWindows = std::move(data.windows);
@@ -4049,6 +4070,7 @@ ButtonIdentity GetCachedButtonIdentity(FrameworkElement button) {
     }
     const auto& e = it->second;
     out.appIdUpper = e.appIdUpper;
+    out.uncombined = e.uncombined;
     out.sampleHwnd = e.sampleHwnd;
     out.samplePid = e.samplePid;
     out.groupWindows = e.groupWindows;
