@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.29
+// @version         0.11.30
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -49,7 +49,7 @@ that flyout gets its own recency ladder (independent of icon ranks). The
 last focused window of that app is rank 1 in the flyout even if you used
 other apps more recently. Single-window flyouts are left alone unless
 **Also mark single-window previews** is on; then the card is marked as rank 1
-while its window is recent.
+while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
 plate for rank 1, title tint for ranks 2+); also an outline, a thin bar under
@@ -240,7 +240,9 @@ to clear highlights.
       $description: >-
         Mark the preview of an app with only one window too, as rank 1 while
         that window is recent (Preview minimum focus / Decay below), the same
-        way the latest window of a multi-window flyout is marked.
+        way the latest window of a multi-window flyout is marked. For a single
+        window the mark therefore means "used within the preview decay";
+        lower the decay to tighten it.
         For an active-window-only preview highlight, the much smaller
         taskbar-active-window-highlight mod does just that.
     - topStyle: plate

@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.29). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.30). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -142,7 +142,8 @@ in this flyout?”.
 - Each multi-window flyout has its **own** recency ladder (top N among
   siblings), not a global window rank and not “most recent only”.
 - **Skip** flyouts with ≤1 thumbnail, unless `previews.singleWindow` is on
-  (0.11.23; 0.11.27: ranked like any flyout, so rank 1 while recent).
+  (0.11.23; 0.11.27: ranked like any flyout, so rank 1 while recent — for one
+  window that means "used within the preview decay", by design, user 2026-11-16).
 - Preview timers are **independent** of app timers.
 - Do **not** require the app to be in icon top-N.
 - Preview ranks reuse the same intensity idea as icons (`previewIntensity[3]`;
