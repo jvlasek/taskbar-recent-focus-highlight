@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.25
+// @version         0.11.26
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -4521,6 +4521,30 @@ void ForEachLiveElementOnThisDispatcher(
     }
 }
 
+// ItemsRepeater keeps recycled TaskListButtons parented, parked off-screen
+// (about -10000,-10000), with their last AutomationId / name (UWPSpy capture
+// uwspy-nevercombine). Their cached identity can still match a rank, so a
+// full rebind used to "bind" one rank to every parked copy. GetElementIndex
+// is -1 for an element the repeater does not currently show. No repeater
+// ancestor (unknown layout): treat as shown, as before.
+bool IsRealizedTaskbarButton(FrameworkElement const& button) {
+    try {
+        DependencyObject child = button;
+        DependencyObject cur = Media::VisualTreeHelper::GetParent(button);
+        for (int depth = 0; cur && depth < 8; ++depth) {
+            if (auto repeater =
+                    cur.try_as<winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater>()) {
+                auto element = child.try_as<UIElement>();
+                return element && repeater.GetElementIndex(element) >= 0;
+            }
+            child = cur;
+            cur = Media::VisualTreeHelper::GetParent(cur);
+        }
+    } catch (...) {
+    }
+    return true;
+}
+
 std::vector<FrameworkElement> CollectLiveButtonsOnThisDispatcher() {
     PruneTrackedButtons_UIThread();
     PruneDeadButtonPathCache_UIThread();
@@ -4543,6 +4567,17 @@ void ApplyAllHighlights_UIThread(bool allowIdentityRefresh) {
     g_lastFullRefreshTick = GetTickCount64();
 
     std::vector<FrameworkElement> live = CollectLiveButtonsOnThisDispatcher();
+    size_t parked = 0;
+    live.erase(std::remove_if(live.begin(), live.end(),
+                              [&](FrameworkElement const& b) {
+                                  if (IsRealizedTaskbarButton(b)) {
+                                      return false;
+                                  }
+                                  ClearButtonHighlight(b);
+                                  ++parked;
+                                  return true;
+                              }),
+               live.end());
 
     // Snapshot IsRunning before eligibility. Empty ranks used to return
     // here and never refresh lastRunningTick / observedRunning, so idle
@@ -4570,8 +4605,9 @@ void ApplyAllHighlights_UIThread(bool allowIdentityRefresh) {
         deskId = g_currentDesktopId;
     }
 
-    Wh_Log(L"ApplyAllHighlights: %zu tracked buttons, %zu ranks desktop=%s",
-           live.size(), ranks.size(), GuidToLogString(deskId).c_str());
+    Wh_Log(L"ApplyAllHighlights: %zu tracked buttons (+%zu recycled, "
+           L"skipped), %zu ranks desktop=%s",
+           live.size(), parked, ranks.size(), GuidToLogString(deskId).c_str());
     for (size_t i = 0; i < ranks.size(); ++i) {
         if (ranks[i].perWindow) {
             Wh_Log(L"  rank list[%zu]: %s window %p \"%s\"", i + 1,
