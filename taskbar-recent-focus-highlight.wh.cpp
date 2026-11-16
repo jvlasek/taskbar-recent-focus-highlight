@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.27
+// @version         0.11.28
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -4761,50 +4761,101 @@ WudkGetObject_t TaskItemThumbnailViewModel_get_TaskItemThumbnail;
 // card -> ThumbnailSource (view model) -> TaskItemThumbnail -> ParentItem
 // -> WindowId. Per card, no ctor timing, no index; for UWP the WindowId is
 // the ApplicationFrameWindow (shadow log 2026-11-15), matching focus.
-HWND ResolveHwndFromCardViewModel(FrameworkElement const& card) {
+// Why a card did not resolve (diagnostics; 0 = resolved).
+enum class CardResolveFail : int {
+    None = 0,
+    Unavailable,   // getters not found
+    NoView,        // QI ITaskItemThumbnailView
+    NoSource,      // ThumbnailSource
+    NoViewModel,   // QI ITaskItemThumbnailViewModel
+    NoThumbnail,   // TaskItemThumbnail
+    NoThumbnailQi, // QI ITaskItemThumbnail
+    NoParentItem,  // ParentItem null / failed
+    NoWindowId,    // get_WindowId failed
+    NotAWindow,    // WindowId is not a live HWND
+    Exception,
+};
+
+PCWSTR CardResolveFailName(CardResolveFail f) {
+    switch (f) {
+        case CardResolveFail::None: return L"ok";
+        case CardResolveFail::Unavailable: return L"unavailable";
+        case CardResolveFail::NoView: return L"no-view";
+        case CardResolveFail::NoSource: return L"no-source";
+        case CardResolveFail::NoViewModel: return L"no-viewmodel";
+        case CardResolveFail::NoThumbnail: return L"no-thumbnail";
+        case CardResolveFail::NoThumbnailQi: return L"no-thumbnail-qi";
+        case CardResolveFail::NoParentItem: return L"no-parent-item";
+        case CardResolveFail::NoWindowId: return L"no-window-id";
+        case CardResolveFail::NotAWindow: return L"not-a-window";
+        case CardResolveFail::Exception: return L"exception";
+    }
+    return L"?";
+}
+
+HWND ResolveHwndFromCardViewModel(FrameworkElement const& card,
+                                  CardResolveFail* fail = nullptr,
+                                  UINT64* rawWindowId = nullptr) {
+    auto failed = [&](CardResolveFail f) -> HWND {
+        if (fail) {
+            *fail = f;
+        }
+        return nullptr;
+    };
+    if (fail) {
+        *fail = CardResolveFail::None;
+    }
+    if (rawWindowId) {
+        *rawWindowId = 0;
+    }
     if (!card || !TaskItemThumbnailView_get_ThumbnailSource ||
         !TaskItemThumbnailViewModel_get_TaskItemThumbnail) {
-        return nullptr;
+        return failed(CardResolveFail::Unavailable);
     }
     try {
         auto* unknown = static_cast<::IUnknown*>(winrt::get_abi(card));
         winrt::com_ptr<::IUnknown> view;
         if (FAILED(unknown->QueryInterface(IID_Wudk_ITaskItemThumbnailView,
                                            view.put_void()))) {
-            return nullptr;
+            return failed(CardResolveFail::NoView);
         }
         winrt::com_ptr<::IUnknown> source;
         if (TaskItemThumbnailView_get_ThumbnailSource(view.get(),
                                                       source.put_void()) < 0 ||
             !source) {
-            return nullptr;
+            return failed(CardResolveFail::NoSource);
         }
         winrt::com_ptr<::IUnknown> viewModel;
         if (FAILED(source->QueryInterface(IID_Wudk_ITaskItemThumbnailViewModel,
                                           viewModel.put_void()))) {
-            return nullptr;
+            return failed(CardResolveFail::NoViewModel);
         }
         winrt::com_ptr<::IUnknown> thumbnailObject;
         if (TaskItemThumbnailViewModel_get_TaskItemThumbnail(
                 viewModel.get(), thumbnailObject.put_void()) < 0 ||
             !thumbnailObject) {
-            return nullptr;
+            return failed(CardResolveFail::NoThumbnail);
         }
         winrt::com_ptr<WudkITaskItemThumbnailAbi> thumbnail;
         if (FAILED(thumbnailObject->QueryInterface(IID_Wudk_ITaskItemThumbnail,
                                                    thumbnail.put_void()))) {
-            return nullptr;
+            return failed(CardResolveFail::NoThumbnailQi);
         }
         winrt::com_ptr<WudkITaskItemAbi> item;
+        if (FAILED(thumbnail->get_ParentItem(item.put())) || !item) {
+            return failed(CardResolveFail::NoParentItem);
+        }
         UINT64 windowId = 0;
-        if (FAILED(thumbnail->get_ParentItem(item.put())) || !item ||
-            FAILED(item->get_WindowId(&windowId))) {
-            return nullptr;
+        if (FAILED(item->get_WindowId(&windowId))) {
+            return failed(CardResolveFail::NoWindowId);
+        }
+        if (rawWindowId) {
+            *rawWindowId = windowId;
         }
         HWND hwnd = reinterpret_cast<HWND>(windowId);
-        return IsWindow(hwnd) ? hwnd : nullptr;
+        return IsWindow(hwnd) ? hwnd : failed(CardResolveFail::NotAWindow);
     } catch (...) {
-        return nullptr;
+        return failed(CardResolveFail::Exception);
     }
 }
 
@@ -6059,6 +6110,8 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         ResolveHow how = ResolveHow::None;
         int rank = 0;  // 1-based flyout rank; 0 = not highlighted
         HWND viaViewModel = nullptr;
+        CardResolveFail fail = CardResolveFail::None;
+        UINT64 rawWindowId = 0;
     };
     std::vector<Scored> scored(siblings.size());
     std::unordered_set<HWND> usedHwnds;
@@ -6098,7 +6151,8 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
 
     // Card view model -> ParentItem.WindowId.
     for (size_t i = 0; i < siblings.size(); ++i) {
-        HWND hwnd = ResolveHwndFromCardViewModel(siblings[i]);
+        HWND hwnd = ResolveHwndFromCardViewModel(
+            siblings[i], &scored[i].fail, &scored[i].rawWindowId);
         scored[i].viaViewModel = hwnd;
         if (hwnd && !usedHwnds.count(hwnd)) {
             stampRecency(i, hwnd);
@@ -6166,6 +6220,19 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
                    scored[i].rank,
                    scored[i].rank > 0 ? L" [GLOW]" : L"",
                    scored[i].viaViewModel, name.c_str());
+            if (scored[i].fail != CardResolveFail::None) {
+                HWND raw = reinterpret_cast<HWND>(scored[i].rawWindowId);
+                wchar_t cls[96] = L"";
+                DWORD pid = 0;
+                if (raw && IsWindow(raw)) {
+                    GetClassNameW(raw, cls, ARRAYSIZE(cls));
+                    GetWindowThreadProcessId(raw, &pid);
+                }
+                Wh_Log(L"    unresolved: %s windowId=0x%llx class=%s pid=%u",
+                       CardResolveFailName(scored[i].fail),
+                       static_cast<unsigned long long>(scored[i].rawWindowId),
+                       cls, pid);
+            }
         }
     }
 
