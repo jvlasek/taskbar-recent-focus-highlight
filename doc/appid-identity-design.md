@@ -1,6 +1,6 @@
 # AppId identity rewrite — design (branch `appid-identity`)
 
-Status: proposal, 2026-11-16. Baseline: 0.11.31 (`main`), perf baseline
+Status: step 2 implemented (0.11.33), live test pending; 2026-11-16. Baseline: 0.11.31 (`main`), perf baseline
 `tests/perf/results/0.11.31-quiet-baseline.txt`. Target: part of the single
 0.12.0 windhawk-mods submission.
 
@@ -98,6 +98,9 @@ their tests (rewritten, not dropped).
    (once per new pair, `[SPLIT]` / `[MERGE]` marks), `AppId shadow: MISS …`,
    and `group AppId … != item AppId …` (should never appear).
 2. Switch ranking/matching to AppId; remove the async machinery.
+   **Done in 0.11.33** (net about -200 lines in the mod after the shadow
+   code; also removed: the OnPointerPressed hook, the requireTaskbarButton
+   setting, dead helpers). Live test pending.
 3. Rewrite the identity tests; perf build + quiet run vs the 0.11.31
    baseline; live checks above.
 4. Merge into `main`, then 0.12.0.
