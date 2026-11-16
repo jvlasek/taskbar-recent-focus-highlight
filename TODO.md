@@ -219,7 +219,8 @@ first, then the low-risk preview fixes, then identity.
   Lister are two apps now; requested 2026-11-15: one button = one app).
   Expect the TC `SPLIT` to disappear from shadow logs. Still open: apps
   whose AUMID is process-level only (not on the window) stay path-keyed.
-- [ ] (Deferred, not for 0.12.0) Switch app keys to `TaskGroup.AppId` only after shadow logs are clean
+- [x] Switch app keys to `TaskGroup.AppId` — done in 0.11.32-0.11.37 (branch
+  `appid-identity`, merged 2026-11-17). Was: only after shadow logs are clean
   (needs the shadow branch revived; not planned for 0.12.0).
   Keep window-level (WindowId) matching first so Never Combine buttons of one
   AppId do not all light up. Plan exclude-list migration (keys change from
@@ -254,6 +255,14 @@ first, then the low-risk preview fixes, then identity.
   `SystemRelativeLastActivatedTime` — Explorer's own last-activation time per
   window / group. Could cross-check or one day replace our window recency for
   preview ranks (it ignores our min-focus rule, so only as an input).
+
+- [ ] Known, low priority (2026-11-17, 0.11.37): after loading the mod into a
+  running Explorer (compile / enable), Explorer reports each taskbar button
+  only when its visual state next changes, so ranks appear only after the
+  first hover/switch (history is kept under a provisional key and attributed
+  then). Not an issue at Explorer start. Possible fix: enumerate the taskbar
+  XAML tree at load, which needs a way onto the taskbar UI thread before any
+  hook fires.
 
 ## Optional enhancement
 
