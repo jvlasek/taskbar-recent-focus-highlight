@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.26). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.27). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -142,7 +142,7 @@ in this flyout?”.
 - Each multi-window flyout has its **own** recency ladder (top N among
   siblings), not a global window rank and not “most recent only”.
 - **Skip** flyouts with ≤1 thumbnail, unless `previews.singleWindow` is on
-  (0.11.23): then the single card takes its app's icon rank.
+  (0.11.23; 0.11.27: ranked like any flyout, so rank 1 while recent).
 - Preview timers are **independent** of app timers.
 - Do **not** require the app to be in icon top-N.
 - Preview ranks reuse the same intensity idea as icons (`previewIntensity[3]`;
@@ -448,7 +448,7 @@ General keys stay top-level; icon/preview keys are dotted.
 | Taskbar icons | `icons.sizeBoostRank1..3` | `sizeBoostPercent[3]` |
 | Thumbnail previews | `previews.highlightEnabled` | preview master |
 | Thumbnail previews | `previews.highlightCount` | per-flyout top N |
-| Thumbnail previews | `previews.singleWindow` | single-window flyout gets its app's icon rank (default off) |
+| Thumbnail previews | `previews.singleWindow` | single-window flyouts ranked too (rank 1 while recent; default off) |
 | Thumbnail previews | `previews.topStyle` / `previews.restStyle` | `plate` / `outline` / `titleBg` / `titleBar` (+ `none` for ranks 2+); legacy `previews.style` mapped by `ApplyLegacyPreviewStyle` |
 | Thumbnail previews | `previews.outlineThickness` / `previews.outlineFillOpacity` | Outline style |
 | Thumbnail previews | `previews.intensityRank1..3` | `previewIntensity[3]` |

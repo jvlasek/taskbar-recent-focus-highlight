@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.26
+// @version         0.11.27
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -48,8 +48,8 @@ When you hover a combined icon and the flyout shows **two or more** windows,
 that flyout gets its own recency ladder (independent of icon ranks). The
 last focused window of that app is rank 1 in the flyout even if you used
 other apps more recently. Single-window flyouts are left alone unless
-**Also mark single-window previews** is on; then the card takes its app's
-icon rank.
+**Also mark single-window previews** is on; then the card is marked as rank 1
+while its window is recent.
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
 plate for rank 1, title tint for ranks 2+); also an outline, a thin bar under
@@ -234,9 +234,9 @@ to clear highlights.
     - singleWindow: false
       $name: Also mark single-window previews
       $description: >-
-        Mark the preview of an app with only one window too. It gets the same
-        rank as the app's taskbar icon (rank 1 = the app you used last), drawn
-        with the styles below; apps outside the preview count stay unmarked.
+        Mark the preview of an app with only one window too, as rank 1 while
+        that window is recent (Preview minimum focus / Decay below), the same
+        way the latest window of a multi-window flyout is marked.
         For an active-window-only preview highlight, the much smaller
         taskbar-active-window-highlight mod does just that.
     - topStyle: plate
@@ -441,7 +441,7 @@ struct Settings {
     bool requireTaskbarButton = true;  // skip tray-only focus targets
     bool previewHighlightEnabled = true;
     int previewHighlightCount = 3;
-    bool previewSingleWindow = false;  // single-window flyouts: app rank
+    bool previewSingleWindow = false;  // also rank single-window flyouts
     int previewIntensity[3] = {100, 70, 45};
     int previewMinFocusSeconds = 1;
     int previewDecayMinutes = 15;
@@ -1984,24 +1984,6 @@ bool IsWindowRecentForPreviewLocked(DesktopRecencyState& desk,
         *outTick = it->second.lastConfirmedTick;
     }
     return true;
-}
-
-// App rank (1-based) for the only window of a single-window flyout, or 0.
-// Capped at the preview count. Takes g_stateMutex.
-int SingleWindowPreviewRank(HWND hwnd) {
-    if (!hwnd) {
-        return 0;
-    }
-    const int limit = (std::max)(0, SettingsSnap()->previewHighlightCount);
-    std::lock_guard<std::mutex> lock(g_stateMutex);
-    const auto& ranks = CurrentDeskLocked().rankedApps;
-    for (size_t i = 0; i < ranks.size() && static_cast<int>(i) < limit; ++i) {
-        if (ranks[i].lastHwnd == hwnd && ranks[i].lastPid &&
-            HwndMatchesStoredPid(hwnd, ranks[i].lastPid)) {
-            return static_cast<int>(i) + 1;
-        }
-    }
-    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -6050,28 +6032,14 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
         }
     }
 
-    // Multi-window flyouts rank their own cards (below). A single-window
-    // flyout is marked only with previews.singleWindow, and then with its
-    // app's taskbar rank: the ranked app whose last focused window is this
-    // card's window (same PID). Fail closed when lastHwnd is stale.
-    if (siblings.size() <= 1) {
-        int rank = 0;
-        HWND hwnd = nullptr;
-        if (siblings.size() == 1 && SettingsSnap()->previewSingleWindow) {
-            TrackThumbView_UIThread(siblings[0]);
-            hwnd = ResolveHwndFromCardViewModel(siblings[0]);
-            rank = SingleWindowPreviewRank(hwnd);
-        }
-        if (!siblings.empty()) {
-            Wh_Log(L"Preview resolve: single window hwnd=%p rank=%d", hwnd,
-                   rank);
-        }
+    // Each flyout ranks its own cards (below). A single-window flyout is
+    // ranked the same way only with previews.singleWindow: its one card is
+    // rank 1 while its window is a confirmed recent window (preview min-focus
+    // and decay), like the latest window of a multi-window flyout.
+    if (siblings.empty() ||
+        (siblings.size() == 1 && !SettingsSnap()->previewSingleWindow)) {
         for (auto& s : siblings) {
-            if (rank > 0) {
-                ApplyThumbnailHighlight(s, rank);
-            } else {
-                ClearThumbnailHighlight(s);
-            }
+            ClearThumbnailHighlight(s);
         }
         return;
     }
