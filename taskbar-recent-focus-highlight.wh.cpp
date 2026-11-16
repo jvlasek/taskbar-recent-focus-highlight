@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.32
+// @version         0.11.33
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -62,7 +62,7 @@ is a much lighter mod for exactly that.
 ## Settings (short)
 
 - **General** — how many apps, min-focus wait, when to skip the wait on
-  re-focus, decay, exclude list, tray-only filter
+  re-focus, decay, exclude list
 - **Icons** — style, color (including system accent), per-rank intensity,
   thickness / size / fill, optional icon scale
 - **Previews** — on/off, how many windows, single-window previews, styles,
@@ -137,11 +137,6 @@ to clear highlights.
   $description: >-
     Time after last focus before an app drops out of the taskbar highlight
     list. (Preview windows use a separate decay under Previews.)
-- requireTaskbarButton: true
-  $name: Only apps on the taskbar
-  $description: >-
-    Ignore tray-only / tool windows that take focus but have no taskbar button
-    (e.g. desktop widgets that open a popup then hide to the tray).
 - excludedPrograms: [""]
   $name: Exclude list
   $description: >-
@@ -343,7 +338,6 @@ to clear highlights.
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -446,7 +440,6 @@ struct Settings {
     int glowFillOpacity = 40;   // % for Full / left / bottom icon styles
     int previewFillOpacity = 40;  // % for thumbnail plate / titleBg only
     int decayMinutes = 30;
-    bool requireTaskbarButton = true;  // skip tray-only focus targets
     bool previewHighlightEnabled = true;
     int previewHighlightCount = 3;
     bool previewSingleWindow = false;  // also rank single-window flyouts
@@ -521,7 +514,8 @@ struct AppFocusInfo {
     std::wstring key;          // APPID:… or uppercase image path
     std::wstring displayName;  // e.g. WindowsTerminal.exe
     std::wstring lastWindowTitle;  // unmatched-rank logs only
-    std::wstring classUpper;   // focused window class (TLister vs TTOTAL_CMD)
+    std::wstring classUpper;   // focused window class (logs)
+    std::wstring pathUpper;    // process image path (exclusion sweeps)
     std::wstring appIdUpper;   // window AppUserModelID when present
     HWND lastHwnd = nullptr;
     DWORD lastPid = 0;  // reject recycled lastHwnd (preview already does this)
@@ -539,7 +533,8 @@ struct PendingFocus {
     std::wstring key;
     std::wstring displayName;
     std::wstring windowTitle;
-    std::wstring appIdUpper;  // Win32 window AUMID; APPID: keys also have it
+    std::wstring appIdUpper;  // window AUMID (exclusion only)
+    std::wstring pathUpper;   // process image path (exclusion only)
     ULONGLONG focusStartTick = 0;
     ULONGLONG previewStartTick = 0;  // HWND-level; resets when instance changes
     // Post-deadline Alt-Tab / tray / IME wait. 0 = still inside min-focus.
@@ -555,7 +550,8 @@ struct PendingFocus {
 struct WindowFocusInfo {
     HWND hwnd = nullptr;
     DWORD pid = 0;              // reject recycled HWND with a new process
-    std::wstring processKey;    // rank key: UPPER path or APPID:…
+    std::wstring processKey;    // app key: APPID:<Explorer AppId>
+    std::wstring pathUpper;     // process image path (exclusion sweeps)
     std::wstring windowTitle;   // log / exclude display; not an identity key
     std::wstring appIdUpper;    // Win32 window AUMID for exclusion sweeps
     ULONGLONG lastConfirmedTick = 0;
@@ -568,9 +564,9 @@ struct HwndHash {
     }
 };
 
-// AppId identity (branch appid-identity, step 1: shadow only). Explorer's
-// AppId per taskbar window, from the button captures (UI thread); read by
-// the focus worker. Upper case. Pruned of dead windows when it grows.
+// Explorer's AppId per taskbar window, from the button captures (UI
+// thread); read by the focus worker to key app recency. Upper case. Pruned
+// of dead windows when it grows.
 std::mutex g_windowAppIdMutex;
 std::unordered_map<HWND, std::wstring, HwndHash> g_windowAppId;
 
@@ -655,71 +651,26 @@ struct CapturedWindow {
     DWORD pid = 0;
 };
 
-// Option C: long-lived button → process path cache (resolve rarely, paint often).
-// Only value data crosses to the focus worker; no XAML or task-item pointers.
+// One synchronous snapshot of a taskbar button (UI thread). Only value data
+// is kept; no XAML or task-item pointers outlive the capture.
 struct ButtonResolveData {
-    void* buttonId =
-        nullptr;  // opaque lookup key, never dereferenced by worker
-    ULONGLONG serial = 0;
-    ULONGLONG queuedTick = 0;
-    HWND hwnd = nullptr;
+    void* buttonId = nullptr;  // opaque lookup key
+    HWND hwnd = nullptr;       // first window of the button
     DWORD pid = 0;
     bool running = false;
     std::vector<CapturedWindow> windows;
-    std::wstring automationId;
     std::wstring explorerAppId;  // ITaskGroup/ITaskItem AppId (upper case)
-    std::wstring path;
-    std::wstring appId;
-    std::wstring windowClass;
 };
-constexpr ULONGLONG kButtonResolveDeadlineMs = 5000;
-// Safety recheck for a resolved identity whose capture has not changed.
-constexpr ULONGLONG kResolvedRecheckMs = 60000;
-
-bool SameCapturedWindowSet(const std::vector<CapturedWindow>& a,
-                           const std::vector<CapturedWindow>& b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (const auto& w : a) {
-        if (std::none_of(b.begin(), b.end(), [&](const CapturedWindow& x) {
-                return x.hwnd == w.hwnd && x.pid == w.pid;
-            })) {
-            return false;
-        }
-    }
-    return true;
-}
-constexpr size_t kMaxButtonResolveQueue = 128;
-std::mutex g_buttonResolveMutex;
-std::vector<ButtonResolveData> g_buttonResolveQueue;
-bool g_buttonResolvePosted = false;
-std::atomic<ULONGLONG> g_buttonResolveSerial{0};
 
 
 struct ButtonPathCacheEntry {
-    ULONGLONG resolveSerial = 0;
-    ULONGLONG resolveQueuedTick = 0;
-    std::optional<ButtonResolveData> resolveResult;
     winrt::weak_ref<FrameworkElement> button;
-    std::wstring pathUpper;  // empty if resolve failed / not yet tried
+    // Explorer's AppId for this button (ITaskGroup / ITaskItem get_AppId,
+    // upper case), refreshed synchronously on every full pass.
     std::wstring appIdUpper;
-    std::wstring classUpper;
-    HWND sampleHwnd = nullptr;  // sample from resolve; preview uses window map
+    HWND sampleHwnd = nullptr;  // first window of the button
     DWORD samplePid = 0;
     std::vector<CapturedWindow> groupWindows;
-    // Cleared when the button is observed not-running, so the next launch
-    // gets a fresh resolve instead of keeping a capped empty budget.
-    bool resolvedWhileRunning = false;
-    // Full refreshes periodically queue metadata validation on the worker.
-    // Explorer can reuse TaskListButton when an executable is replaced.
-    int emptyResolveAttempts = 0;  // capped while path and AUMID stay empty
-    ULONGLONG lastResolveTick = 0;  // empty-identity retry throttle
-    // Last worker result that confirmed a non-empty identity, and the
-    // button's AutomationId (Explorer's AppId) at that time. An unchanged
-    // capture is not re-resolved until kResolvedRecheckMs (0.11.31).
-    ULONGLONG lastConfirmedTick = 0;
-    std::wstring automationId;
     ULONGLONG lastRunningTick = 0;  // last time IsRunning was true (Alt-Tab grace)
     bool observedRunning = false;   // last UI snapshot; not a 400ms heartbeat
     // Last ApplyAllHighlights assignment: -1 unknown, 0 none, >0 1-based rank.
@@ -822,7 +773,6 @@ struct UiDispatcher {
     winrt::Windows::UI::Core::CoreDispatcher dispatcher{nullptr};
     winrt::handle thread;
     DWORD threadId;
-    std::atomic<bool> identityApplyQueued{false};
 };
 [[clang::no_destroy]] std::optional<
     std::vector<std::shared_ptr<UiDispatcher>>>
@@ -878,12 +828,12 @@ constexpr UINT WM_APP_SHUTDOWN = WM_APP + 3;
 constexpr UINT WM_APP_REQUEST_APPLY_DEBOUNCED = WM_APP + 4;
 constexpr UINT WM_APP_REFRESH_ACCENT = WM_APP + 5;
 constexpr UINT WM_APP_SETTINGS_CHANGED = WM_APP + 7;
-constexpr UINT WM_APP_RESOLVE_BUTTON = WM_APP + 8;
 
 constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
+constexpr UINT_PTR kAppIdRetryTimerId = 6;
 // Owned and accessed only by the focus thread.
 UINT g_shellHookMessage = 0;
 constexpr UINT kDecayCheckIntervalMs = 30 * 1000;
@@ -893,11 +843,10 @@ constexpr ULONGLONG kIsRunningGraceMs = 400;
 constexpr ULONGLONG kFullRebindDebounceMs = 300;
 // After min-focus elapsed, poll this often while Alt-Tab / tray holds FG.
 constexpr ULONGLONG kTransientRetryPollMs = 200;
-// Empty identity (pinned, no task item) is retried; successful path/AUMID is not.
-constexpr ULONGLONG kUnresolvedRetryMs = 2000;
-// Widgets / Copilot / never-resolving buttons: stop probing after this many
-// empty path+AUMID misses. Pinned→running still forces one more try.
-constexpr int kMaxEmptyResolveAttempts = 8;
+// A focused window whose taskbar button has not been captured yet: ask for
+// a full pass (captures every button) and retry this many times.
+constexpr ULONGLONG kAppIdRetryMs = 200;
+constexpr int kAppIdRetryMax = 8;
 
 // All glow layers live on our overlay (never BackgroundElement — hover/active
 // storyboards own that and constantly wipe our styles). Host Tag holds the
@@ -1352,7 +1301,8 @@ std::wstring CanonicalAppId(std::wstring id);
 
 bool IsExcludedKey(const std::wstring& keyUpper,
                    const std::wstring& displayNameUpper,
-                   const std::wstring& appIdUpper = {}) {
+                   const std::wstring& appIdUpper = {},
+                   const std::wstring& pathUpper = {}) {
     auto settings = SettingsSnap();
     const auto& excluded = settings->excludedPrograms;
     if (excluded.empty()) {
@@ -1364,7 +1314,10 @@ bool IsExcludedKey(const std::wstring& keyUpper,
     if (!displayNameUpper.empty() && excluded.contains(displayNameUpper)) {
         return true;
     }
-    const std::wstring path = PathFromAppKey(keyUpper);
+    // App keys are APPID:<Explorer AppId> since 0.11.33; the process path
+    // comes separately (older path keys still resolve through PathFromAppKey).
+    const std::wstring path =
+        !pathUpper.empty() ? pathUpper : PathFromAppKey(keyUpper);
     if (!path.empty() && excluded.contains(path)) {
         return true;
     }
@@ -1483,20 +1436,9 @@ std::wstring CanonicalAppId(std::wstring id) {
     return ToUpper(StripAppIdPrefix(std::move(id)));
 }
 
-bool IsAppIdKey(const std::wstring& key) {
-    return key.rfind(L"APPID:", 0) == 0;
-}
-
 bool IsUwpHostFileName(const std::wstring& fileNameUpper) {
     return fileNameUpper == L"APPLICATIONFRAMEHOST.EXE" ||
            fileNameUpper == L"WWAHOST.EXE";
-}
-
-bool IsUwpHostPath(const std::wstring& pathUpper) {
-    if (pathUpper.empty()) {
-        return false;
-    }
-    return IsUwpHostFileName(ToUpper(FileNameFromPath(pathUpper)));
 }
 
 // Microsoft.WindowsCalculator_8wekyb3d8bbwe!App → Microsoft.WindowsCalculator
@@ -1542,19 +1484,6 @@ std::wstring AppIdFromAppKey(const std::wstring& key) {
         return {};
     }
     return key.substr(6);
-}
-
-bool SamePidAndClass(HWND a, HWND b) {
-    if (!a || !b || !IsWindow(a) || !IsWindow(b)) {
-        return false;
-    }
-    DWORD pa = 0, pb = 0;
-    GetWindowThreadProcessId(a, &pa);
-    GetWindowThreadProcessId(b, &pb);
-    if (!pa || pa != pb) {
-        return false;
-    }
-    return ToUpper(GetWindowClassName(a)) == ToUpper(GetWindowClassName(b));
 }
 
 std::wstring GetWindowTitle(HWND hWnd);
@@ -1668,12 +1597,24 @@ std::wstring GetWindowTitle(HWND hWnd) {
     return std::wstring(buf, static_cast<size_t>(n));
 }
 
+// App key = APPID:<Explorer AppId> of the taskbar button that lists this
+// window (0.11.33; was the window AUMID or process path). A window that no
+// captured button lists yet returns false with *outNoButton set: the caller
+// asks for a full pass and retries; tray-only windows stay unranked.
 bool ResolveAppIdentity(HWND hWnd,
                         std::wstring& outKey,
                         std::wstring& outDisplayName,
                         DWORD& outProcessId,
                         std::wstring* outWindowTitle = nullptr,
-                        std::wstring* outAppId = nullptr) {
+                        std::wstring* outAppId = nullptr,
+                        std::wstring* outPathUpper = nullptr,
+                        bool* outNoButton = nullptr) {
+    if (outNoButton) {
+        *outNoButton = false;
+    }
+    if (outPathUpper) {
+        outPathUpper->clear();
+    }
     outKey.clear();
     outDisplayName.clear();
     outProcessId = 0;
@@ -1720,7 +1661,7 @@ bool ResolveAppIdentity(HWND hWnd,
         return false;
     }
 
-    const std::wstring key = MakeAppKey(pathUpper, appIdUpper);
+    const std::wstring legacyKey = MakeAppKey(pathUpper, appIdUpper);
     const std::wstring title = GetWindowTitle(hWnd);
     std::wstring displayName = fileName;
     if (IsUwpHostFileName(fileNameUpper)) {
@@ -1737,13 +1678,29 @@ bool ResolveAppIdentity(HWND hWnd,
 
     // An exe on the exclude list also excludes its own-AUMID windows (the
     // key is APPID:… then, so check the path separately).
-    if (IsExcludedKey(key, ToUpper(displayName), appIdUpper) ||
-        (key != pathUpper &&
-         IsExcludedKey(pathUpper, ToUpper(displayName), appIdUpper))) {
+    if (IsExcludedKey(legacyKey, ToUpper(displayName), appIdUpper,
+                      pathUpper)) {
         Wh_Log(L"Excluded: %s", displayName.c_str());
         return false;
     }
 
+    const std::wstring explorerAppId = LookupWindowAppId(hWnd);
+    if (explorerAppId.empty()) {
+        if (outNoButton) {
+            *outNoButton = true;
+        }
+        return false;
+    }
+    const std::wstring key = std::wstring(L"APPID:") + explorerAppId;
+    // The exclude list may also name the Explorer AppId spelling.
+    if (IsExcludedKey(key, ToUpper(displayName), appIdUpper, pathUpper)) {
+        Wh_Log(L"Excluded: %s", displayName.c_str());
+        return false;
+    }
+
+    if (outPathUpper) {
+        *outPathUpper = pathUpper;
+    }
     outKey = key;
     outDisplayName = displayName;
     outProcessId = processId;
@@ -1808,13 +1765,13 @@ FrameworkElement FindDescendantByName(FrameworkElement element, PCWSTR name) {
 // sees not-running). Grace covers Alt-Tab flicker after that observation,
 // not a heartbeat that idle apps must renew. No weak.get() here. UI
 // passes drop dead rows first (PruneDeadButtonPathCache_UIThread).
-bool PathAppearsOnTaskbar(const std::wstring& keyOrPath) {
-    const std::wstring pathUpper = PathFromAppKey(keyOrPath);
-    const std::wstring wantAppId = CanonicalAppId(AppIdFromAppKey(keyOrPath));
-    if (pathUpper.empty() && wantAppId.empty()) {
+// True if a running (or just-closing) taskbar button carries this app's
+// Explorer AppId. Ranks without one keep their history but take no slot.
+bool AppAppearsOnTaskbar(const std::wstring& key) {
+    const std::wstring wantAppId = AppIdFromAppKey(key);
+    if (wantAppId.empty()) {
         return false;
     }
-
     const ULONGLONG now = GetTickCount64();
     std::lock_guard<std::mutex> lock(g_buttonPathMutex);
     for (const auto& [cacheKey, e] : g_buttonPathCache) {
@@ -1822,20 +1779,8 @@ bool PathAppearsOnTaskbar(const std::wstring& keyOrPath) {
         const bool recentlyRunning =
             e.lastRunningTick != 0 &&
             now - e.lastRunningTick < kIsRunningGraceMs;
-        if (!e.observedRunning && !recentlyRunning) {
-            continue;
-        }
-        if (!wantAppId.empty()) {
-            if (CanonicalAppId(e.appIdUpper) == wantAppId) {
-                return true;
-            }
-        }
-        if (e.pathUpper.empty()) {
-            continue;
-        }
-        // Class is for *which* button to highlight, not whether the app
-        // exists on the taskbar (TC + Lister share a path, different class).
-        if (!pathUpper.empty() && e.pathUpper == pathUpper) {
+        if ((e.observedRunning || recentlyRunning) &&
+            e.appIdUpper == wantAppId) {
             return true;
         }
     }
@@ -1870,13 +1815,11 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
         // Tray-only / pinned-not-running: keep history but do not occupy a
         // visible slot. seenOnTaskbar is not enough — a closed pinned app
         // still has a path in the cache.
-        if (settings->requireTaskbarButton) {
-            if (PathAppearsOnTaskbar(info.key)) {
-                info.seenOnTaskbar = true;
-            } else {
-                ++it;
-                continue;
-            }
+        if (AppAppearsOnTaskbar(info.key)) {
+            info.seenOnTaskbar = true;
+        } else {
+            ++it;
+            continue;
         }
         candidates.push_back(info);
         ++it;
@@ -1962,7 +1905,8 @@ void StampWindowRecencyLocked(DesktopRecencyState& desk,
                               const std::wstring& processKey,
                               const std::wstring& windowTitle,
                               ULONGLONG now,
-                              const std::wstring& appIdUpper = {});
+                              const std::wstring& appIdUpper = {},
+                              const std::wstring& pathUpper = {});
 
 void PruneWindowFocusMapLocked(DesktopRecencyState& desk) {
     const ULONGLONG now = GetTickCount64();
@@ -1990,7 +1934,8 @@ void StampWindowRecencyLocked(DesktopRecencyState& desk,
                               const std::wstring& processKey,
                               const std::wstring& windowTitle,
                               ULONGLONG now,
-                              const std::wstring& appIdUpper) {
+                              const std::wstring& appIdUpper,
+                              const std::wstring& pathUpper) {
     if (!hwnd) {
         return;
     }
@@ -2008,6 +1953,9 @@ void StampWindowRecencyLocked(DesktopRecencyState& desk,
     winfo.pid = pid;
     if (!processKey.empty()) {
         winfo.processKey = processKey;
+    }
+    if (!pathUpper.empty()) {
+        winfo.pathUpper = pathUpper;
     }
     if (!windowTitle.empty()) {
         winfo.windowTitle = windowTitle;
@@ -2185,9 +2133,7 @@ winrt::Windows::UI::Color ResolveGlowBaseColor(const Settings& settings) {
 }
 
 struct ButtonIdentity {
-    std::wstring pathUpper;
-    std::wstring appIdUpper;
-    std::wstring classUpper;
+    std::wstring appIdUpper;  // Explorer's AppId
     HWND sampleHwnd = nullptr;
     DWORD samplePid = 0;
     std::vector<CapturedWindow> groupWindows;
@@ -2211,7 +2157,7 @@ void SetCachedPaintState(FrameworkElement button,
 void RememberOurIconScale(FrameworkElement button, Media::ScaleTransform scale);
 void ClearIconScaleIfOurs(FrameworkElement icon, FrameworkElement button);
 bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler);
-void ApplyAllHighlights_UIThread(bool allowIdentityRefresh = true);
+void ApplyAllHighlights_UIThread();
 void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb);
 
 // ---------------------------------------------------------------------------
@@ -2255,15 +2201,11 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
         }
         auto& e = it->second;
         if (running != e.observedRunning) {
-            Wh_Log(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u path=%s appId=%s",
+            Wh_Log(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u appId=%s",
                    id, e.observedRunning, running, e.sampleHwnd, e.samplePid,
-                   e.pathUpper.c_str(), e.appIdUpper.c_str());
+                   e.appIdUpper.c_str());
         }
         if (running) {
-            if (!e.observedRunning) {
-                e.resolvedWhileRunning = false;
-                e.emptyResolveAttempts = 0;
-            }
             e.lastRunningTick = now;
             e.observedRunning = true;
             return true;
@@ -2309,22 +2251,6 @@ bool IsWindowAutomationId(const std::wstring& id) {
     return id.size() > 7 && _wcsnicmp(id.c_str(), L"Window:", 7) == 0;
 }
 
-std::wstring GetButtonAutomationAppId(FrameworkElement button) {
-    if (!button) {
-        return {};
-    }
-    try {
-        std::wstring id =
-            Automation::AutomationProperties::GetAutomationId(button).c_str();
-        if (IsWindowAutomationId(id)) {
-            return {};
-        }
-        return ToUpper(StripAppIdPrefix(std::move(id)));
-    } catch (...) {
-        return {};
-    }
-}
-
 // Uncombined taskbar buttons (Never Combine / combine when full) carry their
 // window in AutomationProperties.AutomationId: "Window: 0x<hwnd hex>"; group
 // buttons carry "Appid: <AUMID>" (UWPSpy dump 2026-11-15, two VS Code
@@ -2360,10 +2286,8 @@ HWND GetButtonAutomationWindow(FrameworkElement button) {
 // Never Combine). Filename-only is not a match.
 bool IdentityMatchesRank(const ButtonIdentity& ident,
                          const AppFocusInfo& info) {
-    const std::wstring& rankCls = info.classUpper;
-
     // Per-window slot: only the button that lists exactly this window (an
-    // uncombined button lists just its own). No path/AppId fallback, or every
+    // uncombined button lists just its own). No AppId match, or every
     // button of the app would light up (Never Combine, 2026-11-15).
     if (info.perWindow) {
         if (!info.lastHwnd || !info.lastPid ||
@@ -2378,56 +2302,9 @@ bool IdentityMatchesRank(const ButtonIdentity& ident,
         return ident.sampleHwnd == info.lastHwnd &&
                ident.samplePid == info.lastPid;
     }
-
-    auto hwndOnButton = [&](HWND h) -> bool {
-        if (!h) {
-            return false;
-        }
-        // Captured PID must still own the handle. Equality alone follows
-        // a recycled HWND onto whichever app reused it.
-        if (ident.sampleHwnd == h && ident.samplePid &&
-            HwndMatchesStoredPid(ident.sampleHwnd, ident.samplePid)) {
-            return true;
-        }
-        for (const auto& g : ident.groupWindows) {
-            if (g.hwnd == h && g.pid && HwndMatchesStoredPid(g.hwnd, g.pid)) {
-                return true;
-            }
-        }
-        if (ident.sampleHwnd && ident.samplePid &&
-            HwndMatchesStoredPid(ident.sampleHwnd, ident.samplePid) &&
-            SamePidAndClass(h, ident.sampleHwnd)) {
-            if (!IsAppIdKey(info.key) && !IsUwpHostPath(ident.pathUpper)) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    if (info.lastHwnd && info.lastPid &&
-        HwndMatchesStoredPid(info.lastHwnd, info.lastPid) &&
-        hwndOnButton(info.lastHwnd)) {
-        return true;
-    }
-
-    if (IsAppIdKey(info.key)) {
-        const std::wstring want = AppIdFromAppKey(info.key);
-        const std::wstring got = CanonicalAppId(ident.appIdUpper);
-        return !want.empty() && got == want;
-    }
-
-    const bool exactPath =
-        !ident.pathUpper.empty() && ident.pathUpper == info.key;
-    if (exactPath) {
-        if (!rankCls.empty() && !ident.classUpper.empty() &&
-            ident.classUpper != rankCls) {
-            // Same exe, different window class (e.g. two icons from one
-            // process).
-            return false;
-        }
-        return true;
-    }
-    return false;
+    // One taskbar button = one app = one Explorer AppId.
+    return !ident.appIdUpper.empty() &&
+           AppIdFromAppKey(info.key) == ident.appIdUpper;
 }
 
 // Best rank for a single button (1-based), or 0.
@@ -3759,7 +3636,7 @@ void TrackButton_UIThread(FrameworkElement button) {
 }
 
 // ---------------------------------------------------------------------------
-// Button → process path (option C) — adapted from taskbar-volume-control-per-app
+// Button → task item / task group — adapted from taskbar-volume-control-per-app
 // ---------------------------------------------------------------------------
 
 thread_local bool g_captureTaskGroup = false;
@@ -3997,7 +3874,6 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
     ButtonResolveData data;
     data.buttonId = InspectableIdentity(button);
     data.running = TaskListButton_IsRunning(button);
-    data.automationId = GetButtonAutomationAppId(button);
     DWORD pid = 0;
     HWND hwnd = nullptr;
     std::vector<CapturedWindow> groupWindows;
@@ -4107,321 +3983,53 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
     return data;
 }
 
-bool SameButtonResolveTarget(const ButtonResolveData& a,
-                             const ButtonResolveData& b) {
-    if (a.buttonId != b.buttonId || a.hwnd != b.hwnd || a.pid != b.pid ||
-        a.running != b.running || a.automationId != b.automationId ||
-        a.windows.size() != b.windows.size())
-        return false;
-    for (size_t i = 0; i < a.windows.size(); ++i) {
-        if (a.windows[i].hwnd != b.windows[i].hwnd ||
-            a.windows[i].pid != b.windows[i].pid)
-            return false;
-    }
-    return true;
-}
-
-bool ButtonResolveWindowsLive(const ButtonResolveData& data) {
-    if (data.hwnd && !HwndMatchesStoredPid(data.hwnd, data.pid))
-        return false;
-    for (const auto& window : data.windows) {
-        if (!HwndMatchesStoredPid(window.hwnd, window.pid))
-            return false;
-    }
-    return true;
-}
-
-// Retain a Win32 group's identity only when the new sample was already a
-// live member of that same captured group/process. PID equality alone is not
-// app identity (especially for shared UWP hosts or recycled buttons).
-bool CanRetainGroupIdentity(const ButtonPathCacheEntry& cached,
-                            const ButtonResolveData& current) {
-    if (!current.running || !current.hwnd || !current.pid ||
-        cached.samplePid != current.pid || cached.pathUpper.empty() ||
-        IsUwpHostPath(cached.pathUpper)) {
-        return false;
-    }
-    for (const auto& member : cached.groupWindows) {
-        if (member.hwnd == current.hwnd && member.pid == current.pid &&
-            HwndMatchesStoredPid(member.hwnd, member.pid)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// One queued request per button, with a fixed global bound. The worker
-// processes one per message so focus/shutdown messages can run between metadata
-// queries.
-bool QueueButtonResolve(ButtonResolveData data) {
-    std::lock_guard<std::mutex> lock(g_buttonResolveMutex);
-    if (g_unloading.load())
-        return false;
-    auto it = std::find_if(
-        g_buttonResolveQueue.begin(), g_buttonResolveQueue.end(),
-        [&](const auto& item) { return item.buttonId == data.buttonId; });
-    if (it != g_buttonResolveQueue.end()) {
-        *it = std::move(data);
-    } else {
-        if (g_buttonResolveQueue.size() >= kMaxButtonResolveQueue)
-            return false;
-        g_buttonResolveQueue.push_back(std::move(data));
-    }
-    if (!g_buttonResolvePosted) {
-        g_buttonResolvePosted = PostToHookThread(WM_APP_RESOLVE_BUTTON);
-        if (!g_buttonResolvePosted) {
-            g_buttonResolveQueue.clear();
-            return false;
-        }
-    }
-    return true;
-}
-
-bool RequestIdentityCompletionApply();
-
-void ResolveOneButtonOnFocusThread() {
-    ButtonResolveData data;
-    {
-        std::lock_guard<std::mutex> lock(g_buttonResolveMutex);
-        if (g_unloading.load() || g_buttonResolveQueue.empty()) {
-            g_buttonResolveQueue.clear();
-            g_buttonResolvePosted = false;
-            return;
-        }
-        data = std::move(g_buttonResolveQueue.front());
-        g_buttonResolveQueue.erase(g_buttonResolveQueue.begin());
-    }
-    bool current = false;
-    {
-        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-        auto it = g_buttonPathCache.find(data.buttonId);
-        current = it != g_buttonPathCache.end() &&
-                  it->second.resolveSerial == data.serial;
-    }
-    const auto serial = data.serial;
-    void* const buttonId = data.buttonId;
-    const bool timely = GetTickCount64() - data.queuedTick <= kButtonResolveDeadlineMs;
-    const bool live = current && timely && ButtonResolveWindowsLive(data);
-    Wh_Log(L"Identity worker: button=%p request=%llu hwnd=%p pid=%u running=%d current=%d timely=%d live=%d age=%llu",
-           buttonId, serial, data.hwnd, data.pid, data.running, current, timely,
-           live, GetTickCount64() - data.queuedTick);
-    if (current && !g_unloading.load() && timely && live) {
-        // A deadline rejects late results; it cannot cancel an OS call. The
-        // worker is still joined before unloading the mod.
-        try {
-            data.path = ToUpper(GetProcessImagePath(data.pid));
-            if (data.hwnd && !g_unloading.load() &&
-                GetTickCount64() - data.queuedTick <=
-                    kButtonResolveDeadlineMs) {
-                data.windowClass = ToUpper(GetWindowClassName(data.hwnd));
-                data.appId = ToUpper(GetWindowAppUserModelId(data.hwnd));
-            }
-            if (data.appId.empty())
-                data.appId = data.automationId;
-        } catch (...) {
-            data.path.clear();
-            data.appId.clear();
-        }
-    }
-    Wh_Log(L"Identity result: button=%p request=%llu age=%llu path=%s appId=%s class=%s",
-           buttonId, serial, GetTickCount64() - data.queuedTick,
-           data.path.c_str(), data.appId.c_str(), data.windowClass.c_str());
-    bool published = false;
-    bool sameIdentity = false;
-    if (!g_unloading.load()) {
-        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-        auto it = g_buttonPathCache.find(data.buttonId);
-        if (it != g_buttonPathCache.end() &&
-            it->second.resolveSerial == data.serial) {
-            const auto& e = it->second;
-            // Confirms what the button already shows: leave the result for the
-            // next natural consume instead of requesting a full rebind.
-            sameIdentity = (!data.path.empty() || !data.appId.empty()) &&
-                           e.pathUpper == data.path &&
-                           e.appIdUpper == data.appId &&
-                           e.classUpper == data.windowClass &&
-                           e.sampleHwnd == data.hwnd &&
-                           e.samplePid == data.pid;
-            it->second.resolveResult = std::move(data);
-            published = true;
-        }
-    }
-    bool dispatched = false;
-    if (published && !sameIdentity) {
-        dispatched = RequestIdentityCompletionApply();
-    }
-    Wh_Log(L"Identity delivery: button=%p request=%llu published=%d "
-           L"unchanged=%d dispatched=%d",
-           buttonId, serial, published, sameIdentity, dispatched);
-    {
-        std::lock_guard<std::mutex> lock(g_buttonResolveMutex);
-        g_buttonResolvePosted = !g_unloading.load() &&
-                                !g_buttonResolveQueue.empty() &&
-                                PostToHookThread(WM_APP_RESOLVE_BUTTON);
-        if (!g_buttonResolvePosted)
-            g_buttonResolveQueue.clear();
-    }
-}
-
-// Both clicks and full refreshes share this asynchronous resolver. A result is
-// consumed only on the button's UI thread, after a fresh task-item capture.
-std::wstring EnsureButtonPathCached(FrameworkElement button,
-                                    bool force,
-                                    bool allowRefresh = true) {
-    if (!button || !g_taskbandResolveReady.load() || g_unloading.load())
+// Button identity = Explorer's AppId (the key Explorer groups taskbar
+// buttons by) plus the button's window set, read synchronously on the UI
+// thread from the button's public WindowsUdk task item / group (a few COM
+// calls, ~10 us). Replaces the 0.10.3-0.11.31 asynchronous resolver (worker
+// process-path/AUMID lookups with serials, deadlines and rechecks). A
+// changed AppId or window set invalidates the cached paint rank; a button
+// Explorer recycles for another app simply reports the new AppId.
+std::wstring EnsureButtonIdentity(FrameworkElement button) {
+    if (!button || !g_taskbandResolveReady.load() || g_unloading.load()) {
         return {};
-    const auto now = GetTickCount64();
+    }
     void* id = InspectableIdentity(button);
-    if (!id)
+    if (!id) {
         return {};
-    const bool running = TaskListButton_IsRunning(button);
-    std::optional<ButtonResolveData> result;
-    {
-        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-        auto it = g_buttonPathCache.find(id);
-        if (it != g_buttonPathCache.end() &&
-            !WeakIsSameElement(it->second.button, button)) {
-            g_buttonPathCache.erase(it);
-            it = g_buttonPathCache.end();
-        }
-        if (it != g_buttonPathCache.end()) {
-            auto& e = it->second;
-            if (running && !e.resolvedWhileRunning)
-                e.emptyResolveAttempts = 0;
-            if (!force && e.resolveResult) {
-                result = std::move(e.resolveResult);
-                e.resolveResult.reset();
-            } else if (!force && !allowRefresh) {
-                return e.pathUpper;  // Completion repaint must not start a
-                                     // polling loop.
-            } else if (!force && e.resolveSerial &&
-                       now - e.resolveQueuedTick <= kButtonResolveDeadlineMs) {
-                return e.pathUpper;
-            } else if (!force && !(running && !e.resolvedWhileRunning) &&
-                       (now - e.lastResolveTick < kUnresolvedRetryMs ||
-                        (e.pathUpper.empty() && e.appIdUpper.empty() &&
-                         e.emptyResolveAttempts >= kMaxEmptyResolveAttempts))) {
-                return e.pathUpper;
-            }
-        }
     }
-    if (!force && !allowRefresh && !result)
-        return {};
-    auto data = CaptureButtonResolveData(button);
-    const bool sameTarget = result && SameButtonResolveTarget(*result, data);
-    const bool liveResult = result && ButtonResolveWindowsLive(*result);
-    const bool timelyResult = result && now - result->queuedTick <= kButtonResolveDeadlineMs;
-    bool accepted = sameTarget && liveResult && timelyResult;
-    if (result) {
-        Wh_Log(L"Identity consume: button=%p request=%llu accepted=%d sameTarget=%d live=%d timely=%d oldHwnd=%p oldPid=%u hwnd=%p pid=%u running=%d age=%llu",
-               id, result->serial, accepted, sameTarget, liveResult, timelyResult,
-               result->hwnd, result->pid, data.hwnd, data.pid, data.running,
-               now - result->queuedTick);
+    ButtonResolveData data = CaptureButtonResolveData(button);
+    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+    auto it = g_buttonPathCache.find(id);
+    if (it != g_buttonPathCache.end() &&
+        !WeakIsSameElement(it->second.button, button)) {
+        g_buttonPathCache.erase(it);
     }
-    // A stale result is discarded, never installed onto a recycled button.
-    std::wstring path;
-    {
-        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-        auto& e = g_buttonPathCache[id];
-        if (!e.button)
-            e.button = winrt::make_weak(button);
-        // 0.11.31: a resolved identity whose fresh capture (sample window and
-        // PID, window set, AutomationId, running state) is unchanged is not
-        // sent to the worker again until kResolvedRecheckMs. Before, every
-        // full rebind re-queued each button older than 2 s and every result
-        // requested another rebind: perf run 2026-11-16, ~2000 worker
-        // resolves and 527 rebinds in 10 minutes with nothing changing.
-        const bool captureUnchanged =
-            !force && !result &&
-            (!e.pathUpper.empty() || !e.appIdUpper.empty()) &&
-            e.resolvedWhileRunning == data.running &&
-            e.sampleHwnd == data.hwnd && e.samplePid == data.pid &&
-            e.automationId == data.automationId &&
-            SameCapturedWindowSet(e.groupWindows, data.windows) &&
-            now - e.lastConfirmedTick < kResolvedRecheckMs;
-        if (captureUnchanged) {
-            e.lastResolveTick = now;
-            return e.pathUpper;
-        }
-        if (result && e.resolveSerial != result->serial) {
-            Wh_Log(L"Identity superseded: button=%p request=%llu current=%llu",
-                   id, result->serial, e.resolveSerial);
-            return e.pathUpper;
-        }
-        e.resolveResult.reset();
-        e.resolveSerial = 0;
-        e.lastResolveTick = now;
-        e.resolvedWhileRunning = data.running;
-        if (accepted) {
-            if (!result->path.empty()) {
-                if (e.pathUpper != result->path ||
-                    e.appIdUpper != result->appId)
-                    e.lastPaintRank = -1;
-                e.pathUpper = result->path;
-                e.appIdUpper = result->appId;
-                e.classUpper = result->windowClass;
-                e.sampleHwnd = result->hwnd;
-                e.samplePid = result->pid;
-                e.groupWindows = result->windows;
-                e.emptyResolveAttempts = 0;
-                e.lastConfirmedTick = now;
-                e.automationId = data.automationId;
-            } else if (e.pathUpper.empty()) {
-                e.appIdUpper = result->appId;
-                if (e.appIdUpper.empty()) {
-                    if (e.emptyResolveAttempts < kMaxEmptyResolveAttempts)
-                        ++e.emptyResolveAttempts;
-                } else {
-                    e.sampleHwnd = result->hwnd;
-                    e.samplePid = result->pid;
-                    e.groupWindows = result->windows;
-                    e.classUpper = result->windowClass;
-                    e.emptyResolveAttempts = 0;
-                    e.lastConfirmedTick = now;
-                    e.automationId = data.automationId;
-                }
-            }
-        }
-        // A changed sample invalidates identity unless it is a known surviving
-        // Win32 group member. No filename/title or PID-only fallback.
-        if ((e.sampleHwnd &&
-             (e.sampleHwnd != data.hwnd || e.samplePid != data.pid)) ||
-            (e.sampleHwnd && !data.running)) {
-            if (CanRetainGroupIdentity(e, data)) {
-                e.sampleHwnd = data.hwnd;
-                e.samplePid = data.pid;
-                e.groupWindows = data.windows;
-            } else {
-                e.pathUpper.clear();
-                e.appIdUpper.clear();
-                e.classUpper.clear();
-                e.sampleHwnd = nullptr;
-                e.samplePid = 0;
-                e.groupWindows.clear();
-                e.lastPaintRank = -1;
-            }
-        }
-        path = e.pathUpper;
-        // Expired matching requests cool down until the next normal refresh.
-        if (result && SameButtonResolveTarget(*result, data))
-            return path;
-        data.serial = ++g_buttonResolveSerial;
-        data.queuedTick = now;
-        e.resolveSerial = data.serial;
-        e.resolveQueuedTick = now;
+    auto& e = g_buttonPathCache[id];
+    if (!e.button) {
+        e.button = winrt::make_weak(button);
     }
-    const bool queued = QueueButtonResolve(data);
-    Wh_Log(L"Identity queue: button=%p request=%llu force=%d queued=%d hwnd=%p pid=%u running=%d group=%zu automationId=%s",
-           id, data.serial, force, queued, data.hwnd, data.pid, data.running,
-           data.windows.size(), data.automationId.c_str());
-    if (!queued) {
-        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-        auto it = g_buttonPathCache.find(id);
-        if (it != g_buttonPathCache.end() &&
-            it->second.resolveSerial == data.serial)
-            it->second.resolveSerial = 0;
+    const bool windowsChanged =
+        e.groupWindows.size() != data.windows.size() ||
+        !std::equal(e.groupWindows.begin(), e.groupWindows.end(),
+                    data.windows.begin(),
+                    [](const CapturedWindow& a, const CapturedWindow& b) {
+                        return a.hwnd == b.hwnd && a.pid == b.pid;
+                    });
+    if (e.appIdUpper != data.explorerAppId) {
+        Wh_Log(L"Button identity: button=%p appId=%s (was %s) windows=%zu "
+               L"running=%d",
+               id, data.explorerAppId.c_str(), e.appIdUpper.c_str(),
+               data.windows.size(), data.running);
+        e.lastPaintRank = -1;
+    } else if (windowsChanged) {
+        e.lastPaintRank = -1;
     }
-    return path;
+    e.appIdUpper = data.explorerAppId;
+    e.sampleHwnd = data.hwnd;
+    e.samplePid = data.pid;
+    e.groupWindows = std::move(data.windows);
+    return e.appIdUpper;
 }
 
 ButtonIdentity GetCachedButtonIdentity(FrameworkElement button) {
@@ -4440,9 +4048,7 @@ ButtonIdentity GetCachedButtonIdentity(FrameworkElement button) {
         return out;
     }
     const auto& e = it->second;
-    out.pathUpper = e.pathUpper;
     out.appIdUpper = e.appIdUpper;
-    out.classUpper = e.classUpper;
     out.sampleHwnd = e.sampleHwnd;
     out.samplePid = e.samplePid;
     out.groupWindows = e.groupWindows;
@@ -4688,7 +4294,7 @@ std::vector<FrameworkElement> CollectLiveButtonsOnThisDispatcher() {
     return live;
 }
 
-void ApplyAllHighlights_UIThread(bool allowIdentityRefresh) {
+void ApplyAllHighlights_UIThread() {
     g_lastFullRefreshTick = GetTickCount64();
 
     std::vector<FrameworkElement> live = CollectLiveButtonsOnThisDispatcher();
@@ -4707,14 +4313,14 @@ void ApplyAllHighlights_UIThread(bool allowIdentityRefresh) {
     // Snapshot IsRunning before eligibility. Empty ranks used to return
     // here and never refresh lastRunningTick / observedRunning, so idle
     // decay and desktop-switch clears could not recover.
-    std::vector<std::wstring> buttonPaths(live.size());
+    std::vector<std::wstring> buttonAppIds(live.size());
     std::vector<ButtonIdentity> idents(live.size());
     std::vector<char> running(live.size(), 0);
     for (size_t bi = 0; bi < live.size(); ++bi) {
         if (auto ip = GetIconPanel(live[bi])) {
             RefreshCachedTaskbarEdge(ip);
         }
-        buttonPaths[bi] = EnsureButtonPathCached(live[bi], /*force=*/false, allowIdentityRefresh);
+        buttonAppIds[bi] = EnsureButtonIdentity(live[bi]);
         running[bi] = ButtonCountsAsRunning(live[bi]) ? 1 : 0;
         if (running[bi]) {
             idents[bi] = GetCachedButtonIdentity(live[bi]);
@@ -4793,12 +4399,10 @@ void ApplyAllHighlights_UIThread(bool allowIdentityRefresh) {
                 it->second.seenOnTaskbar = true;
             }
         }
-        Wh_Log(L"  bind rank %zu %s -> \"%s\" (path=%s)",
+        Wh_Log(L"  bind rank %zu %s -> \"%s\" (appId=%s)",
                c.rankIdx + 1, ranks[c.rankIdx].displayName.c_str(),
                GetButtonAutomationName(live[c.buttonIdx]).c_str(),
-               buttonPaths[c.buttonIdx].empty()
-                   ? L"?"
-                   : buttonPaths[c.buttonIdx].c_str());
+               buttonAppIds[c.buttonIdx].c_str());
     }
 
     for (size_t bi = 0; bi < live.size(); ++bi) {
@@ -4816,16 +4420,12 @@ void ApplyAllHighlights_UIThread(bool allowIdentityRefresh) {
                live.size());
     }
 
-    size_t resolvedButtons = 0;
-    {
-        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-        for (const auto& [id, e] : g_buttonPathCache) {
-            if (!e.pathUpper.empty() || !e.appIdUpper.empty()) {
-                ++resolvedButtons;
-            }
+    size_t identifiedButtons = 0;
+    for (const auto& appId : buttonAppIds) {
+        if (!appId.empty()) {
+            ++identifiedButtons;
         }
     }
-    const bool requireTb = SettingsSnap()->requireTaskbarButton;
     std::vector<std::wstring> demoteKeys;
     for (size_t ri = 0; ri < ranks.size(); ++ri) {
         if (rankTaken[ri]) {
@@ -4836,8 +4436,8 @@ void ApplyAllHighlights_UIThread(bool allowIdentityRefresh) {
                ranks[ri].lastWindowTitle.c_str());
         // Drop the old path even if it was bound before — filename-only is
         // not "still on the taskbar" (deleted exe, same name elsewhere).
-        if (requireTb && resolvedButtons >= 2 &&
-            !PathAppearsOnTaskbar(ranks[ri].key)) {
+        if (identifiedButtons >= 2 &&
+            !AppAppearsOnTaskbar(ranks[ri].key)) {
             demoteKeys.push_back(ranks[ri].key);
         }
     }
@@ -5426,39 +5026,6 @@ FrameworkElement FindThumbnailBackgroundBorder(FrameworkElement thumbView) {
     } catch (...) {
     }
     return nullptr;
-}
-
-FrameworkElement MakeThumbNativeMarker() {
-    PCWSTR markerXaml = LR"(
-        <Border xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                Name="WhRecentFocusThumbNative"
-                Width="0" Height="0" Opacity="0"
-                IsHitTestVisible="False" Visibility="Collapsed"/>
-    )";
-    try {
-        return Markup::XamlReader::Load(markerXaml).as<FrameworkElement>();
-    } catch (...) {
-        return nullptr;
-    }
-}
-
-// hadLocal distinguishes an explicit null background from no local value.
-// ours is the brush this mod installed; restore only while it is still current.
-void StorePlateOwner(FrameworkElement marker,
-                     bool hadLocal,
-                     bool localNull,
-                     Media::Brush const& prior,
-                     Media::Brush const& ours) {
-    winrt::Windows::Foundation::Collections::PropertySet bag;
-    bag.Insert(L"hadLocal", winrt::box_value(hadLocal));
-    bag.Insert(L"localNull", winrt::box_value(localNull));
-    if (prior) {
-        bag.Insert(L"prior", prior);
-    }
-    if (ours) {
-        bag.Insert(L"ours", ours);
-    }
-    marker.Tag(bag);
 }
 
 // ---------------------------------------------------------------------------
@@ -6658,45 +6225,6 @@ bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler) {
     return any;
 }
 
-// One outstanding completion repaint per dispatcher. A fast taskbar thread
-// must not reopen the queue for another thread whose pass has not run yet.
-bool QueueIdentityCompletionApply(const std::shared_ptr<UiDispatcher>& ui) {
-    if (g_unloading.load() || UiThreadExited(*ui))
-        return false;
-    if (ui->identityApplyQueued.exchange(true))
-        return true;  // Its queued pass will consume the published results.
-    try {
-        if (DispatcherTryRun(
-                ui->dispatcher,
-                winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
-                [ui]() {
-                    ui->identityApplyQueued.store(false);
-                    if (!g_unloading.load()) {
-                        try {
-                            ApplyAllHighlights_UIThread(false);
-                        } catch (...) {
-                            Wh_Log(L"Identity completion repaint failed");
-                        }
-                    }
-                })) {
-            return true;
-        }
-    } catch (...) {
-        Wh_Log(L"Identity completion dispatch failed");
-    }
-    ui->identityApplyQueued.store(false);
-    // Results remain cached for a later completion or normal full pass.
-    return false;
-}
-
-bool RequestIdentityCompletionApply() {
-    bool any = false;
-    for (const auto& ui : CollectUiDispatchers()) {
-        if (QueueIdentityCompletionApply(ui))
-            any = true;
-    }
-    return any;
-}
 
 void RequestApplyVisuals() {
     if (g_unloading.load()) {
@@ -6776,7 +6304,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
             ScheduleRefreshAllHighlights(button);
         } else if (cached < 0) {
             auto ident = GetCachedButtonIdentity(button);
-            if (ident.pathUpper.empty() && ident.appIdUpper.empty()) {
+            if (ident.appIdUpper.empty()) {
                 ScheduleRefreshAllHighlights(button);
             } else {
                 SetCachedPaintState(button, 0, SettingsSnap()->generation);
@@ -6799,7 +6327,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
                 ClearButtonHighlight(button);
             } else {
                 auto ident = GetCachedButtonIdentity(button);
-                if (ident.pathUpper.empty() && ident.appIdUpper.empty()) {
+                if (ident.appIdUpper.empty()) {
                     ScheduleRefreshAllHighlights(button);
                 } else {
                     SetCachedPaintState(button, 0, SettingsSnap()->generation);
@@ -6816,7 +6344,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
         ClearButtonHighlight(button);
     } else {
         auto ident = GetCachedButtonIdentity(button);
-        if (ident.pathUpper.empty() && ident.appIdUpper.empty()) {
+        if (ident.appIdUpper.empty()) {
             ScheduleRefreshAllHighlights(button);
         } else {
             SetCachedPaintState(button, 0, SettingsSnap()->generation);
@@ -6948,35 +6476,6 @@ int32_t WINAPI TaskItemThumbnailView_put_ThumbnailSource_Hook(void* pThis,
     return result;
 }
 
-// Clicks request fresh identity metadata without waiting for it on the UI thread.
-using TaskListButton_OnPointerPressed_t = int(WINAPI*)(void* pThis, void* pArgs);
-TaskListButton_OnPointerPressed_t TaskListButton_OnPointerPressed_Original;
-int WINAPI TaskListButton_OnPointerPressed_Hook(void* pThis, void* pArgs) {
-    int ret = TaskListButton_OnPointerPressed_Original
-                  ? TaskListButton_OnPointerPressed_Original(pThis, pArgs)
-                  : 0;
-    if (g_unloading.load() || !g_taskbandResolveReady.load()) {
-        return ret;
-    }
-    try {
-        UIElement element = nullptr;
-        ((IUnknown*)pThis)
-            ->QueryInterface(winrt::guid_of<UIElement>(),
-                             winrt::put_abi(element));
-        if (!element) {
-            return ret;
-        }
-        if (winrt::get_class_name(element) != L"Taskbar.TaskListButton") {
-            return ret;
-        }
-        auto button = element.try_as<FrameworkElement>();
-        if (button) {
-            EnsureButtonPathCached(button, /*force=*/true);
-        }
-    } catch (...) {
-    }
-    return ret;
-}
 
 using HoverFlyoutModel_TargetItemKey_t = void(WINAPI*)(void* pThis,
                                                        void* param1);
@@ -6994,11 +6493,6 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
             {LR"(private: void __cdecl winrt::Taskbar::implementation::TaskListButton::UpdateVisualStates(void))"},
             &TaskListButton_UpdateVisualStates_Original,
             TaskListButton_UpdateVisualStates_Hook,
-        },
-        {
-            {LR"(public: virtual int __cdecl winrt::impl::produce<struct winrt::Taskbar::implementation::TaskListButton,struct winrt::Windows::UI::Xaml::Controls::IControlOverrides>::OnPointerPressed(void *))"},
-            &TaskListButton_OnPointerPressed_Original,
-            TaskListButton_OnPointerPressed_Hook,
         },
         {
             {LR"(struct winrt::Taskbar::TaskListWindowViewModel __cdecl TryGetItemFromContainer<struct winrt::Taskbar::TaskListWindowViewModel>(struct winrt::Windows::UI::Xaml::UIElement const &))"},
@@ -7173,15 +6667,11 @@ bool StillPendingForeground(const PendingFocus& pending,
         if (IsTransientForeground(foreground)) {
             return false;
         }
-        // Same PID is not the same app when the windows' AUMIDs put them
-        // in different taskbar groups (UWP hosts; TC main window vs Lister).
+        // Same PID is not the same app when Explorer puts the windows on
+        // different taskbar buttons (UWP hosts; TC main window vs Lister).
         {
-            const std::wstring fgId =
-                CanonicalAppId(ToUpper(GetWindowAppUserModelId(foreground)));
-            const bool sameApp = IsAppIdKey(pending.key)
-                                     ? fgId == AppIdFromAppKey(pending.key)
-                                     : fgId.empty();
-            if (!sameApp) {
+            const std::wstring fgId = LookupWindowAppId(foreground);
+            if (fgId.empty() || fgId != AppIdFromAppKey(pending.key)) {
                 return false;
             }
         }
@@ -7222,7 +6712,8 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     if (pendingAppId.empty() && pending.hwnd) {
         pendingAppId = ToUpper(GetWindowAppUserModelId(pending.hwnd));
     }
-    if (IsExcludedKey(pending.key, ToUpper(pending.displayName), pendingAppId)) {
+    if (IsExcludedKey(pending.key, ToUpper(pending.displayName), pendingAppId,
+                      pending.pathUpper)) {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         if (g_pendingFocus.hwnd == pending.hwnd) {
             g_pendingFocus = {};
@@ -7275,7 +6766,8 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     }
 
     pendingAppId = ToUpper(GetWindowAppUserModelId(confirmHwnd));
-    if (IsExcludedKey(pending.key, ToUpper(pending.displayName), pendingAppId)) {
+    if (IsExcludedKey(pending.key, ToUpper(pending.displayName), pendingAppId,
+                      pending.pathUpper)) {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         if (g_pendingFocus.hwnd == pending.hwnd) {
             g_pendingFocus.previewConfirmed = true;
@@ -7294,7 +6786,7 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
                 ? CurrentDeskLocked()
                 : DeskStateLocked(pending.desktopId);
         StampWindowRecencyLocked(desk, confirmHwnd, pending.key, title, now,
-                                 pendingAppId);
+                                 pendingAppId, pending.pathUpper);
         if (g_pendingFocus.valid && g_pendingFocus.hwnd == pending.hwnd) {
             g_pendingFocus.previewConfirmed = true;
             if (g_pendingFocus.appConfirmed) {
@@ -7313,40 +6805,6 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     RequestApplyPreviewVisuals();
 }
 
-// AppId identity, step 1 (shadow, log only): at each app confirmation,
-// compare our key with Explorer's AppId for that window. Partitions, not
-// spellings: SPLIT = one key, several AppIds (Explorer separates what we
-// merge, e.g. browser profiles); MERGE = one AppId, several keys (we
-// separate what Explorer groups). MISS = window not on any captured button.
-// Focus worker only.
-void ShadowCompareAppId(HWND hwnd, const std::wstring& key,
-                        const std::wstring& displayName) {
-    static std::map<std::wstring, std::set<std::wstring>> keyToAppIds;
-    static std::map<std::wstring, std::set<std::wstring>> appIdToKeys;
-    static std::set<HWND> missLogged;
-    const std::wstring appId = LookupWindowAppId(hwnd);
-    if (appId.empty()) {
-        if (missLogged.size() < 256 && missLogged.insert(hwnd).second) {
-            Wh_Log(L"AppId shadow: MISS %s hwnd=%p key=%s (no captured "
-                   L"button lists this window)",
-                   displayName.c_str(), hwnd, key.c_str());
-        }
-        return;
-    }
-    if (keyToAppIds.size() > 256 || appIdToKeys.size() > 256) {
-        return;
-    }
-    auto& ids = keyToAppIds[key];
-    auto& keys = appIdToKeys[appId];
-    const bool newPair = ids.insert(appId).second;
-    keys.insert(key);
-    if (!newPair) {
-        return;
-    }
-    Wh_Log(L"AppId shadow: %s key=%s -> appId=%s%s%s", displayName.c_str(),
-           key.c_str(), appId.c_str(), ids.size() > 1 ? L" [SPLIT]" : L"",
-           keys.size() > 1 ? L" [MERGE]" : L"");
-}
 
 void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     auto settings = SettingsSnap();
@@ -7366,7 +6824,8 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     if (pendingAppId.empty() && pending.hwnd) {
         pendingAppId = ToUpper(GetWindowAppUserModelId(pending.hwnd));
     }
-    if (IsExcludedKey(pending.key, ToUpper(pending.displayName), pendingAppId)) {
+    if (IsExcludedKey(pending.key, ToUpper(pending.displayName), pendingAppId,
+                      pending.pathUpper)) {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         if (g_pendingFocus.hwnd == pending.hwnd) {
             g_pendingFocus = {};
@@ -7442,15 +6901,14 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     const std::wstring classUpper = ToUpper(GetWindowClassName(pending.hwnd));
     const std::wstring appIdUpper =
         ToUpper(GetWindowAppUserModelId(pending.hwnd));
-    if (IsExcludedKey(pending.key, ToUpper(pending.displayName), appIdUpper)) {
+    if (IsExcludedKey(pending.key, ToUpper(pending.displayName), appIdUpper,
+                      pending.pathUpper)) {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         if (g_pendingFocus.hwnd == pending.hwnd) {
             g_pendingFocus = {};
         }
         return;
     }
-
-    ShadowCompareAppId(pending.hwnd, pending.key, pending.displayName);
 
     const ULONGLONG now = GetTickCount64();
     {
@@ -7470,6 +6928,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
                                          : PidFromHwnd(pending.hwnd);
         info.classUpper = classUpper;
         info.appIdUpper = appIdUpper;
+        info.pathUpper = pending.pathUpper;
         info.lastConfirmedFocusTick = now;
         {
             WindowAppFocus& w = desk.windowAppFocus[pending.hwnd];
@@ -7589,6 +7048,52 @@ void SchedulePreviewConfirm(bool windowAlreadyTracked) {
                  static_cast<ULONGLONG>(previewMin) * 1000ULL);
 }
 
+void HandleForegroundChanged(HWND hWnd);
+
+// Focus worker only. A focused window that no captured taskbar button lists
+// yet (just opened): request a full pass, which captures every button and
+// publishes its windows' AppIds, then retry. Tray-only windows never get
+// one; they give up after kAppIdRetryMax tries and are remembered.
+HWND g_appIdRetryHwnd = nullptr;
+int g_appIdRetryCount = 0;
+std::set<HWND> g_noButtonHwnds;
+
+bool ScheduleAppIdRetry(HWND hWnd) {
+    hWnd = NormalizeFocusHwnd(hWnd);
+    if (!hWnd || g_noButtonHwnds.count(hWnd)) {
+        return false;
+    }
+    if (hWnd != g_appIdRetryHwnd) {
+        g_appIdRetryHwnd = hWnd;
+        g_appIdRetryCount = 0;
+    }
+    if (g_appIdRetryCount >= kAppIdRetryMax) {
+        if (g_noButtonHwnds.size() > 128) {
+            g_noButtonHwnds.clear();
+        }
+        g_noButtonHwnds.insert(hWnd);
+        Wh_Log(L"No taskbar button lists window %p: not ranked", hWnd);
+        g_appIdRetryHwnd = nullptr;
+        return false;
+    }
+    ++g_appIdRetryCount;
+    RequestApplyVisuals();
+    ArmHookTimer(kAppIdRetryTimerId, kAppIdRetryMs);
+    return true;
+}
+
+void OnAppIdRetryTimer() {
+    HWND want = g_appIdRetryHwnd;
+    if (!want || g_unloading.load()) {
+        return;
+    }
+    if (NormalizeFocusHwnd(GetForegroundWindow()) != want) {
+        g_appIdRetryHwnd = nullptr;
+        return;
+    }
+    HandleForegroundChanged(want);
+}
+
 void HandleForegroundChanged(HWND hWnd) {
     if (g_unloading.load()) {
         return;
@@ -7631,9 +7136,17 @@ void HandleForegroundChanged(HWND hWnd) {
     std::wstring displayName;
     std::wstring windowTitle;
     std::wstring appIdUpper;
+    std::wstring pathUpper;
     DWORD processId = 0;
+    bool noButton = false;
     if (!ResolveAppIdentity(hWnd, key, displayName, processId, &windowTitle,
-                            &appIdUpper)) {
+                            &appIdUpper, &pathUpper, &noButton)) {
+        // A brand-new window's button may not be captured yet: ask for a
+        // full pass and look again shortly. Keep the current pending app
+        // meanwhile; its own timer notices that focus left.
+        if (noButton && ScheduleAppIdRetry(hWnd)) {
+            return;
+        }
         CancelMinFocusTimer();
         CancelPreviewMinFocusTimer();
         bool ranksNonEmpty = false;
@@ -7647,6 +7160,10 @@ void HandleForegroundChanged(HWND hWnd) {
             RequestApplyVisualsDebounced();
         }
         return;
+    }
+
+    if (hWnd == g_appIdRetryHwnd) {
+        g_appIdRetryHwnd = nullptr;
     }
 
     const ULONGLONG now = GetTickCount64();
@@ -7706,6 +7223,9 @@ void HandleForegroundChanged(HWND hWnd) {
             if (!appIdUpper.empty()) {
                 g_pendingFocus.appIdUpper = appIdUpper;
             }
+            if (!pathUpper.empty()) {
+                g_pendingFocus.pathUpper = pathUpper;
+            }
             if (hwndChanged) {
                 g_pendingFocus.previewStartTick = now;
                 g_pendingFocus.previewConfirmed = false;
@@ -7719,6 +7239,7 @@ void HandleForegroundChanged(HWND hWnd) {
             next.displayName = displayName;
             next.windowTitle = windowTitle;
             next.appIdUpper = appIdUpper;
+            next.pathUpper = pathUpper;
             next.focusStartTick = now;
             next.previewStartTick = now;
             next.desktopId = g_currentDesktopId;
@@ -7901,9 +7422,6 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             RequestApplyVisuals();
             RequestApplyPreviewVisuals();
             return 0;
-        case WM_APP_RESOLVE_BUTTON:
-            ResolveOneButtonOnFocusThread();
-            return 0;
         case WM_APP_SETTINGS_CHANGED: {
             bool dropPending = false;
             bool keepPending = false;
@@ -7925,7 +7443,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                             : pendingAppId;
                     if (IsExcludedKey(g_pendingFocus.key,
                                       ToUpper(g_pendingFocus.displayName),
-                                      aumid)) {
+                                      aumid, g_pendingFocus.pathUpper)) {
                         g_pendingFocus = {};
                         dropPending = true;
                     } else {
@@ -7959,6 +7477,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
                 RequestApplyVisuals();
+            } else if (wParam == kAppIdRetryTimerId) {
+                KillTimer(hWnd, kAppIdRetryTimerId);
+                OnAppIdRetryTimer();
             }
             return 0;
         case WM_DESTROY:
@@ -7966,6 +7487,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
+            KillTimer(hWnd, kAppIdRetryTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }
@@ -8386,7 +7908,6 @@ void LoadSettings(bool userSavedSettings) {
         s.decayMinutes = 0;
     }
 
-    s.requireTaskbarButton = Wh_GetIntSetting(L"requireTaskbarButton") != 0;
 
     s.previewHighlightEnabled =
         Wh_GetIntSetting(L"previews.highlightEnabled") != 0;
@@ -8545,11 +8066,6 @@ void Wh_ModUninit() {
 
     // Stop the worker first so it cannot TryRunAsync after the UI drain.
     StopWinEventHookThread();
-    {
-        std::lock_guard<std::mutex> lock(g_buttonResolveMutex);
-        g_buttonResolveQueue.clear();
-        g_buttonResolvePosted = false;
-    }
 
     if (!RunOnEachUiDispatcherAndWait([]() {
             ClearAllHighlights_UIThread();
@@ -8636,7 +8152,8 @@ void Wh_ModSettingsChanged() {
                  it != desk.appFocusMap.end();) {
                 std::wstring displayUpper = ToUpper(it->second.displayName);
                 if (IsExcludedKey(it->first, displayUpper,
-                                  it->second.appIdUpper)) {
+                                  it->second.appIdUpper,
+                                  it->second.pathUpper)) {
                     it = desk.appFocusMap.erase(it);
                 } else {
                     ++it;
@@ -8651,9 +8168,10 @@ void Wh_ModSettingsChanged() {
                     }
                 }
                 std::wstring fileUpper =
-                    ToUpper(FileNameFromPath(it->second.processKey));
+                    ToUpper(FileNameFromPath(it->second.pathUpper));
                 if (IsExcludedKey(it->second.processKey, fileUpper,
-                                  it->second.appIdUpper)) {
+                                  it->second.appIdUpper,
+                                  it->second.pathUpper)) {
                     it = desk.windowFocusMap.erase(it);
                 } else {
                     ++it;

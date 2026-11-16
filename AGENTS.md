@@ -14,7 +14,7 @@ checks first and record any unverified behavior. Do not push unless requested.
 Do not include unrelated user changes in the version commit.
 
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.32). Read this
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.33). Read this
 before changing focus tracking, button matching, thumbnail previews, or visuals.
 
 ## What this project is
@@ -35,95 +35,68 @@ LoadLibrary hooks, TaskItemThumbnail ctor maps) come from those files and from
 
 ## Why “app matching” exists (important)
 
-Focus tracking and taskbar UI live in **two different worlds**. The mod must
-bridge them.
+Focus tracking and taskbar UI live in **two different worlds**. Since 0.11.33
+they are bridged by **Explorer's own AppId**, the key Explorer groups taskbar
+buttons by (one taskbar button = one app). Design note:
+`doc/appid-identity-design.md`.
 
-### World A — focus / process identity
-
-`EVENT_SYSTEM_FOREGROUND` gives an `HWND`. From that we resolve:
-
-| Field | Example | Role |
-|--------|---------|------|
-| Process image path | `C:\…\WindowsTerminal.exe` | Stable **key** for Win32 ranking |
-| AppUserModelID | `windows.immersivecontrolpanel_…` | **Key** for AFH/WWAHost (`APPID:…`) |
-| File name / window title | `WindowsTerminal.exe` / `Settings` | Logs, exclude list |
-| PID | `12345` | Min-focus “still same app?” (Win32) |
-| HWND + PID | window handle | Preview recency map (PID rejects recycle). App ranks store `lastHwnd` **and** `lastPid` for the same reason. |
-
-The app recency map is keyed by **uppercase full path**, except UWP windows
-hosted by `ApplicationFrameHost.exe` / `WWAHost.exe`, which use `APPID:` +
-AppUserModelID. Since 0.11.4 the same applies to **any** window with an
-explicit AUMID (one taskbar button = one app: Explorer groups by AUMID).
-Total Commander's Lister (`LISTER{…}`) is its own app, apart from TC's
-exe-grouped main window; Windhawk's editor is `APPID:RAMENSOFTWARE.WINDHAWK`
-rather than its VSCodium.exe path. Windows without an AUMID keep the path
-key. Excluding an exe still excludes its own-AUMID windows.
-
-### World B — taskbar XAML buttons
+### World B — taskbar XAML buttons (captured first)
 
 Highlights are applied to `Taskbar.TaskListButton` elements inside
-`Taskbar.View.dll`. A button is **not** an HWND and does not expose a simple
-“process path” property.
+`Taskbar.View.dll`. Each full pass (`ApplyAllHighlights_UIThread`) calls
+`EnsureButtonIdentity` for every live button: a **synchronous** capture
+(`CaptureButtonResolveData`, ~10 µs) of the button's public WindowsUdk
+`ITaskItem` / `ITaskGroup`:
 
-What we *can* observe:
+| Field | Source | Role |
+|--------|--------|------|
+| AppId | `ITaskGroup::get_AppId` (else `ITaskItem::get_AppId`) | **Button identity** |
+| Windows | `ITaskGroup::get_Items` → `ITaskItem::get_WindowId` | Window → AppId map, grace, per-window slots |
+| Uncombined | AutomationId `Window: 0x<hwnd>` + own TaskItem | Never Combine: one window per button |
 
-- `AutomationProperties.Name` — human label, e.g. `"Windows Terminal"`
-- Visual states (`ActiveNormal`, …) — which button is currently active
-- `get_IsRunning` — running vs pinned-only
-- Child elements: `IconPanel`, `Icon`, `BackgroundElement`, …
-- Via taskband hooks: button → `ITaskItem` / group → `HWND` / PID → path
+Every captured window is published to the **window → AppId map**
+(`PublishWindowAppIds`, `g_windowAppId`). A changed AppId or window set resets
+the cached paint rank. A button Explorer recycles for another app simply
+reports the new AppId. No worker round trip, serials, deadlines or rechecks
+(the 0.10.3–0.11.31 asynchronous resolver is gone).
 
-### App matching (in practice)
+### World A — focus
 
-```
-ranked apps (path / APPID)
-        │
-        ▼
-   path cache (option C): HWND / AUMID / full path
-        │
-        ▼
-   ApplyButtonHighlight(rank)  or  ClearButtonHighlight()
-```
+`EVENT_SYSTEM_FOREGROUND` / shell activation give an `HWND`, normalized
+(child → root, owned dialog → highest visible same-process owner; UWP content
+→ its frame). `ResolveAppIdentity` then:
 
-Order of preference (icons — **no name fuzzy**):
+1. resolves process path, window AUMID, display name (logs, **exclude list**);
+2. checks the exclude list (names, paths, AUMIDs — unchanged setting);
+3. looks the window up in the window → AppId map: key = `APPID:<AppId>`.
 
-1. **HWND** on the button’s task item / group — score 1000.
-2. **AppUserModelID** — only when the rank key is `APPID:…` (UWP host). Button
-   AutomationId / window AUMID, score 1000. Mismatch → 0. Do not use PID+class:
-   AFH is shared.
-3. **Process path cache** — button → HWND/PID → image path; score 1000 exact.
-   Same path but **different window class** → 0 (two icons from one process).
-   No filename-only score. An empty resolve is **not** permanent. A pinned
-   AutomationId is **not** a finished Win32 resolve (rank key is the image
-   path). Re-resolve on each not-running → running episode
-   (`resolvedWhileRunning` and the empty-resolve cap clear when a button
-   that was not running is observed running again). Otherwise
-   `lastResolveTick` throttles retries.
-   A successful path is not forever: if the button is running and the cached
-   HWND is dead or its PID changes, re-resolve. Periodic worker metadata
-   validation also detects an image-path change; do not query process paths
-   synchronously on the UI thread. Explorer reuses a `TaskListButton` when the exe
-   is deleted/renamed and another copy with the same name launches. Do not
-   treat a missing file on disk as stale (deleted-but-still-running).
+A window that no captured button lists yet (just opened) is not guessed:
+`ScheduleAppIdRetry` requests a full pass and retries (`kAppIdRetryMs` ×
+`kAppIdRetryMax`). A window that never gets a button (tray-only widgets,
+popups) is logged once (`No taskbar button lists window …`) and never ranked.
+This replaced the `requireTaskbarButton` setting (removed in 0.11.33).
 
-Only **score 1000** may bind the same rank to many buttons (secondary taskbar /
-Never Combine). If the taskband resolve is missing, **do not glow** — a wrong
-icon is worse than none.
+Examples (shadow logs 2026-11-16): TC `{6D809377-…}\TOTALCMD\TOTALCMD64.EXE`,
+Lister `LISTER{CECFE544-…}`, VS Code `MICROSOFT.VISUALSTUDIOCODE`, Terminal
+`MICROSOFT.WINDOWSTERMINALPREVIEW_8WEKYB3D8BBWE!APP`, Discord
+`COM.SQUIRREL.DISCORD.DISCORD` — stable across app updates, unlike the old
+versioned exe-path keys.
 
-Pinned-only icons: no highlight (`IsRunning == false`). Virtual-desktop lists
-are separate: a pinned icon that is not running on this desktop must not glow.
+### App matching
 
-### Why not only match on “active button”?
-
-Only the **currently focused** app is Active. Ranks 2 and 3 are recent but
-**not** active, so they need identity matching (path / AUMID / HWND).
+`IdentityMatchesRank`: rank key AppId == button AppId. Per-window slots
+(uncombined buttons) match only the button listing exactly that window
+(HWND + PID). Pinned-only icons: no highlight (`IsRunning == false`).
+`AppAppearsOnTaskbar`: a rank without a running (or just-closing) button with
+its AppId keeps its history but takes no slot. If capture is unavailable,
+**do not glow** — a wrong icon is worse than none.
 
 ### Known gaps (app matching)
 
-| Gap | Impact | Possible fix |
-|-----|--------|----------------|
-| Combined icons | One button per app group | Correct for combined mode |
-| Taskband hooks missing | No icon glow | Fail closed (no name guess) |
+| Gap | Impact |
+|-----|--------|
+| Taskbar.View symbols missing | No identity, no glow (fail closed) |
+| Taskbar tabs (SOLIDWORKS documents) | Preview cards unmarked (see README) |
 
 ---
 
@@ -932,7 +905,7 @@ cache releases its string allocation at outermost scope exit. Side layers are
 1–2, with only L0/L1 rectangles. The later 0.10.3 change below completes the asynchronous click-path follow-up.
 
 
-## Asynchronous button identity (0.10.3 — current resolver)
+## Asynchronous button identity (0.10.3 — superseded in 0.11.33 by synchronous AppId capture)
 
 This replaces the earlier synchronous full-bind/press metadata and stale-check
 implementation. EnsureButtonPathCached captures task item/group HWNDs and PIDs

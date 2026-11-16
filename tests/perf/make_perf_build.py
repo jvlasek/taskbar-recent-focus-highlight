@@ -33,17 +33,16 @@ HERE = Path(__file__).resolve().parent
 SLOTS = [
     # Taskbar UI thread: Explorer calls into these (hooks, events).
     ("UpdateVisualStates", "UI-hook", "void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {"),
-    ("ButtonPointerPressed", "UI-hook", "int WINAPI TaskListButton_OnPointerPressed_Hook(void* pThis, void* pArgs) {"),
     ("ThumbOnApplyTemplate", "UI-hook", "void WINAPI TaskItemThumbnailView_OnApplyTemplate_Hook(void* pThis) {"),
     ("ThumbPutSource", "UI-hook", "int32_t WINAPI TaskItemThumbnailView_put_ThumbnailSource_Hook(void* pThis,"),
     ("FlyoutTargetItemKey", "UI-hook", "void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {"),
     ("IconPanelSizeChanged", "UI", "watch.sizeChanged = iconPanel.SizeChanged("),
     ("RepeaterElementClearing", "UI", "token = repeater.ElementClearing("),
     # Taskbar UI thread: our own dispatcher work and its main pieces.
-    ("ApplyAllHighlights", "UI", "void ApplyAllHighlights_UIThread(bool allowIdentityRefresh) {"),
+    ("ApplyAllHighlights", "UI", "void ApplyAllHighlights_UIThread() {"),
     ("RefreshButtonHighlight", "UI", "void RefreshButtonHighlight(FrameworkElement button) {"),
     ("ApplyButtonHighlight", "UI", "void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {"),
-    ("EnsureButtonPathCached", "UI", "std::wstring EnsureButtonPathCached(FrameworkElement button,"),
+    ("EnsureButtonIdentity", "UI", "std::wstring EnsureButtonIdentity(FrameworkElement button) {"),
     ("CaptureButtonResolve", "UI", "ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {"),
     ("RefreshFlyout", "UI", "void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {"),
     ("ApplyThumbHighlight", "UI", "void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {"),
@@ -51,7 +50,6 @@ SLOTS = [
     ("WorkerWndProc", "Worker", "LRESULT CALLBACK HookThreadWndProc(HWND hWnd,"),
     ("WinEventProc", "Worker", "void CALLBACK WinEventProc(HWINEVENTHOOK /*hWinEventHook*/,"),
     ("HandleForeground", "Worker", "void HandleForegroundChanged(HWND hWnd) {"),
-    ("ResolveButtonIdentity", "Worker", "void ResolveOneButtonOnFocusThread() {"),
     ("AppMinFocusConfirm", "Worker", "void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {"),
     ("PreviewMinFocusConfirm", "Worker", "void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {"),
     ("DecayTimer", "Worker", "void OnDecayTimer() {"),

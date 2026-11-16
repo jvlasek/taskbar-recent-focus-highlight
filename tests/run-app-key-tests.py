@@ -1,4 +1,5 @@
-"""App keys: one taskbar button = one app (window AUMID first, else path)."""
+"""Legacy app keys (window AUMID first, else path). Since 0.11.33 the rank
+key is APPID:<Explorer AppId>; MakeAppKey only feeds the exclusion check."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,7 +15,7 @@ def function(signature):
             return source[start:source.index('\n}', start)+2]
 helpers = '\n'.join(function(x) for x in (
     'std::wstring StripAppIdPrefix(', 'std::wstring CanonicalAppId(',
-    'bool IsAppIdKey(', 'std::wstring MakeAppKey(', 'std::wstring PathFromAppKey(',
+    'std::wstring MakeAppKey(', 'std::wstring PathFromAppKey(',
     'std::wstring AppIdFromAppKey(', 'bool IsShellHostFileName('))
 cpp = r'''
 #include <cassert>
@@ -39,7 +40,7 @@ int main() {
     const std::wstring lister = MakeAppKey(tc, L"LISTER{CECFE544-EF6E-499D-8F87-56B61FA2EC44}");
     assert(lister == L"APPID:LISTER{CECFE544-EF6E-499D-8F87-56B61FA2EC44}");
     assert(lister != MakeAppKey(tc, L""));
-    assert(IsAppIdKey(lister) && PathFromAppKey(lister).empty());
+    assert(PathFromAppKey(lister).empty());
     assert(AppIdFromAppKey(lister) == L"LISTER{CECFE544-EF6E-499D-8F87-56B61FA2EC44}");
     // UWP host unchanged.
     assert(MakeAppKey(L"C:\\WINDOWS\\SYSTEM32\\APPLICATIONFRAMEHOST.EXE",

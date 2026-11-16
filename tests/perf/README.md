@@ -25,7 +25,7 @@ Reading the lines:
   taskbar.
 - `PERF … <Slot>: n total avg p50 p95 p99 max` — per entry point. Times are
   inclusive (a nested instrumented call is counted in its caller too).
-  Hook slots (UpdateVisualStates, ButtonPointerPressed, ThumbOnApplyTemplate,
+  Hook slots (UpdateVisualStates, ThumbOnApplyTemplate,
   ThumbPutSource, FlyoutTargetItemKey) start after Explorer's original
   function returns, so they are the mod's own cost only. Results taken
   before 2026-11-16 22:30 (0.11.30, first 0.11.31 runs) include Explorer's

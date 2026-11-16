@@ -80,3 +80,7 @@ uwspy/
 !tests/uwspy/
 tests/uwspy/captures
 
+
+# Python bytecode
+__pycache__/
+*.pyc
