@@ -239,9 +239,10 @@ first, then the low-risk preview fixes, then identity.
   Windows (needs g++; fails on Linux by design), and dozens of live
   unload/reload cycles in one Explorer session showed no crash or stuck
   "Uninitializing..." window.
-- [ ] Active-only preview mode + single-window flyouts: user decision
-  pending (parked 2026-11-15 until after the cleanup; mod is now about 309 KB
-  vs about 24 KB for taskbar-active-window-highlight, which covers this).
+- [x] Active-only preview mode + single-window flyouts: decided 2026-11-16.
+  Single-window previews: optional toggle (0.11.23, ranked per flyout since
+  0.11.27). Active-only: not added; the README points to
+  taskbar-active-window-highlight for that use case.
 
 - [x] SOLIDWORKS document cards (taskbar tabs) unmarked — closed as a
   known limitation (2026-11-16, 0.11.28 diagnostics): every card logs
