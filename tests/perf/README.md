@@ -31,6 +31,10 @@ Reading the lines:
   before 2026-11-16 22:30 (0.11.30, first 0.11.31 runs) include Explorer's
   work in those slots and in uiBusy.
   Percentiles are upper bounds of power-of-two microsecond buckets.
+- `UIStateLockWait/Hold`, `WorkerStateLockWait/Hold` — every
+  `g_stateMutex` lock_guard is replaced by a timed lock: how long each thread
+  waited to get the shared recency state and how long it held it. A long
+  UI wait means the taskbar thread was blocked by the worker.
 - Logging itself is not timed except where an entry point logs inside its
   scope (most do, with Mod logs on), so compare runs with the same logging
   level.

@@ -15,6 +15,8 @@ out = mpb.build(source).replace("\r\n", "\n")
 for slot, _, _ in mpb.SLOTS:
     assert out.count(f"PERF_SCOPE({slot});") == 1, slot
 assert out.count("perf::Report(/*sinceLoad=*/true);") == 1
+assert "std::lock_guard<std::mutex> lock(g_stateMutex);" not in out
+assert out.count("perf::TimedLock lock(g_stateMutex);") == source.count("std::lock_guard<std::mutex> lock(g_stateMutex);")
 # Hook scopes start after Explorer's original call, inside the same function.
 for slot, kind, _ in mpb.SLOTS:
     if kind != "UI-hook":
@@ -79,6 +81,13 @@ int main() {
     assert(s.interval[UpdateVisualStates].count == 0);
     Report(true);
     assert(g_log.find(L"PERF since-load ApplyAllHighlights: n=1 total=0.2ms avg=250.0us") != std::wstring::npos);
+    {  // g_stateMutex timing on the worker: 2 us wait-free hold
+        std::mutex m;
+        { PERF_SCOPE(HandleForeground); perf::TimedLock lock(m); g_fake += 2000; }
+        assert(s.total[WorkerStateLockHold].count == 1);
+        assert(s.total[WorkerStateLockHold].totalNs == 2000);
+        assert(s.total[UIStateLockWait].count == 0);
+    }
     fputws(g_log.c_str(), stdout);
 }
 '''.replace("// HEADER", header)

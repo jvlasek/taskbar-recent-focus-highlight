@@ -103,34 +103,64 @@ inline void Report(bool sinceLoad) {
     ReportLocked(s, sinceLoad, Now());
 }
 inline thread_local int t_depth = 0;
+inline thread_local bool t_isWorker = false;  // set by any Worker scope
+inline void Record(int slot, long long start, long long end, bool outer) {
+    const unsigned long long ns = ToNs(end - start);
+    State& s = S();
+    std::lock_guard<std::mutex> lock(s.m);
+    if (!s.started) {
+        s.started = true;
+        s.loadStart = s.intervalStart = start;
+    }
+    s.interval[slot].Add(ns);
+    s.total[slot].Add(ns);
+    if (outer) {
+        const int k = kSlots[slot].kind == Kind::UI ? 0 : 1;
+        s.busyNs[k] += ns;
+        s.busyTotalNs[k] += ns;
+    }
+    if (ToNs(end - s.intervalStart) >= 60000000000ULL) {
+        ReportLocked(s, false, end);
+        for (auto& st : s.interval) st = Stats{};
+        s.busyNs[0] = s.busyNs[1] = 0;
+        s.intervalStart = end;
+    }
+}
 struct Scope {
     int slot;
     long long start;
-    explicit Scope(int sl) : slot(sl), start(Now()) { ++t_depth; }
+    explicit Scope(int sl) : slot(sl), start(Now()) {
+        ++t_depth;
+        if (kSlots[sl].kind == Kind::Worker) t_isWorker = true;
+    }
     ~Scope() {
         const long long end = Now();
-        const unsigned long long ns = ToNs(end - start);
         const bool outer = --t_depth == 0;
-        State& s = S();
-        std::lock_guard<std::mutex> lock(s.m);
-        if (!s.started) {
-            s.started = true;
-            s.loadStart = s.intervalStart = start;
-        }
-        s.interval[slot].Add(ns);
-        s.total[slot].Add(ns);
-        if (outer) {
-            const int k = kSlots[slot].kind == Kind::UI ? 0 : 1;
-            s.busyNs[k] += ns;
-            s.busyTotalNs[k] += ns;
-        }
-        if (ToNs(end - s.intervalStart) >= 60000000000ULL) {
-            ReportLocked(s, false, end);
-            for (auto& st : s.interval) st = Stats{};
-            s.busyNs[0] = s.busyNs[1] = 0;
-            s.intervalStart = end;
-        }
+        Record(slot, start, end, outer);
     }
+};
+// Replaces std::lock_guard on g_stateMutex: wait time to acquire and hold
+// time, split by thread (worker = a thread that ran a Worker scope).
+// Not counted as busy time (already inside the callers' scopes).
+struct TimedLock {
+    std::mutex& m;
+    long long acquired;
+    bool worker;
+    explicit TimedLock(std::mutex& mu) : m(mu), worker(t_isWorker) {
+        const long long start = Now();
+        m.lock();
+        acquired = Now();
+        Record(worker ? WorkerStateLockWait : UIStateLockWait, start, acquired,
+               false);
+    }
+    ~TimedLock() {
+        const long long end = Now();
+        m.unlock();
+        Record(worker ? WorkerStateLockHold : UIStateLockHold, acquired, end,
+               false);
+    }
+    TimedLock(const TimedLock&) = delete;
+    TimedLock& operator=(const TimedLock&) = delete;
 };
 }  // namespace perf
 #define PERF_SCOPE(slot) perf::Scope perfScope_##slot(perf::slot)

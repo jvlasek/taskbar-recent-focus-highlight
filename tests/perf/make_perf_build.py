@@ -58,12 +58,25 @@ SLOTS = [
 ]
 
 
+# Slots without an anchor: g_stateMutex wait / hold (TimedLock in the header).
+LOCK_SLOTS = [
+    ("UIStateLockWait", "UI"),
+    ("UIStateLockHold", "UI"),
+    ("WorkerStateLockWait", "Worker"),
+    ("WorkerStateLockHold", "Worker"),
+]
+STATE_LOCK = "std::lock_guard<std::mutex> lock(g_stateMutex);"
+
+
 def build(text, quiet=False):
     crlf = "\r\n" in text
     body = text.replace("\r\n", "\n")
     if quiet:
         # Only calls; the "#define Wh_Log" of other code is not in this file.
         body = re.sub(r"\bWh_Log\(", "PERF_QUIET_LOG(", body)
+    if STATE_LOCK not in body:
+        raise SystemExit("no g_stateMutex lock_guard found")
+    body = body.replace(STATE_LOCK, "perf::TimedLock lock(g_stateMutex);")
     lines = body.split("\n")
 
     def find_unique(sub):
@@ -103,11 +116,12 @@ def build(text, quiet=False):
     i = find_unique("void Wh_ModUninit() {")
     lines.insert(i + 1, "    perf::Report(/*sinceLoad=*/true);")
 
+    all_slots = [(s, k) for s, k, _ in SLOTS] + LOCK_SLOTS
     slots = "\n".join(
-        [f"enum Slot {{ {', '.join(s for s, _, _ in SLOTS)}, kSlotCount }};",
+        [f"enum Slot {{ {', '.join(s for s, _ in all_slots)}, kSlotCount }};",
          "constexpr SlotDef kSlots[kSlotCount] = {"]
         + [f'    {{L"{s}", Kind::{"Worker" if k == "Worker" else "UI"}}},'
-           for s, k, _ in SLOTS] + ["};"])
+           for s, k in all_slots] + ["};"])
     header = (HERE / "perf_header.inc").read_text(encoding="utf-8")
     header = header.replace("// PERF_SLOTS", slots)
     i = find_unique("using namespace winrt::Windows::UI::Xaml;")
