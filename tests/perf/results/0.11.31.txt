@@ -1,4 +1,5 @@
 # 0.11.31-perf (normal, Mod logs on), capture manual-20261116-214042-195745, 1332 s, Jakub's desktop
+# NOTE: hook slots and uiBusy include Explorer's own original-function time (generator fixed 2026-11-16 22:30).
 21:41:45.251 PERF interval: span=60s uiBusy=52.0ms (0.086%) workerBusy=54.1ms
 21:41:45.251 PERF interval UpdateVisualStates: n=34 total=5.5ms avg=164.4us p50<256us p95<512us p99<512us max=402.2us
 21:41:45.252 PERF interval ButtonPointerPressed: n=3 total=1.8ms avg=621.8us p50<1024us p95<1024us p99<1024us max=692.5us

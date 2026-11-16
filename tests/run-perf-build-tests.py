@@ -15,6 +15,13 @@ out = mpb.build(source).replace("\r\n", "\n")
 for slot, _, _ in mpb.SLOTS:
     assert out.count(f"PERF_SCOPE({slot});") == 1, slot
 assert out.count("perf::Report(/*sinceLoad=*/true);") == 1
+# Hook scopes start after Explorer's original call, inside the same function.
+for slot, kind, _ in mpb.SLOTS:
+    if kind != "UI-hook":
+        continue
+    at = out.index(f"PERF_SCOPE({slot});")
+    fn_start = out.rindex("WINAPI ", 0, at)
+    assert "_Original(" in out[fn_start:at], slot
 assert "-perf\n" in out.split("// ==/WindhawkMod==")[0]
 quiet = mpb.build(source, quiet=True).replace("\r\n", "\n")
 q_head_end = quiet.index("// ======================= end of PERF BUILD header")

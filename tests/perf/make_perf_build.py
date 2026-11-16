@@ -25,14 +25,18 @@ HERE = Path(__file__).resolve().parent
 
 # (slot, kind, anchor). The anchor is a unique substring of the line that
 # opens the function or lambda body (or of the first signature line; the
-# body starts at the next line ending in "{").
+# body starts at the next line ending in "{"). Hooks (kind "UI-hook") are
+# timed only after Explorer's original function returns: the scope goes
+# before the first top-level statement after the "_Original(" call, so the
+# numbers are the mod's own cost, not Explorer's (fixed 2026-11-16: the
+# first 0.11.31 runs included Explorer's work in the five hook slots).
 SLOTS = [
     # Taskbar UI thread: Explorer calls into these (hooks, events).
-    ("UpdateVisualStates", "UI", "void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {"),
-    ("ButtonPointerPressed", "UI", "int WINAPI TaskListButton_OnPointerPressed_Hook(void* pThis, void* pArgs) {"),
-    ("ThumbOnApplyTemplate", "UI", "void WINAPI TaskItemThumbnailView_OnApplyTemplate_Hook(void* pThis) {"),
-    ("ThumbPutSource", "UI", "int32_t WINAPI TaskItemThumbnailView_put_ThumbnailSource_Hook(void* pThis,"),
-    ("FlyoutTargetItemKey", "UI", "void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {"),
+    ("UpdateVisualStates", "UI-hook", "void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {"),
+    ("ButtonPointerPressed", "UI-hook", "int WINAPI TaskListButton_OnPointerPressed_Hook(void* pThis, void* pArgs) {"),
+    ("ThumbOnApplyTemplate", "UI-hook", "void WINAPI TaskItemThumbnailView_OnApplyTemplate_Hook(void* pThis) {"),
+    ("ThumbPutSource", "UI-hook", "int32_t WINAPI TaskItemThumbnailView_put_ThumbnailSource_Hook(void* pThis,"),
+    ("FlyoutTargetItemKey", "UI-hook", "void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {"),
     ("IconPanelSizeChanged", "UI", "watch.sizeChanged = iconPanel.SizeChanged("),
     ("RepeaterElementClearing", "UI", "token = repeater.ElementClearing("),
     # Taskbar UI thread: our own dispatcher work and its main pieces.
@@ -69,7 +73,7 @@ def build(text, quiet=False):
         return hits[0]
 
     inserts = []
-    for slot, _kind, anchor in SLOTS:
+    for slot, kind, anchor in SLOTS:
         i = find_unique(anchor)
         j = i
         while not lines[j].rstrip().endswith("{"):
@@ -80,7 +84,19 @@ def build(text, quiet=False):
         while not lines[k].strip():
             k += 1
         indent = re.match(r"\s*", lines[k]).group(0)
-        inserts.append((j + 1, f"{indent}PERF_SCOPE({slot});"))
+        at = j + 1
+        if kind == "UI-hook":
+            c = next((n for n in range(j + 1, j + 12) if "_Original(" in lines[n]), None)
+            if c is None:
+                raise SystemExit(f"{slot}: no _Original( call near the hook start")
+            at = c + 1
+            while (not lines[at].strip() or
+                   not lines[at].startswith(indent) or
+                   lines[at][len(indent)] in " }?:"):
+                at += 1
+                if at - c > 10:
+                    raise SystemExit(f"{slot}: no statement after _Original(")
+        inserts.append((at, f"{indent}PERF_SCOPE({slot});"))
     for at, line in sorted(inserts, reverse=True):
         lines.insert(at, line)
 
@@ -90,7 +106,8 @@ def build(text, quiet=False):
     slots = "\n".join(
         [f"enum Slot {{ {', '.join(s for s, _, _ in SLOTS)}, kSlotCount }};",
          "constexpr SlotDef kSlots[kSlotCount] = {"]
-        + [f'    {{L"{s}", Kind::{k}}},' for s, k, _ in SLOTS] + ["};"])
+        + [f'    {{L"{s}", Kind::{"Worker" if k == "Worker" else "UI"}}},'
+           for s, k, _ in SLOTS] + ["};"])
     header = (HERE / "perf_header.inc").read_text(encoding="utf-8")
     header = header.replace("// PERF_SLOTS", slots)
     i = find_unique("using namespace winrt::Windows::UI::Xaml;")
