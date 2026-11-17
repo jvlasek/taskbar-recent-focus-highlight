@@ -524,53 +524,40 @@ std::wstring GetWindowTitle(HWND hWnd) {
 // window (0.11.33; was the window AUMID or process path). A window that no
 // captured button lists yet (just opened, or the mod just loaded and
 // Explorer has not reported its buttons) gets a provisional per-window key
-// (*outNoButton set). Its recency is kept and moved to the AppId key once a
+// (noButton set). Its recency is kept and moved to the AppId key once a
 // button lists the window (AttributeProvisionalAppsLocked); a window that
 // never gets a button (tray widget) is never ranked and decays.
-bool ResolveAppIdentity(HWND hWnd,
-                        std::wstring& outKey,
-                        std::wstring& outDisplayName,
-                        DWORD& outProcessId,
-                        std::wstring* outWindowTitle = nullptr,
-                        std::wstring* outAppId = nullptr,
-                        std::wstring* outPathUpper = nullptr,
-                        bool* outNoButton = nullptr) {
-    if (outNoButton) {
-        *outNoButton = false;
-    }
-    if (outPathUpper) {
-        outPathUpper->clear();
-    }
-    outKey.clear();
-    outDisplayName.clear();
-    outProcessId = 0;
-    if (outWindowTitle) {
-        outWindowTitle->clear();
-    }
-    if (outAppId) {
-        outAppId->clear();
-    }
+struct AppIdentity {
+    std::wstring key;          // APPID:<AppId>, or provisional WINDOW:<hwnd>
+    std::wstring displayName;  // logs / exclude list
+    std::wstring windowTitle;
+    std::wstring appIdUpper;   // window AUMID (exclude list only)
+    std::wstring pathUpper;    // process image path (exclude list only)
+    DWORD processId = 0;
+    bool noButton = false;     // provisional key
+};
 
+std::optional<AppIdentity> ResolveAppIdentity(HWND hWnd) {
     hWnd = NormalizeFocusHwnd(hWnd);
     if (ShouldIgnoreHwnd(hWnd)) {
-        return false;
+        return std::nullopt;
     }
 
     DWORD processId = 0;
     GetWindowThreadProcessId(hWnd, &processId);
     if (!processId) {
-        return false;
+        return std::nullopt;
     }
 
     const std::wstring classUpper = ToUpper(GetWindowClassName(hWnd));
     const bool explorerFolder = IsExplorerFolderWindowClass(classUpper);
     if (IsOwnExplorerProcess(processId) && !explorerFolder) {
-        return false;
+        return std::nullopt;
     }
 
     std::wstring path = GetProcessImagePath(processId);
     if (path.empty()) {
-        return false;
+        return std::nullopt;
     }
 
     std::wstring pathUpper = ToUpper(path);
@@ -578,7 +565,7 @@ bool ResolveAppIdentity(HWND hWnd,
     std::wstring fileNameUpper = ToUpper(fileName);
 
     if (IsShellHostFileName(fileNameUpper) && !explorerFolder) {
-        return false;
+        return std::nullopt;
     }
 
     std::wstring appIdUpper = ExclusionAumid(hWnd);
@@ -597,34 +584,21 @@ bool ResolveAppIdentity(HWND hWnd,
         }
     }
 
-    std::wstring key;
-    if (explorerAppId.empty()) {
-        if (outNoButton) {
-            *outNoButton = true;
-        }
-        key = ProvisionalAppKey(hWnd);
-    } else {
-        key = std::wstring(L"APPID:") + explorerAppId;
-    }
+    AppIdentity id;
+    id.noButton = explorerAppId.empty();
+    id.key = id.noButton ? ProvisionalAppKey(hWnd)
+                         : std::wstring(L"APPID:") + explorerAppId;
     // Exclude list: exe name, path, window AUMID or Explorer AppId.
-    if (IsExcludedKey(key, ToUpper(displayName), appIdUpper, pathUpper)) {
+    if (IsExcludedKey(id.key, ToUpper(displayName), appIdUpper, pathUpper)) {
         Wh_Log(L"Excluded: %s", displayName.c_str());
-        return false;
+        return std::nullopt;
     }
-
-    if (outPathUpper) {
-        *outPathUpper = pathUpper;
-    }
-    outKey = key;
-    outDisplayName = displayName;
-    outProcessId = processId;
-    if (outWindowTitle) {
-        *outWindowTitle = title;
-    }
-    if (outAppId) {
-        *outAppId = appIdUpper;
-    }
-    return true;
+    id.displayName = std::move(displayName);
+    id.windowTitle = title;
+    id.appIdUpper = std::move(appIdUpper);
+    id.pathUpper = std::move(pathUpper);
+    id.processId = processId;
+    return id;
 }
 
 FrameworkElement FindChildByName(FrameworkElement element, PCWSTR name) {

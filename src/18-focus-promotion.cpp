@@ -472,15 +472,8 @@ void HandleForegroundChanged(HWND hWnd) {
         RequestApplyPreviewVisuals();
     }
 
-    std::wstring key;
-    std::wstring displayName;
-    std::wstring windowTitle;
-    std::wstring appIdUpper;
-    std::wstring pathUpper;
-    DWORD processId = 0;
-    bool noButton = false;
-    if (!ResolveAppIdentity(hWnd, key, displayName, processId, &windowTitle,
-                            &appIdUpper, &pathUpper, &noButton)) {
+    const std::optional<AppIdentity> resolved = ResolveAppIdentity(hWnd);
+    if (!resolved) {
         CancelMinFocusTimer();
         CancelPreviewMinFocusTimer();
         bool ranksNonEmpty = false;
@@ -496,7 +489,13 @@ void HandleForegroundChanged(HWND hWnd) {
         return;
     }
 
-    if (noButton) {
+    const std::wstring& key = resolved->key;
+    const std::wstring& displayName = resolved->displayName;
+    const std::wstring& windowTitle = resolved->windowTitle;
+    const std::wstring& appIdUpper = resolved->appIdUpper;
+    const std::wstring& pathUpper = resolved->pathUpper;
+    const DWORD processId = resolved->processId;
+    if (resolved->noButton) {
         // Provisional key until a captured button lists this window: ask
         // for a full pass (with a repeater re-seed) so a button that exists
         // is captured now.
