@@ -37,6 +37,14 @@ Short timeline:
   window.
 - 0.11.44: delayed re-seed after a switch, one 300 ms AppId retry at app
   confirm; group-capture warning only after 20 misses with no hit.
+- 0.11.45: Fable review phase 5: `MinFocusTrack` (one deadline / Alt-Tab
+  grace machine for app and preview confirms), `FindButtonStateLocked`,
+  renames (`ButtonState`, `g_buttonStates`, `g_buttonStateMutex`,
+  `ButtonCapture`, `CaptureButton`), `EnumName` tables for settings and log
+  names, `ClampedIntSetting` / `EnumSetting`, `AppIdentity` struct,
+  single-loop full-pass binding, `MarkButtonUnranked`. Not done: one
+  per-window recency model (4.3), a generic event-watch container (unload
+  path, left as is), a catch-logging helper.
 
 ## Review lessons about removed mechanisms
 

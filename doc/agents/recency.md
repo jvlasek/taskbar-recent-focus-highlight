@@ -50,6 +50,13 @@ Shared confirm helpers (do not fork another copy):
 - `DecayMsFromMinutes` / `IsTickDecayed` / `RemainingDeadlineMs` — app map, window map, min-focus timers
 - `SettingsSnap` / `PublishSettings` — immutable settings; never mutate in place
 
+App and preview confirmation are one state machine since 0.11.45:
+`MinFocusTrack` (timer id, seconds, start tick, retry field; `AppTrack` /
+`PreviewTrack`), `TakePendingForConfirm` (copy + exclude check),
+`MinFocusDeadlineReached` (deadline, still-foreground, Alt-Tab grace;
+the app track drops the candidate when focus left, the preview track does
+not), `ArmOrConfirmTrack`. Only the confirm steps after it differ.
+
 `KillTimer` does not flush a `WM_TIMER` already queued. App and preview
 min-focus handlers (`FromTimer`) re-check the *current* candidate’s start tick
 (`focusStartTick` / `previewStartTick`) and re-arm for the remainder instead
