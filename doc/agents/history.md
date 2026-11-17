@@ -33,6 +33,8 @@ Short timeline:
   window → AppId map, `HSHELL_WINDOWDESTROYED`, confirm-time desktop, AppId
   re-lookup at confirm, group-capture warning. Provisional keys kept (see
   identity.md).
+- 0.11.43: re-seed repeaters after a desktop switch or an unknown focused
+  window.
 
 ## Review lessons about removed mechanisms
 

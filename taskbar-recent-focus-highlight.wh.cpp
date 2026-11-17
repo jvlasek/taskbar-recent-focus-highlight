@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.42
+// @version         0.11.43
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -745,6 +745,10 @@ std::atomic<bool> g_taskbarViewHookAttempted{false};
 // every button. UVS must not clear chrome just because this is set (flicker).
 std::atomic<bool> g_pendingOverlaySweep{false};
 std::atomic<bool> g_decayTimerArmed{false};
+// Bumped when buttons the mod has not seen may exist (desktop switch, a
+// focused window no captured button lists): the next full pass re-seeds
+// every taskbar repeater (SeedButtonsFromRepeater_UIThread).
+std::atomic<unsigned> g_buttonSeedGeneration{0};
 // Hook thread only. Skip re-arming so a hover storm cannot postpone forever.
 bool g_fullRebindTimerArmed = false;
 
@@ -1138,6 +1142,7 @@ void OnVirtualDesktopSwitched() {
         CancelPreviewMinFocusTimer();
     }
     g_pendingOverlaySweep = true;
+    ++g_buttonSeedGeneration;
     RequestApplyVisuals();
     RequestApplyPreviewVisuals();
 }
@@ -4221,23 +4226,30 @@ bool IsRealizedTaskbarButton(FrameworkElement const& button) {
 // seen on a taskbar seeds every button its ItemsRepeater currently shows
 // (Fable review 3.2, option 1). Once per repeater; buttons realized later
 // report themselves. Returns true if new buttons were tracked.
-bool SeedButtonsFromRepeater_UIThread(FrameworkElement const& button) {
-    static thread_local std::unordered_set<void*> seededRepeaters;
+winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater ButtonRepeater(
+    FrameworkElement const& button) {
     try {
         DependencyObject cur = Media::VisualTreeHelper::GetParent(button);
-        winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater repeater{nullptr};
-        for (int depth = 0; cur && depth < 8 && !repeater; ++depth) {
-            repeater =
-                cur.try_as<winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater>();
+        for (int depth = 0; cur && depth < 8; ++depth) {
+            if (auto repeater = cur.try_as<
+                    winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater>()) {
+                return repeater;
+            }
             cur = Media::VisualTreeHelper::GetParent(cur);
         }
-        if (!repeater ||
-            !seededRepeaters.insert(InspectableIdentity(repeater)).second) {
-            return false;
-        }
+    } catch (...) {
+    }
+    return nullptr;
+}
+
+// Tracks every TaskListButton the repeater currently shows. Returns the
+// number tracked.
+int SeedRepeater_UIThread(
+    winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater const& repeater) {
+    int tracked = 0;
+    try {
         auto source = repeater.ItemsSourceView();
         const int count = source ? source.Count() : 0;
-        int tracked = 0;
         for (int i = 0; i < count; ++i) {
             auto el = repeater.TryGetElement(i).try_as<FrameworkElement>();
             if (!el) {
@@ -4252,12 +4264,21 @@ bool SeedButtonsFromRepeater_UIThread(FrameworkElement const& button) {
                 ++tracked;
             }
         }
-        Wh_Log(L"Seeded %d taskbar buttons from their repeater (%d items)",
-               tracked, count);
-        return tracked > 0;
     } catch (...) {
+    }
+    return tracked;
+}
+
+bool SeedButtonsFromRepeater_UIThread(FrameworkElement const& button) {
+    static thread_local std::unordered_set<void*> seededRepeaters;
+    auto repeater = ButtonRepeater(button);
+    if (!repeater ||
+        !seededRepeaters.insert(InspectableIdentity(repeater)).second) {
         return false;
     }
+    const int tracked = SeedRepeater_UIThread(repeater);
+    Wh_Log(L"Seeded %d taskbar buttons from their repeater", tracked);
+    return tracked > 0;
 }
 
 std::vector<FrameworkElement> CollectLiveButtonsOnThisDispatcher() {
@@ -4300,6 +4321,23 @@ int ParkButtonState(FrameworkElement button) {
 void ApplyAllHighlights_UIThread() {
     g_lastFullRefreshTick = GetTickCount64();
 
+    // Re-seed after a desktop switch or an unknown focused window: that
+    // desktop's buttons may be newly realized and not have reported yet.
+    {
+        static thread_local unsigned seenGeneration = 0;
+        const unsigned gen = g_buttonSeedGeneration.load();
+        if (gen != seenGeneration) {
+            seenGeneration = gen;
+            std::unordered_set<void*> repeaters;  // one walk per taskbar
+            for (auto& b : CollectLiveButtonsOnThisDispatcher()) {
+                auto repeater = ButtonRepeater(b);
+                if (repeater &&
+                    repeaters.insert(InspectableIdentity(repeater)).second) {
+                    SeedRepeater_UIThread(repeater);
+                }
+            }
+        }
+    }
     std::vector<FrameworkElement> live = CollectLiveButtonsOnThisDispatcher();
     size_t parked = 0;
     live.erase(std::remove_if(live.begin(), live.end(),
@@ -7066,6 +7104,7 @@ void HandleForegroundChanged(HWND hWnd) {
             CancelPreviewMinFocusTimer();
         }
         g_pendingOverlaySweep = true;
+        ++g_buttonSeedGeneration;
         RequestApplyVisuals();
         RequestApplyPreviewVisuals();
     }
@@ -7096,7 +7135,9 @@ void HandleForegroundChanged(HWND hWnd) {
 
     if (noButton) {
         // Provisional key until a captured button lists this window: ask
-        // for a full pass now so a button that exists is captured soon.
+        // for a full pass (with a repeater re-seed) so a button that exists
+        // is captured now.
+        ++g_buttonSeedGeneration;
         RequestApplyVisuals();
     }
 

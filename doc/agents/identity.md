@@ -51,7 +51,11 @@ just decays. This replaced the `requireTaskbarButton` setting (removed in
 looks the AppId up again (a button captured during min-focus avoids the
 provisional key), and the first button seen on a taskbar seeds every button
 its `ItemsRepeater` shows (`SeedButtonsFromRepeater_UIThread`), so after a
-mod load one button state change captures the whole taskbar.
+mod load one button state change captures the whole taskbar. A desktop switch
+or a focused window without a known button bumps `g_buttonSeedGeneration`,
+and the next full pass re-walks each taskbar's repeater (0.11.43; live
+2026-11-17: a Terminal window on another desktop stayed provisional until
+its confirm).
 
 The window → AppId map stores the PID with each window and drops an entry
 whose handle now belongs to another process (0.11.42). `HSHELL_WINDOWDESTROYED`

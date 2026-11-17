@@ -464,6 +464,7 @@ void HandleForegroundChanged(HWND hWnd) {
             CancelPreviewMinFocusTimer();
         }
         g_pendingOverlaySweep = true;
+        ++g_buttonSeedGeneration;
         RequestApplyVisuals();
         RequestApplyPreviewVisuals();
     }
@@ -494,7 +495,9 @@ void HandleForegroundChanged(HWND hWnd) {
 
     if (noButton) {
         // Provisional key until a captured button lists this window: ask
-        // for a full pass now so a button that exists is captured soon.
+        // for a full pass (with a repeater re-seed) so a button that exists
+        // is captured now.
+        ++g_buttonSeedGeneration;
         RequestApplyVisuals();
     }
 

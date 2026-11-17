@@ -260,6 +260,10 @@ std::atomic<bool> g_taskbarViewHookAttempted{false};
 // every button. UVS must not clear chrome just because this is set (flicker).
 std::atomic<bool> g_pendingOverlaySweep{false};
 std::atomic<bool> g_decayTimerArmed{false};
+// Bumped when buttons the mod has not seen may exist (desktop switch, a
+// focused window no captured button lists): the next full pass re-seeds
+// every taskbar repeater (SeedButtonsFromRepeater_UIThread).
+std::atomic<unsigned> g_buttonSeedGeneration{0};
 // Hook thread only. Skip re-arming so a hover storm cannot postpone forever.
 bool g_fullRebindTimerArmed = false;
 

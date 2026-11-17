@@ -215,6 +215,7 @@ void OnVirtualDesktopSwitched() {
         CancelPreviewMinFocusTimer();
     }
     g_pendingOverlaySweep = true;
+    ++g_buttonSeedGeneration;
     RequestApplyVisuals();
     RequestApplyPreviewVisuals();
 }
