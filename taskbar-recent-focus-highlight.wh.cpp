@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.43
+// @version         0.11.44
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -518,6 +518,8 @@ struct PendingFocus {
     bool valid = false;
     bool appConfirmed = false;
     bool previewConfirmed = false;
+    // App confirm found no AppId yet: one short wait for a re-seeded pass.
+    bool appIdRetried = false;
 };
 
 // Per-window recency for multi-instance thumbnail previews (separate timers).
@@ -749,6 +751,9 @@ std::atomic<bool> g_decayTimerArmed{false};
 // focused window no captured button lists): the next full pass re-seeds
 // every taskbar repeater (SeedButtonsFromRepeater_UIThread).
 std::atomic<unsigned> g_buttonSeedGeneration{0};
+// A desktop switch also re-seeds once more on the next debounced pass:
+// Explorer realizes that desktop's buttons a moment after the switch.
+std::atomic<bool> g_reseedOnDebouncedPass{false};
 // Hook thread only. Skip re-arming so a hover storm cannot postpone forever.
 bool g_fullRebindTimerArmed = false;
 
@@ -1143,6 +1148,8 @@ void OnVirtualDesktopSwitched() {
     }
     g_pendingOverlaySweep = true;
     ++g_buttonSeedGeneration;
+    g_reseedOnDebouncedPass = true;
+    RequestApplyVisualsDebounced();
     RequestApplyVisuals();
     RequestApplyPreviewVisuals();
 }
@@ -3902,14 +3909,20 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
     TaskListGroupViewModel_IsMultiWindow_Original((void**)groupViewModel.get() -
                                                   1);
     g_captureTaskGroup = false;
-    // A group view model whose group cannot be captured means the
-    // IsMultiWindow -> ITaskGroup::IsRunning path changed in Explorer: a
-    // grouped app's second window would then never be ranked. Say so once
-    // (Fable review 3.1).
+    // If the IsMultiWindow -> ITaskGroup::IsRunning path changes in
+    // Explorer, no group is ever captured and a grouped app's second window
+    // is never ranked. Say so once (Fable review 3.1). Single misses are
+    // normal (some view models do not ask their group, 0.11.42 log), so only
+    // many misses with no capture at all count.
+    static std::atomic<unsigned> captureHits{0}, captureMisses{0};
     static std::atomic<bool> loggedCaptureMiss{false};
-    if (!g_capturedTaskGroup && !loggedCaptureMiss.exchange(true)) {
-        Wh_Log(L"WARNING: task group capture returned nothing for a group "
-               L"view model (IsMultiWindow / ITaskGroup::IsRunning changed?)");
+    if (g_capturedTaskGroup) {
+        ++captureHits;
+    } else if (++captureMisses >= 20 && captureHits.load() == 0 &&
+               !loggedCaptureMiss.exchange(true)) {
+        Wh_Log(L"WARNING: task group capture never succeeded (%u misses): "
+               L"IsMultiWindow / ITaskGroup::IsRunning changed?",
+               captureMisses.load());
     }
     return g_capturedTaskGroup;
 }
@@ -6929,6 +6942,20 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         const std::wstring appId = LookupWindowAppId(pending.hwnd);
         if (!appId.empty()) {
             pending.key = std::wstring(L"APPID:") + appId;
+        } else if (mode == MinFocusConfirmMode::FromTimer &&
+                   !pending.appIdRetried) {
+            // Its button may exist but not be tracked yet (newly realized on
+            // this desktop): re-seed in a pass and confirm 300 ms later.
+            {
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                if (g_pendingFocus.valid && g_pendingFocus.hwnd == pending.hwnd) {
+                    g_pendingFocus.appIdRetried = true;
+                }
+            }
+            ++g_buttonSeedGeneration;
+            RequestApplyVisuals();
+            ArmHookTimer(kMinFocusTimerId, 300);
+            return;
         }
     }
     const ULONGLONG now = GetTickCount64();
@@ -7105,6 +7132,8 @@ void HandleForegroundChanged(HWND hWnd) {
         }
         g_pendingOverlaySweep = true;
         ++g_buttonSeedGeneration;
+        g_reseedOnDebouncedPass = true;
+        RequestApplyVisualsDebounced();
         RequestApplyVisuals();
         RequestApplyPreviewVisuals();
     }
@@ -7532,6 +7561,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
+                if (g_reseedOnDebouncedPass.exchange(false)) {
+                    ++g_buttonSeedGeneration;
+                }
                 RequestApplyVisuals();
             }
             return 0;

@@ -33,6 +33,8 @@ struct PendingFocus {
     bool valid = false;
     bool appConfirmed = false;
     bool previewConfirmed = false;
+    // App confirm found no AppId yet: one short wait for a re-seeded pass.
+    bool appIdRetried = false;
 };
 
 // Per-window recency for multi-instance thumbnail previews (separate timers).
@@ -264,6 +266,9 @@ std::atomic<bool> g_decayTimerArmed{false};
 // focused window no captured button lists): the next full pass re-seeds
 // every taskbar repeater (SeedButtonsFromRepeater_UIThread).
 std::atomic<unsigned> g_buttonSeedGeneration{0};
+// A desktop switch also re-seeds once more on the next debounced pass:
+// Explorer realizes that desktop's buttons a moment after the switch.
+std::atomic<bool> g_reseedOnDebouncedPass{false};
 // Hook thread only. Skip re-arming so a hover storm cannot postpone forever.
 bool g_fullRebindTimerArmed = false;
 

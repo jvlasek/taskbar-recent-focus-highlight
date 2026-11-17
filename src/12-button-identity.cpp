@@ -213,14 +213,20 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
     TaskListGroupViewModel_IsMultiWindow_Original((void**)groupViewModel.get() -
                                                   1);
     g_captureTaskGroup = false;
-    // A group view model whose group cannot be captured means the
-    // IsMultiWindow -> ITaskGroup::IsRunning path changed in Explorer: a
-    // grouped app's second window would then never be ranked. Say so once
-    // (Fable review 3.1).
+    // If the IsMultiWindow -> ITaskGroup::IsRunning path changes in
+    // Explorer, no group is ever captured and a grouped app's second window
+    // is never ranked. Say so once (Fable review 3.1). Single misses are
+    // normal (some view models do not ask their group, 0.11.42 log), so only
+    // many misses with no capture at all count.
+    static std::atomic<unsigned> captureHits{0}, captureMisses{0};
     static std::atomic<bool> loggedCaptureMiss{false};
-    if (!g_capturedTaskGroup && !loggedCaptureMiss.exchange(true)) {
-        Wh_Log(L"WARNING: task group capture returned nothing for a group "
-               L"view model (IsMultiWindow / ITaskGroup::IsRunning changed?)");
+    if (g_capturedTaskGroup) {
+        ++captureHits;
+    } else if (++captureMisses >= 20 && captureHits.load() == 0 &&
+               !loggedCaptureMiss.exchange(true)) {
+        Wh_Log(L"WARNING: task group capture never succeeded (%u misses): "
+               L"IsMultiWindow / ITaskGroup::IsRunning changed?",
+               captureMisses.load());
     }
     return g_capturedTaskGroup;
 }

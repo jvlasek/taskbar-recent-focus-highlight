@@ -216,6 +216,8 @@ void OnVirtualDesktopSwitched() {
     }
     g_pendingOverlaySweep = true;
     ++g_buttonSeedGeneration;
+    g_reseedOnDebouncedPass = true;
+    RequestApplyVisualsDebounced();
     RequestApplyVisuals();
     RequestApplyPreviewVisuals();
 }

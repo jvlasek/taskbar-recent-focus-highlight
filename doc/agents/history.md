@@ -35,6 +35,8 @@ Short timeline:
   identity.md).
 - 0.11.43: re-seed repeaters after a desktop switch or an unknown focused
   window.
+- 0.11.44: delayed re-seed after a switch, one 300 ms AppId retry at app
+  confirm; group-capture warning only after 20 misses with no hit.
 
 ## Review lessons about removed mechanisms
 

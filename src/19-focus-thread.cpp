@@ -134,6 +134,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
+                if (g_reseedOnDebouncedPass.exchange(false)) {
+                    ++g_buttonSeedGeneration;
+                }
                 RequestApplyVisuals();
             }
             return 0;

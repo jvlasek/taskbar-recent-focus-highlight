@@ -289,6 +289,20 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         const std::wstring appId = LookupWindowAppId(pending.hwnd);
         if (!appId.empty()) {
             pending.key = std::wstring(L"APPID:") + appId;
+        } else if (mode == MinFocusConfirmMode::FromTimer &&
+                   !pending.appIdRetried) {
+            // Its button may exist but not be tracked yet (newly realized on
+            // this desktop): re-seed in a pass and confirm 300 ms later.
+            {
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                if (g_pendingFocus.valid && g_pendingFocus.hwnd == pending.hwnd) {
+                    g_pendingFocus.appIdRetried = true;
+                }
+            }
+            ++g_buttonSeedGeneration;
+            RequestApplyVisuals();
+            ArmHookTimer(kMinFocusTimerId, 300);
+            return;
         }
     }
     const ULONGLONG now = GetTickCount64();
@@ -465,6 +479,8 @@ void HandleForegroundChanged(HWND hWnd) {
         }
         g_pendingOverlaySweep = true;
         ++g_buttonSeedGeneration;
+        g_reseedOnDebouncedPass = true;
+        RequestApplyVisualsDebounced();
         RequestApplyVisuals();
         RequestApplyPreviewVisuals();
     }

@@ -55,7 +55,10 @@ mod load one button state change captures the whole taskbar. A desktop switch
 or a focused window without a known button bumps `g_buttonSeedGeneration`,
 and the next full pass re-walks each taskbar's repeater (0.11.43; live
 2026-11-17: a Terminal window on another desktop stayed provisional until
-its confirm).
+its confirm). 0.11.44: the switch also re-seeds on the next debounced pass
+(Explorer realizes that desktop's buttons a moment later; the immediate pass
+missed them on 2026-11-17), and an app confirm still without an AppId
+re-seeds and waits 300 ms once (`PendingFocus::appIdRetried`).
 
 The window → AppId map stores the PID with each window and drops an entry
 whose handle now belongs to another process (0.11.42). `HSHELL_WINDOWDESTROYED`
