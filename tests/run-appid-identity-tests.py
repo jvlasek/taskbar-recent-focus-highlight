@@ -31,7 +31,10 @@ types = '\n'.join([
     block('struct ButtonIdentity {', '\n};\n'),
 ])
 helpers = '\n'.join([
-    function('std::wstring PathFromAppKey('),
+    function('std::wstring ProvisionalAppKey('),
+    function('bool IsProvisionalAppKey('),
+    function('bool IsShellHostFileName('),
+    function('int RankIntensity('),
     function('std::wstring AppIdFromAppKey('),
     function('std::wstring StripAppIdPrefix('),
     function('std::wstring CanonicalAppId('),
@@ -58,6 +61,8 @@ using DWORD = unsigned long;
 using ULONGLONG = unsigned long long;
 using HWND = void*;
 template<class... T> void Wh_Log(const wchar_t*, T...) {}
+#include <cstdio>
+#define swprintf_s(buf, ...) swprintf(buf, sizeof(buf) / sizeof(*(buf)), __VA_ARGS__)
 int _wcsnicmp(const wchar_t* a, const wchar_t* b, size_t n) {
     for (size_t i = 0; i < n; ++i) {
         wint_t x = towupper(a[i]), y = towupper(b[i]);
@@ -151,7 +156,6 @@ int main() {
     // On the taskbar: a running button with that AppId.
     assert(AppAppearsOnTaskbar(L"APPID:" + tc));
     assert(!AppAppearsOnTaskbar(L"APPID:" + lister));
-    assert(!AppAppearsOnTaskbar(L"C:\\OLD\\PATH.EXE"));
     e.observedRunning = false; e.lastRunningTick = tick;             // closing grace
     assert(AppAppearsOnTaskbar(L"APPID:" + tc));
     tick += kIsRunningGraceMs;
@@ -170,9 +174,21 @@ int main() {
     g_settings.excludedPrograms = {L"MICROSOFT.WINDOWSCALCULATOR_8WEKYB3D8BBWE!APP"};
     assert(IsExcludedKey(L"APPID:MICROSOFT.WINDOWSCALCULATOR_8WEKYB3D8BBWE!APP",
                          L"CALCULATOR", L"", L"C:\\WINDOWS\\SYSTEM32\\APPLICATIONFRAMEHOST.EXE"));
-    // Old path keys (pre-0.11.33) still resolve their path.
-    g_settings.excludedPrograms = {L"PATH.EXE"};
-    assert(IsExcludedKey(L"C:\\OLD\\PATH.EXE", L"", L"", L""));
+    // Provisional keys: never an AppId, never ranked.
+    const std::wstring prov = ProvisionalAppKey(newWin);
+    assert(IsProvisionalAppKey(prov) && AppIdFromAppKey(prov).empty());
+    assert(!AppAppearsOnTaskbar(prov));
+    // Shell UI is transient, not an app (jump lists, Start menu).
+    assert(IsShellHostFileName(L"SHELLEXPERIENCEHOST.EXE"));
+    assert(IsShellHostFileName(L"STARTMENUEXPERIENCEHOST.EXE"));
+    assert(!IsShellHostFileName(L"TOTALCMD64.EXE"));
+    // Ranks 4+ fade from rank 3 instead of repeating it.
+    const int per[3] = {100, 70, 45};
+    assert(RankIntensity(per, 0) == 100 && RankIntensity(per, 2) == 45);
+    assert(RankIntensity(per, 3) == 34 && RankIntensity(per, 4) == 25);
+    assert(RankIntensity(per, 15) == 10);
+    const int low[3] = {100, 70, 5};
+    assert(RankIntensity(low, 9) == 5);
 }
 '''
 cpp = cpp.replace('// HELPERS_DECL', types).replace('// HELPERS', helpers)
