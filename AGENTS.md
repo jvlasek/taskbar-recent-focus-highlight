@@ -1,6 +1,6 @@
 # Agent / contributor guide
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.37).
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.38).
 
 This file is the index. It holds the rules that always apply and says which
 topic file to read for the task at hand. Read the topic file before changing
@@ -53,7 +53,7 @@ Reference mods are in `example/` (read-only).
 | Button capture, app keys, rank matching, Never Combine, exclude list, private dependencies | `doc/agents/identity.md` |
 | Focus sources, pending focus, min-focus timers, promotion, decay, virtual desktops | `doc/agents/recency.md` |
 | Thumbnail flyout: card → window, preview ranks, card painting | `doc/agents/previews.md` |
-| Icon painting: glow host, z-order, contours, bars, size boost | `doc/agents/visuals.md` |
+| Icon painting: glow host, z-order, contours, bars | `doc/agents/visuals.md` |
 | Threads, locks, shared state, dispatcher posts, init and unload | `doc/agents/threading-unload.md` |
 | Settings keys, code mapping, release transitions | `doc/agents/settings.md` |
 | Tests, perf build, log lines, live checklist, real-input harness | `doc/agents/testing.md` |

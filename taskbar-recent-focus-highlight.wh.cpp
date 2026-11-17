@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.37
+// @version         0.11.38
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -64,7 +64,7 @@ is a much lighter mod for exactly that.
 - **General** — how many apps, min-focus wait, when to skip the wait on
   re-focus, decay, exclude list
 - **Icons** — style, color (including system accent), per-rank intensity,
-  thickness / size / fill, optional icon scale
+  thickness / size / fill
 - **Previews** — on/off, how many windows, single-window previews, styles,
   intensities, separate min-focus and decay
 
@@ -73,11 +73,12 @@ to clear highlights.
 
 ## Notes
 
-- Works with Windows 11 Taskbar Styler: the side bar stays visible on hover,
-  and preview plate tints are restored when the highlight is cleared.
-- Icon matching uses the process path / AppUserModelID from the taskband
-  (not the localized button label). If that resolve is unavailable, the icon
-  is left unhighlighted rather than guessed from its name.
+- Works with Windows 11 Taskbar Styler: the mod draws its own elements and
+  changes no property of the native ones, so the side bar stays visible on
+  hover.
+- An icon is matched by the application ID Explorer itself groups taskbar
+  buttons by, not by its label or process name. A window that has no taskbar
+  button is never ranked.
 - Preview cards match through Explorer's own card view model (the window the
   card shows). If that is unavailable, the card is left unmarked rather than
   guessed from its title.
@@ -141,7 +142,9 @@ to clear highlights.
   $name: Exclude list
   $description: >-
     Apps that should never be highlighted (icons or previews). Entries can be
-    process names, paths or application IDs, for example:
+    process names, paths or application IDs (Explorer's AppId of a taskbar
+    button is shown in the mod log as "Button identity: ... appId=", which
+    also tells apart two buttons of one exe), for example:
 
     mspaint.exe
 

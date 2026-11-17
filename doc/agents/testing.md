@@ -10,8 +10,8 @@ was not.
 and compile them with stubs, so a rename needs the test updated in the same
 commit.
 
-- `run-appid-identity-tests.py`, `run-app-key-tests.py`: AppId identity, app
-  keys, exclude list.
+- `run-appid-identity-tests.py`: AppId identity, provisional keys, exclude
+  list, rank 4+ intensity.
 - `run-preview-identity-tests.py`: card → window resolve.
 - `run-shell-activation-tests.py`: focus notification path.
 - `run-icon-order-tests.py`: glow host placement planner and geometry.

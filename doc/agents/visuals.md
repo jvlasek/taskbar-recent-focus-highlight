@@ -1,4 +1,4 @@
-# Icon visuals: glow host, z-order, contours, bars, size boost
+# Icon visuals: glow host, z-order, contours, bars
 
 Read before changing how a ranked taskbar icon is painted or cleared. Preview
 card painting is in `previews.md`; which button gets which rank is in
@@ -28,7 +28,7 @@ card painting is in `previews.md`; which button gets which rank is in
 | RunningIndicator on style switch | Never ClearValue Visibility/Width/Height, never GoToState | VSM stores InactiveRunningIndicator `Visible` as a local value. ClearValue → template Collapsed. GoToState of the *current* state is a no-op, so the short unfocused pill stays gone. |
 | Bar auto-rotate | `leftBar` = side (perpendicular) | Removed `bottomBar` falls back to Side. Detect: `VerticalOrientation` / panel 48×32 (wider than tall ⇒ **vertical** bar) first. Do not treat leftover RunningIndicator `VA=Bottom` as a bottom taskbar. |
 | OverlayIcon | Native ordering belongs to Windows; badge is an above-host anchor for frame/side styles | No native badge repair. Cached paints recompute host position so newly realized anchors are considered |
-| Size boost | Icon `ScaleTransform` only; remember our instance and clear only that object. Previous local transform lives on the glow host Tag (not a cache `weak_ref`) and is replaced on every new takeover. Zero intensity/boost still calls `ClearIconScaleIfOurs` (do not skip on the empty-visual return). | Other mods (taskbar-dock-animation) scale the same `Icon` |
+| Size boost | Removed in 0.11.38 (it was the one write to a native element, the icon `ScaleTransform`) | Other mods (taskbar-dock-animation) scale the same `Icon` |
 | Rank intensity | Element Opacity (bars/frames) or brush alpha (native plate / titleBg) **once** | Do not also multiply fill/stroke alpha by `t`. 100/80/60 must read as 100/80/60, not ~100/64/36. |
 | Hit testing | `IsHitTestVisible=False` | Clicks pass through |
 | Coexistence | Own names; own elements only (no native brush writes since 0.11.16); side bar above Styler hover plate | Taskbar Styler (themes restyle `RunningIndicator` into a full-cell acrylic on PointerOver) |
@@ -77,10 +77,8 @@ math/placement tests are `python tests/run-icon-order-tests.py`.
 
 1. Own-named elements only (`WhRecentFocusGlow`, `WhRecentFocusContour`).
    Never style, `ClearValue`, reorder or re-ZIndex a native child, and never
-   touch a button that was never painted. The one exception is the icon
-   `ScaleTransform` (size boost): remember our instance, restore the displaced
-   transform from the glow host `Tag`, and clear only while the current
-   transform is still ours.
+   touch a button that was never painted. No exceptions since 0.11.38
+   (size boost removed).
 2. `InsertAt` for every insertion, also at the end; never `Append`.
 3. Rank intensity is applied once (element `Opacity`, or brush alpha), never
    multiplied into both.

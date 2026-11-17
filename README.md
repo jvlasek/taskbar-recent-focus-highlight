@@ -7,7 +7,7 @@ own on/off setting.
 
 **Mod file:** `taskbar-recent-focus-highlight.wh.cpp`  
 **Author:** Jakub Vlášek / Grok Build
-**Version:** v0.11.37 (branch appid-identity) — a window whose button is not known yet (just opened, or right after mod load) keeps its recency under a provisional key and is attributed to its AppId once a button lists it; v0.11.36: the window focused at mod load is no longer dropped while Explorer is still reporting its buttons; v0.11.35: switching Never Combine off merges per-window ranks back into one app rank; v0.11.34: Never Combine: an app-level rank lights only the button of the app's last window, not all its windows; v0.11.33: app identity is Explorer's own AppId (one taskbar button = one app), read synchronously; the asynchronous identity resolver, the click hook and the "Only apps on the taskbar" setting are gone; v0.11.32: log-only comparison of our app keys with Explorer's AppId; v0.11.31: performance: resolved taskbar buttons are no longer re-resolved every few seconds when nothing changed, and unchanged results no longer trigger a full repaint; v0.11.30: single-window preview mark documented as "used within the preview decay"; v0.11.29: known limitation documented: taskbar-tab cards (SOLIDWORKS documents) stay unmarked; v0.11.28: log why a preview card did not resolve to a window (SOLIDWORKS investigation); v0.11.27: single-window previews are ranked like any flyout (rank 1 while recent, preview timing); v0.11.26: recycled (off-screen) taskbar buttons are no longer bound or painted; v0.11.25: settings transition: a preview style chosen in 0.11 (`previews.style`) is kept for all ranks until settings are next saved; v0.11.24: dropped dead private-fallback diagnostics and the dwmapi link; v0.11.23: optional marking of single-window previews (app rank); v0.11.22: README credits and logging note updated; v0.11.21: shadow AppId diagnostics removed (results below; kept on branch `shadow-appid-diagnostics`); v0.11.20: cleanup phase 3: no taskbar.dll hooks at all (click confirmation, vtable lookups and the required HandleClick symbol removed); v0.11.19: cleanup phase 2: previews resolve only through the card view model (constructor map, index pass and five optional symbols removed); v0.11.18: cleanup: removed the private taskbar.dll window lookups (GetNumItems offset probe, fake ReportClicked) and three required symbols; v0.11.17: title tint drawn under the title text; Outline has its own fill opacity (default 20); v0.11.16: preview styles per rank (Rank 1 / Ranks 2+), new Outline style, plate and outline as own overlay (stays on hover); v0.11.15: uncombined (Never Combine) buttons: "Window: 0x…" AutomationId matching the button's own TaskItem, ranked per window; v0.11.12: diagnostic log of what multi-window group buttons are bound to (Never Combine investigation); v0.11.11: uncombined taskbar buttons (Never combine) rank per window; v0.11.10: button windows come from Explorer's public TaskGroup.Items (private taskbar.dll path only as logged fallback); v0.11.9: button-window comparison maps content windows to their frame and logs remaining differences in detail; v0.11.8: log-only comparison of button window lists via public WindowsUdk TaskGroup.Items; v0.11.7: owner lookup skips hidden app windows (Delphi: Lister find box); v0.11.6: owned-dialog focus now confirms its owner; v0.11.5: dialogs count for their owner window; jump lists / Start menu ignored as shell UI; v0.11.4: apps keyed by window AppUserModelID when the window has one (one taskbar button = one app; Total Commander and its Lister are separate); v0.11.3: flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
+**Version:** v0.11.38 — review cleanup: removed settings Glow roundness, Glow layers, Size boost rank 1/2/3 (icons are no longer scaled) and Outline fill opacity (now half the Tint opacity); ranks 4+ fade further instead of repeating rank 3; a closed app frees its slot at once; a grouped icon no longer blinks when one of its windows closes; v0.11.37: a window whose button is not known yet (just opened, or right after mod load) keeps its recency under a provisional key and is attributed to its AppId once a button lists it; v0.11.36: the window focused at mod load is no longer dropped while Explorer is still reporting its buttons; v0.11.35: switching Never Combine off merges per-window ranks back into one app rank; v0.11.34: Never Combine: an app-level rank lights only the button of the app's last window, not all its windows; v0.11.33: app identity is Explorer's own AppId (one taskbar button = one app), read synchronously; the asynchronous identity resolver, the click hook and the "Only apps on the taskbar" setting are gone; v0.11.32: log-only comparison of our app keys with Explorer's AppId; v0.11.31: performance: resolved taskbar buttons are no longer re-resolved every few seconds when nothing changed, and unchanged results no longer trigger a full repaint; v0.11.30: single-window preview mark documented as "used within the preview decay"; v0.11.29: known limitation documented: taskbar-tab cards (SOLIDWORKS documents) stay unmarked; v0.11.28: log why a preview card did not resolve to a window (SOLIDWORKS investigation); v0.11.27: single-window previews are ranked like any flyout (rank 1 while recent, preview timing); v0.11.26: recycled (off-screen) taskbar buttons are no longer bound or painted; v0.11.25: settings transition: a preview style chosen in 0.11 (`previews.style`) is kept for all ranks until settings are next saved; v0.11.24: dropped dead private-fallback diagnostics and the dwmapi link; v0.11.23: optional marking of single-window previews (app rank); v0.11.22: README credits and logging note updated; v0.11.21: shadow AppId diagnostics removed (results below; kept on branch `shadow-appid-diagnostics`); v0.11.20: cleanup phase 3: no taskbar.dll hooks at all (click confirmation, vtable lookups and the required HandleClick symbol removed); v0.11.19: cleanup phase 2: previews resolve only through the card view model (constructor map, index pass and five optional symbols removed); v0.11.18: cleanup: removed the private taskbar.dll window lookups (GetNumItems offset probe, fake ReportClicked) and three required symbols; v0.11.17: title tint drawn under the title text; Outline has its own fill opacity (default 20); v0.11.16: preview styles per rank (Rank 1 / Ranks 2+), new Outline style, plate and outline as own overlay (stays on hover); v0.11.15: uncombined (Never Combine) buttons: "Window: 0x…" AutomationId matching the button's own TaskItem, ranked per window; v0.11.12: diagnostic log of what multi-window group buttons are bound to (Never Combine investigation); v0.11.11: uncombined taskbar buttons (Never combine) rank per window; v0.11.10: button windows come from Explorer's public TaskGroup.Items (private taskbar.dll path only as logged fallback); v0.11.9: button-window comparison maps content windows to their frame and logs remaining differences in detail; v0.11.8: log-only comparison of button window lists via public WindowsUdk TaskGroup.Items; v0.11.7: owner lookup skips hidden app windows (Delphi: Lister find box); v0.11.6: owned-dialog focus now confirms its owner; v0.11.5: dialogs count for their owner window; jump lists / Start menu ignored as shell UI; v0.11.4: apps keyed by window AppUserModelID when the window has one (one taskbar button = one app; Total Commander and its Lister are separate); v0.11.3: flyout repaints when a card is removed; v0.11.2: preview cards resolved through Explorer's own view
 model (exact per card; see [investigation notes](doc/investigation-notes.md));
 log-only shadow AppId diagnostics (0.11.2–0.11.20). v0.11.1 base: foreground WinEvents plus validated shell activation
 notifications; no foreground recovery polling. Targeted Calculator recordings
@@ -82,10 +82,9 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 |---------|-------------|---------|
 | Icon highlight style | Side bar / Frame / Full (auto-rotates with the taskbar edge) | **Side bar** |
 | Glow color | Accent / fixed / custom hex (also used for previews) | Accent |
-| Intensity rank 1/2/3 | Strength per rank (0–100) | 100 / 70 / 45 |
-| Thickness / roundness / size / layers | Geometry of icon chrome | 3 / 28 / 92 / 2 |
+| Intensity rank 1/2/3 | Strength per rank (0–100); ranks 4+ fade further from rank 3 | 100 / 70 / 45 |
+| Thickness / size | Geometry of icon chrome | 3 / 92 |
 | Fill opacity | Full plate / side & edge bar strength | 40 |
-| Size boost rank 1/2/3 (%) | Icon scale (0 = off) | 10 / 6 / 3 |
 
 ### Thumbnail previews
 | Setting | Description | Default |
@@ -96,7 +95,6 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 | Rank 1 style | Plate / Outline / Title bg / Title bar | **Plate** |
 | Ranks 2+ style | Title bg / Title bar / Plate / Outline / None | **Title bg** |
 | Outline thickness | Border width for the Outline style (1–8 px) | 2 |
-| Outline fill opacity | Fill inside the outline (0–100), separate from Tint opacity | 20 |
 | Intensity rank 1/2/3 | Strength per window rank (0–100) | 100 / 70 / 45 |
 | Preview tint opacity | Plate + title-background wash (0–100) | 40 |
 | Preview minimum focus (seconds) | Window→preview recency (separate from apps). A thumbnail click counts like any other focus. | 1 |
@@ -226,15 +224,17 @@ limits (updated 2026-10-04).
 
 | Side | What we get | Example |
 |------|-------------|---------|
-| **Focus tracking** | `HWND` → window AppUserModelID if set (UWP hosts, Lister, …), else process path | `C:\…\WindowsTerminal.exe` / `APPID:WINDOWS.IMMERSIVECONTROLPANEL_…` |
+| **Focus tracking** | `HWND` → Explorer's AppId of the taskbar button listing that window | `APPID:MICROSOFT.WINDOWSTERMINAL_8WEKYB3D8BBWE!APP` |
 | **Taskbar UI** | XAML `TaskListButton` | Automation name `"Windows Terminal"` |
 
 Buttons are not HWNDs. The mod:
 
-1. Keeps a **recency list per virtual desktop**, keyed by `APPID:` + the
-   window AUMID when it has one (UWP hosts, Lister, …), else process path.
-2. **Matches** buttons via taskband path cache (HWND / AUMID / full path
-   only). Missing identity → no glow.
+1. Keeps a **recency list per virtual desktop**, keyed by `APPID:` +
+   Explorer's AppId (the key Explorer groups buttons by). A window whose
+   button is not known yet is kept under a provisional `WINDOW:` key and
+   attributed once a button lists it.
+2. **Matches** buttons by that AppId, read synchronously from the button's
+   WindowsUdk task group. Missing identity → no glow.
 3. **Paints** only matched **running** buttons (`IsRunning`, plus a short
    Alt-Tab grace — not pinned-only icons on another desktop).
 
@@ -259,9 +259,9 @@ cards stay unmarked; the app's icon is ranked normally. Older builds with the
 private constructor map did not resolve them either (`map=0`, 2026-11-15).
 
 ```
-  Focus (HWND / path or APPID)
+  Focus (HWND)
          │
-         ├─► App recency (path or APPID)  ──match──►  TaskListButton glow
+         ├─► App recency (Explorer AppId)  ──match──►  TaskListButton glow
          │
          └─► Window recency (HWND+PID) ──match──►  Thumbnail ranks (2+ cards)
 ```
@@ -272,7 +272,7 @@ private constructor map did not resolve them either (`map=0`, 2026-11-15).
 |-------|----------|-----|
 | App min focus | Default 8s | A new app waits this long. Default re-focus of an app already in the list is immediate |
 | Preview min focus | Default 1s (separate) | Snappier for multi-window |
-| Rank key | `APPID:…` when the window has an AUMID (0.11.4+); else full process path (UPPER) | Distinct installs; UWP apps share a host exe |
+| Rank key | `APPID:<Explorer AppId>` (0.11.33+) | One taskbar button = one app, exactly as Explorer groups them |
 | Window key | HWND + PID | Recycled handles don’t inherit recency |
 | Virtual desktops | Separate app + window maps per desktop GUID | Workspaces don’t share recency |
 | Icon default style | Side bar (left on bottom/top, under icon on left/right) | Stays off the native running pill on all four edges |
@@ -283,7 +283,7 @@ private constructor map did not resolve them either (`map=0`, 2026-11-15).
 | UI updates | XAML dispatcher only | Unsafe to touch tree off UI thread |
 | Glow chrome | Own named overlays | Avoid fighting hover/active storyboards |
 | Shell hosts | SearchHost / Start / IME skipped; File Explorer folders ranked | Don’t rank the tray/desktop. AFH is ranked by AUMID |
-| Taskbar Styler | Side bar above hover plate; plate style saves/restores brush | Themes restyle `RunningIndicator` / `BackgroundBorder` |
+| Taskbar Styler | Side bar above hover plate; only own elements are drawn, no native property is written | Themes restyle `RunningIndicator` / `BackgroundBorder` |
 
 ### High-level runtime flow
 
@@ -316,7 +316,7 @@ private constructor map did not resolve them either (`map=0`, 2026-11-15).
 | Step | Status | What |
 |------|--------|------|
 | 1 | **Done** | Focus hook, min-focus, ranking, decay, exclude, settings |
-| 2 | **Done** | App match → `TaskListButton`; styles + size boost |
+| 2 | **Done** | App match → `TaskListButton`; styles |
 | 3 | **Done** | Multi-layer / bars / bottom indicator; path cache (option C) |
 | 4 | **Done** | Thumbnail recency, per-flyout ranks + intensities, styles, HWND maps |
 | 5 | **Done** | Per-virtual-desktop recency lists + `IsRunning` grace |

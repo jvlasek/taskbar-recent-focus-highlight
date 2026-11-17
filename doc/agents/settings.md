@@ -19,14 +19,13 @@ General keys stay top-level; icon/preview keys are dotted.
 | Taskbar icons | `icons.glowStyle` | `LeftBar` (side bar) / `Frame` / `Full`; legacy `bottomBar` falls back to Side |
 | Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | color mode + hex |
 | Taskbar icons | `icons.glowIntensityRank1..3` | `glowIntensity[3]` |
-| Taskbar icons | `icons.glowThickness` / `icons.glowRoundness` / `icons.glowSize` / `icons.glowLayers` | metrics |
+| Taskbar icons | `icons.glowThickness` / `icons.glowSize` | metrics |
 | Taskbar icons | `icons.glowFillOpacity` | Full / side fill strength (Edge removed) |
-| Taskbar icons | `icons.sizeBoostRank1..3` | `sizeBoostPercent[3]` |
 | Thumbnail previews | `previews.highlightEnabled` | preview master |
 | Thumbnail previews | `previews.highlightCount` | per-flyout top N |
 | Thumbnail previews | `previews.singleWindow` | single-window flyouts ranked too (rank 1 while recent; default off) |
 | Thumbnail previews | `previews.topStyle` / `previews.restStyle` | `plate` / `outline` / `titleBg` / `titleBar` (+ `none` for ranks 2+); legacy `previews.style` mapped by `ApplyLegacyPreviewStyle` |
-| Thumbnail previews | `previews.outlineThickness` / `previews.outlineFillOpacity` | Outline style |
+| Thumbnail previews | `previews.outlineThickness` | Outline style (fill = half of `previews.fillOpacity`) |
 | Thumbnail previews | `previews.intensityRank1..3` | `previewIntensity[3]` |
 | Thumbnail previews | `previews.fillOpacity` | plate + titleBg wash (not title bar line) |
 | Thumbnail previews | `previews.minFocusSeconds` | window confirm |
@@ -60,17 +59,19 @@ There is no in-mod `enabled` or `glowDebugLog` setting. Disable the mod in
 Windhawk to turn highlighting off. Verbose bind / preview-resolve lines use
 `Wh_Log` (Windhawk Advanced tab: None / Mod logs / Detailed debug).
 
-Ranks beyond 3 reuse rank-3 intensity/size (icons and previews separately).
-Preview reuses icon color and shared thickness/roundness; plate/titleBg use
-`previewFillOpacity` scaled by that window’s preview intensity (no size boost
-on thumbnails).
+Ranks beyond 3 fade from rank 3 (`RankIntensity`: x0.75 per rank, floor
+min(rank 3, 10)), icons and previews separately. Preview reuses icon color;
+plate/titleBg use `previewFillOpacity` scaled by that window’s preview
+intensity.
 
 ## Notes
 
 - `requireTaskbarButton` was removed in 0.11.33 (a window without a taskbar
   button is never ranked). A stored value is ignored; no transition.
-- `icons.glowRoundness` keeps its stored key but is labelled
-  "Previews: Roundness (%)"; it only affects the fallback preview plate.
+- Removed in 0.11.38 (Fable review), no transition: `icons.glowRoundness`
+  (fixed 28 %), `icons.glowLayers` (fixed 2), `icons.sizeBoostRank1..3` (icon
+  scaling dropped), `previews.outlineFillOpacity` (half of Tint opacity;
+  the old default 20 = 40 / 2). Stored values are ignored.
 - The settings block and the README inside the `.wh.cpp` are the catalog
   page: self-contained, screenshots on `raw.githubusercontent.com`, no links
   to files that are not in windhawk-mods. YAML defaults are real values: a

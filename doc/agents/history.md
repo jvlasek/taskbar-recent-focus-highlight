@@ -18,6 +18,9 @@ Short timeline:
   `HandleClick`, `GetThumbnailWindow`); tag `before_cleanup` = 0.11.17.
 - 0.11.33–0.11.37: identity = Explorer's AppId, captured synchronously;
   `requireTaskbarButton` and the `OnPointerPressed` hook removed.
+- 0.11.38: Fable review cleanup; size boost, glow roundness / layers and
+  outline fill opacity settings removed; logs written after `g_stateMutex`
+  is released (`DeferredLogScope`).
 
 ## Review lessons about removed mechanisms
 
