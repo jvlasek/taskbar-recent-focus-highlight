@@ -2,6 +2,7 @@
 # vs 0.11.37-quiet: uiBusy 0.029% (was 0.125%), ApplyAllHighlights 9/min avg 0.62 ms (was 38/min avg 1.37 ms). Open: worker g_stateMutex holds of 11-19 ms (DecayTimer, AppMinFocusConfirm); one 15.4 ms EnsureButtonIdentity.
 21:34:38.800 PERF interval: span=60s uiBusy=1.2ms (0.002%) workerBusy=3.8ms
 21:34:38.809 PERF interval UpdateVisualStates: n=8 total=0.2ms avg=31.4us p50<32us p95<128us p99<128us max=86.6us
+# Later finding (run manual-20261117-215735-403007): the 11-19 ms outliers are the perf build's own interval report printed inside a timed scope/lock (fixed in the generator, e8264a6); ranking itself <= 15 us. The 0.11.37 18 ms decay hold was most likely the same.
 21:34:38.809 PERF interval FlyoutTargetItemKey: n=3 total=0.0ms avg=5.9us p50<4us p95<16us p99<16us max=13.0us
 21:34:38.809 PERF interval ApplyAllHighlights: n=3 total=0.9ms avg=317.5us p50<128us p95<1024us p99<1024us max=739.3us
 21:34:38.810 PERF interval RefreshButtonHighlight: n=8 total=0.1ms avg=21.7us p50<32us p95<64us p99<64us max=52.3us
