@@ -262,7 +262,9 @@ first, then the low-risk preview fixes, then identity.
   first hover/switch (history is kept under a provisional key and attributed
   then). Not an issue at Explorer start. Possible fix: enumerate the taskbar
   XAML tree at load, which needs a way onto the taskbar UI thread before any
-  hook fires.
+  hook fires. **0.11.42:** the first button state change now seeds every
+  button of that taskbar's repeater, so one change (not one per button) is
+  enough; the very first one is still needed.
 
 ## Optional enhancement
 

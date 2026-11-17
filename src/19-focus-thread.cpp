@@ -18,6 +18,8 @@ void HandleForegroundNotification(HWND target) {
 void HandleShellActivation(WPARAM code, HWND target) {
     if (code == HSHELL_WINDOWACTIVATED || code == HSHELL_RUDEAPPACTIVATED) {
         HandleForegroundNotification(target);
+    } else if (code == HSHELL_WINDOWDESTROYED) {
+        HandleWindowDestroyed(target);
     }
 }
 

@@ -151,6 +151,7 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     }
 
     const ULONGLONG now = GetTickCount64();
+    pending.desktopId = ConfirmDesktopId(pending.desktopId, confirmHwnd);
     {
         DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -282,7 +283,16 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         return;
     }
 
+    // A window whose button was captured since focus arrived is recorded
+    // under its AppId right away instead of a provisional key.
+    if (IsProvisionalAppKey(pending.key)) {
+        const std::wstring appId = LookupWindowAppId(pending.hwnd);
+        if (!appId.empty()) {
+            pending.key = std::wstring(L"APPID:") + appId;
+        }
+    }
     const ULONGLONG now = GetTickCount64();
+    pending.desktopId = ConfirmDesktopId(pending.desktopId, pending.hwnd);
     {
         DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -693,3 +703,53 @@ void OnDecayTimer() {
     StopDecayTimerIfIdle();
 }
 
+// HSHELL_WINDOWDESTROYED (Fable review 3.3): forget the window at once
+// instead of on the next decay tick, and repaint so a closed app frees its
+// icon slot and preview mark without waiting. App recency itself stays
+// (other windows of the app, or re-open within decay). The handle is
+// already invalid here, so it is matched by value only.
+void HandleWindowDestroyed(HWND hwnd) {
+    if (g_unloading.load() || !hwnd) {
+        return;
+    }
+    bool known = false;
+    bool previewChanged = false;
+    bool droppedPending = false;
+    {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        for (auto& [id, desk] : g_desktopMaps) {
+            (void)id;
+            if (desk.windowFocusMap.erase(hwnd)) {
+                known = true;
+                previewChanged = true;
+            }
+            if (desk.windowAppFocus.erase(hwnd)) {
+                known = true;
+            }
+            for (const auto& [key, info] : desk.appFocusMap) {
+                (void)key;
+                if (info.lastHwnd == hwnd) {
+                    known = true;
+                }
+            }
+        }
+        if (g_pendingFocus.valid && g_pendingFocus.hwnd == hwnd) {
+            g_pendingFocus = {};
+            droppedPending = true;
+            known = true;
+        }
+    }
+    ForgetWindowAppId(hwnd);
+    if (droppedPending) {
+        CancelMinFocusTimer();
+        CancelPreviewMinFocusTimer();
+    }
+    if (!known) {
+        return;
+    }
+    // Debounced: the button's own running state settles a moment later.
+    RequestApplyVisualsDebounced();
+    if (previewChanged) {
+        RequestApplyPreviewVisuals();
+    }
+}

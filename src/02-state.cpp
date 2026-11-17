@@ -54,10 +54,24 @@ struct HwndHash {
 };
 
 // Explorer's AppId per taskbar window, from the button captures (UI
-// thread); read by the focus worker to key app recency. Upper case. Pruned
-// of dead windows when it grows.
+// thread); read by the focus worker to key app recency. Upper case. Stored
+// with the window's PID so a recycled handle does not inherit an AppId
+// (Fable review 2.4). Pruned of dead windows when it grows, and on
+// HSHELL_WINDOWDESTROYED.
+struct WindowAppIdEntry {
+    std::wstring appIdUpper;
+    DWORD pid = 0;
+};
 std::mutex g_windowAppIdMutex;
-std::unordered_map<HWND, std::wstring, HwndHash> g_windowAppId;
+std::unordered_map<HWND, WindowAppIdEntry, HwndHash> g_windowAppId;
+
+DWORD WindowPid(HWND hwnd) {
+    DWORD pid = 0;
+    if (hwnd) {
+        GetWindowThreadProcessId(hwnd, &pid);
+    }
+    return pid;
+}
 
 void PublishWindowAppIds(const std::vector<HWND>& windows,
                          const std::wstring& appIdUpper) {
@@ -66,7 +80,7 @@ void PublishWindowAppIds(const std::vector<HWND>& windows,
     }
     std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
     for (HWND h : windows) {
-        g_windowAppId[h] = appIdUpper;
+        g_windowAppId[h] = WindowAppIdEntry{appIdUpper, WindowPid(h)};
     }
     if (g_windowAppId.size() > 512) {
         for (auto it = g_windowAppId.begin(); it != g_windowAppId.end();) {
@@ -78,7 +92,19 @@ void PublishWindowAppIds(const std::vector<HWND>& windows,
 std::wstring LookupWindowAppId(HWND hwnd) {
     std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
     auto it = g_windowAppId.find(hwnd);
-    return it == g_windowAppId.end() ? std::wstring{} : it->second;
+    if (it == g_windowAppId.end()) {
+        return {};
+    }
+    if (it->second.pid && WindowPid(hwnd) != it->second.pid) {
+        g_windowAppId.erase(it);  // handle recycled into another process
+        return {};
+    }
+    return it->second.appIdUpper;
+}
+
+void ForgetWindowAppId(HWND hwnd) {
+    std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
+    g_windowAppId.erase(hwnd);
 }
 
 struct GuidHash {

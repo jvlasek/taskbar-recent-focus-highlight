@@ -213,6 +213,15 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
     TaskListGroupViewModel_IsMultiWindow_Original((void**)groupViewModel.get() -
                                                   1);
     g_captureTaskGroup = false;
+    // A group view model whose group cannot be captured means the
+    // IsMultiWindow -> ITaskGroup::IsRunning path changed in Explorer: a
+    // grouped app's second window would then never be ranked. Say so once
+    // (Fable review 3.1).
+    static std::atomic<bool> loggedCaptureMiss{false};
+    if (!g_capturedTaskGroup && !loggedCaptureMiss.exchange(true)) {
+        Wh_Log(L"WARNING: task group capture returned nothing for a group "
+               L"view model (IsMultiWindow / ITaskGroup::IsRunning changed?)");
+    }
     return g_capturedTaskGroup;
 }
 
@@ -520,6 +529,51 @@ bool IsRealizedTaskbarButton(FrameworkElement const& button) {
     } catch (...) {
     }
     return true;
+}
+
+// Explorer reports a TaskListButton to the mod only when that button's
+// visual state changes, so after loading into a running Explorer most
+// buttons were unknown until hovered (TODO 2026-11-17). The first button
+// seen on a taskbar seeds every button its ItemsRepeater currently shows
+// (Fable review 3.2, option 1). Once per repeater; buttons realized later
+// report themselves. Returns true if new buttons were tracked.
+bool SeedButtonsFromRepeater_UIThread(FrameworkElement const& button) {
+    static thread_local std::unordered_set<void*> seededRepeaters;
+    try {
+        DependencyObject cur = Media::VisualTreeHelper::GetParent(button);
+        winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater repeater{nullptr};
+        for (int depth = 0; cur && depth < 8 && !repeater; ++depth) {
+            repeater =
+                cur.try_as<winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater>();
+            cur = Media::VisualTreeHelper::GetParent(cur);
+        }
+        if (!repeater ||
+            !seededRepeaters.insert(InspectableIdentity(repeater)).second) {
+            return false;
+        }
+        auto source = repeater.ItemsSourceView();
+        const int count = source ? source.Count() : 0;
+        int tracked = 0;
+        for (int i = 0; i < count; ++i) {
+            auto el = repeater.TryGetElement(i).try_as<FrameworkElement>();
+            if (!el) {
+                continue;
+            }
+            FrameworkElement btn =
+                el.Name() == L"TaskListButton"
+                    ? el
+                    : FindDescendantByName(el, L"TaskListButton");
+            if (btn) {
+                TrackButton_UIThread(btn);
+                ++tracked;
+            }
+        }
+        Wh_Log(L"Seeded %d taskbar buttons from their repeater (%d items)",
+               tracked, count);
+        return tracked > 0;
+    } catch (...) {
+        return false;
+    }
 }
 
 std::vector<FrameworkElement> CollectLiveButtonsOnThisDispatcher() {

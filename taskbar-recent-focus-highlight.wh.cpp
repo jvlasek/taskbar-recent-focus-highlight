@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.41
+// @version         0.11.42
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -539,10 +539,24 @@ struct HwndHash {
 };
 
 // Explorer's AppId per taskbar window, from the button captures (UI
-// thread); read by the focus worker to key app recency. Upper case. Pruned
-// of dead windows when it grows.
+// thread); read by the focus worker to key app recency. Upper case. Stored
+// with the window's PID so a recycled handle does not inherit an AppId
+// (Fable review 2.4). Pruned of dead windows when it grows, and on
+// HSHELL_WINDOWDESTROYED.
+struct WindowAppIdEntry {
+    std::wstring appIdUpper;
+    DWORD pid = 0;
+};
 std::mutex g_windowAppIdMutex;
-std::unordered_map<HWND, std::wstring, HwndHash> g_windowAppId;
+std::unordered_map<HWND, WindowAppIdEntry, HwndHash> g_windowAppId;
+
+DWORD WindowPid(HWND hwnd) {
+    DWORD pid = 0;
+    if (hwnd) {
+        GetWindowThreadProcessId(hwnd, &pid);
+    }
+    return pid;
+}
 
 void PublishWindowAppIds(const std::vector<HWND>& windows,
                          const std::wstring& appIdUpper) {
@@ -551,7 +565,7 @@ void PublishWindowAppIds(const std::vector<HWND>& windows,
     }
     std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
     for (HWND h : windows) {
-        g_windowAppId[h] = appIdUpper;
+        g_windowAppId[h] = WindowAppIdEntry{appIdUpper, WindowPid(h)};
     }
     if (g_windowAppId.size() > 512) {
         for (auto it = g_windowAppId.begin(); it != g_windowAppId.end();) {
@@ -563,7 +577,19 @@ void PublishWindowAppIds(const std::vector<HWND>& windows,
 std::wstring LookupWindowAppId(HWND hwnd) {
     std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
     auto it = g_windowAppId.find(hwnd);
-    return it == g_windowAppId.end() ? std::wstring{} : it->second;
+    if (it == g_windowAppId.end()) {
+        return {};
+    }
+    if (it->second.pid && WindowPid(hwnd) != it->second.pid) {
+        g_windowAppId.erase(it);  // handle recycled into another process
+        return {};
+    }
+    return it->second.appIdUpper;
+}
+
+void ForgetWindowAppId(HWND hwnd) {
+    std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
+    g_windowAppId.erase(hwnd);
 }
 
 struct GuidHash {
@@ -1020,6 +1046,28 @@ GUID ResolveCurrentDesktopId() {
     }
     std::lock_guard<std::mutex> lock(g_stateMutex);
     return g_currentDesktopId;
+}
+
+// Desktop to credit a confirmed focus to (Fable review 2.3). The pending
+// record keeps the registry's current desktop from when focus arrived, and
+// the registry lags a switch by a moment. At confirm (after min-focus) the
+// registry has caught up: if the window is on the current desktop (public
+// IVirtualDesktopManager, worker thread), credit that one. GUID_NULL keeps
+// the caller's default (current desktop).
+GUID ConfirmDesktopId(const GUID& pendingDesktop, HWND hwnd) {
+    GUID current{};
+    if (!ReadCurrentDesktopFromRegistry(&current) ||
+        InlineIsEqualGUID(current, pendingDesktop)) {
+        return pendingDesktop;
+    }
+    IVirtualDesktopManager* vdm = EnsureVdm();
+    BOOL onCurrent = FALSE;
+    if (hwnd && vdm &&
+        SUCCEEDED(vdm->IsWindowOnCurrentVirtualDesktop(hwnd, &onCurrent)) &&
+        onCurrent) {
+        return current;
+    }
+    return pendingDesktop;
 }
 
 // Returns true when the current-desktop id changed after the first successful
@@ -3821,6 +3869,15 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
     TaskListGroupViewModel_IsMultiWindow_Original((void**)groupViewModel.get() -
                                                   1);
     g_captureTaskGroup = false;
+    // A group view model whose group cannot be captured means the
+    // IsMultiWindow -> ITaskGroup::IsRunning path changed in Explorer: a
+    // grouped app's second window would then never be ranked. Say so once
+    // (Fable review 3.1).
+    static std::atomic<bool> loggedCaptureMiss{false};
+    if (!g_capturedTaskGroup && !loggedCaptureMiss.exchange(true)) {
+        Wh_Log(L"WARNING: task group capture returned nothing for a group "
+               L"view model (IsMultiWindow / ITaskGroup::IsRunning changed?)");
+    }
     return g_capturedTaskGroup;
 }
 
@@ -4128,6 +4185,51 @@ bool IsRealizedTaskbarButton(FrameworkElement const& button) {
     } catch (...) {
     }
     return true;
+}
+
+// Explorer reports a TaskListButton to the mod only when that button's
+// visual state changes, so after loading into a running Explorer most
+// buttons were unknown until hovered (TODO 2026-11-17). The first button
+// seen on a taskbar seeds every button its ItemsRepeater currently shows
+// (Fable review 3.2, option 1). Once per repeater; buttons realized later
+// report themselves. Returns true if new buttons were tracked.
+bool SeedButtonsFromRepeater_UIThread(FrameworkElement const& button) {
+    static thread_local std::unordered_set<void*> seededRepeaters;
+    try {
+        DependencyObject cur = Media::VisualTreeHelper::GetParent(button);
+        winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater repeater{nullptr};
+        for (int depth = 0; cur && depth < 8 && !repeater; ++depth) {
+            repeater =
+                cur.try_as<winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater>();
+            cur = Media::VisualTreeHelper::GetParent(cur);
+        }
+        if (!repeater ||
+            !seededRepeaters.insert(InspectableIdentity(repeater)).second) {
+            return false;
+        }
+        auto source = repeater.ItemsSourceView();
+        const int count = source ? source.Count() : 0;
+        int tracked = 0;
+        for (int i = 0; i < count; ++i) {
+            auto el = repeater.TryGetElement(i).try_as<FrameworkElement>();
+            if (!el) {
+                continue;
+            }
+            FrameworkElement btn =
+                el.Name() == L"TaskListButton"
+                    ? el
+                    : FindDescendantByName(el, L"TaskListButton");
+            if (btn) {
+                TrackButton_UIThread(btn);
+                ++tracked;
+            }
+        }
+        Wh_Log(L"Seeded %d taskbar buttons from their repeater (%d items)",
+               tracked, count);
+        return tracked > 0;
+    } catch (...) {
+        return false;
+    }
 }
 
 std::vector<FrameworkElement> CollectLiveButtonsOnThisDispatcher() {
@@ -6237,12 +6339,13 @@ void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {
     }
 
     TrackButton_UIThread(button);
+    const bool seeded = SeedButtonsFromRepeater_UIThread(button);
     RefreshButtonHighlight(button);
     // Only an unknown rank (-1) or a pending sweep needs a full pass. Our
     // overlays are own elements that Explorer's hover states do not reset,
     // so a ranked button no longer re-binds every sibling (Fable review 5).
     const int rank = GetCachedPaintState(button).rank;
-    if (rank < 0 || g_pendingOverlaySweep.load()) {
+    if (seeded || rank < 0 || g_pendingOverlaySweep.load()) {
         ScheduleRefreshAllHighlights(button);
     }
 }
@@ -6622,6 +6725,7 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     }
 
     const ULONGLONG now = GetTickCount64();
+    pending.desktopId = ConfirmDesktopId(pending.desktopId, confirmHwnd);
     {
         DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -6753,7 +6857,16 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         return;
     }
 
+    // A window whose button was captured since focus arrived is recorded
+    // under its AppId right away instead of a provisional key.
+    if (IsProvisionalAppKey(pending.key)) {
+        const std::wstring appId = LookupWindowAppId(pending.hwnd);
+        if (!appId.empty()) {
+            pending.key = std::wstring(L"APPID:") + appId;
+        }
+    }
     const ULONGLONG now = GetTickCount64();
+    pending.desktopId = ConfirmDesktopId(pending.desktopId, pending.hwnd);
     {
         DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -7164,6 +7277,56 @@ void OnDecayTimer() {
     StopDecayTimerIfIdle();
 }
 
+// HSHELL_WINDOWDESTROYED (Fable review 3.3): forget the window at once
+// instead of on the next decay tick, and repaint so a closed app frees its
+// icon slot and preview mark without waiting. App recency itself stays
+// (other windows of the app, or re-open within decay). The handle is
+// already invalid here, so it is matched by value only.
+void HandleWindowDestroyed(HWND hwnd) {
+    if (g_unloading.load() || !hwnd) {
+        return;
+    }
+    bool known = false;
+    bool previewChanged = false;
+    bool droppedPending = false;
+    {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        for (auto& [id, desk] : g_desktopMaps) {
+            (void)id;
+            if (desk.windowFocusMap.erase(hwnd)) {
+                known = true;
+                previewChanged = true;
+            }
+            if (desk.windowAppFocus.erase(hwnd)) {
+                known = true;
+            }
+            for (const auto& [key, info] : desk.appFocusMap) {
+                (void)key;
+                if (info.lastHwnd == hwnd) {
+                    known = true;
+                }
+            }
+        }
+        if (g_pendingFocus.valid && g_pendingFocus.hwnd == hwnd) {
+            g_pendingFocus = {};
+            droppedPending = true;
+            known = true;
+        }
+    }
+    ForgetWindowAppId(hwnd);
+    if (droppedPending) {
+        CancelMinFocusTimer();
+        CancelPreviewMinFocusTimer();
+    }
+    if (!known) {
+        return;
+    }
+    // Debounced: the button's own running state settles a moment later.
+    RequestApplyVisualsDebounced();
+    if (previewChanged) {
+        RequestApplyPreviewVisuals();
+    }
+}
 // ---------------------------------------------------------------------------
 // WinEvent hook thread
 // ---------------------------------------------------------------------------
@@ -7184,6 +7347,8 @@ void HandleForegroundNotification(HWND target) {
 void HandleShellActivation(WPARAM code, HWND target) {
     if (code == HSHELL_WINDOWACTIVATED || code == HSHELL_RUDEAPPACTIVATED) {
         HandleForegroundNotification(target);
+    } else if (code == HSHELL_WINDOWDESTROYED) {
+        HandleWindowDestroyed(target);
     }
 }
 

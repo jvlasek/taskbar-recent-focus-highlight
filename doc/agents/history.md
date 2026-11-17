@@ -29,6 +29,10 @@ Short timeline:
   `tools/build_mod.py`; tests read the parts.
 - 0.11.41: empty rank list: two retry sweeps after it empties, not one per
   decay tick forever.
+- 0.11.42: Fable review phase 4 (subset): repeater seeding, PID in the
+  window → AppId map, `HSHELL_WINDOWDESTROYED`, confirm-time desktop, AppId
+  re-lookup at confirm, group-capture warning. Provisional keys kept (see
+  identity.md).
 
 ## Review lessons about removed mechanisms
 

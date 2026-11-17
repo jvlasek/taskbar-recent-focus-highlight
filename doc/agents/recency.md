@@ -28,7 +28,11 @@ in `identity.md`.
 
 Promotion (apps):
 
-1. Foreground → `g_pendingFocus` (tagged with current desktop GUID)
+1. Foreground → `g_pendingFocus` (tagged with current desktop GUID). At
+   confirm, `ConfirmDesktopId` re-reads the registry; if it changed and the
+   window is on the current desktop (`IsWindowOnCurrentVirtualDesktop`), the
+   confirm goes to the current desktop (registry lag right after a switch,
+   0.11.42)
 2. After `minFocusSeconds`, or immediately per `promoteMode` → that desktop’s app map tick
 3. Sort → top `highlightCount` → that desktop’s `rankedApps`
 4. UI apply snapshots `IsRunning` into `observedRunning`, then recomputes

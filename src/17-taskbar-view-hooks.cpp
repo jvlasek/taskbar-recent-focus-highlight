@@ -156,12 +156,13 @@ void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {
     }
 
     TrackButton_UIThread(button);
+    const bool seeded = SeedButtonsFromRepeater_UIThread(button);
     RefreshButtonHighlight(button);
     // Only an unknown rank (-1) or a pending sweep needs a full pass. Our
     // overlays are own elements that Explorer's hover states do not reset,
     // so a ranked button no longer re-binds every sibling (Fable review 5).
     const int rank = GetCachedPaintState(button).rank;
-    if (rank < 0 || g_pendingOverlaySweep.load()) {
+    if (seeded || rank < 0 || g_pendingOverlaySweep.load()) {
         ScheduleRefreshAllHighlights(button);
     }
 }

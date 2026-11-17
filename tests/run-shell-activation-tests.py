@@ -31,7 +31,7 @@ fixture = r'''
 using HWND = int;
 using WPARAM = unsigned long long;
 using ULONGLONG = unsigned long long;
-constexpr WPARAM HSHELL_WINDOWACTIVATED=4, HSHELL_RUDEAPPACTIVATED=32772;
+constexpr WPARAM HSHELL_WINDOWACTIVATED=4, HSHELL_RUDEAPPACTIVATED=32772, HSHELL_WINDOWDESTROYED=2;
 constexpr int kPreviewMinFocusTimerId=3;
 std::atomic<bool> g_unloading=false;
 HWND foreground=1;
@@ -60,6 +60,8 @@ HWND GetForegroundWindow() {return foreground;}
 HWND NormalizeFocusHwnd(HWND hwnd) {return hwnd==11?1:hwnd;}
 void HandleForegroundChanged(HWND hwnd) {assert(hwnd==NormalizeFocusHwnd(foreground)); ++handled;}
 void SchedulePreviewConfirm(bool) {++scheduled;}
+int destroyed=0;
+void HandleWindowDestroyed(HWND) {++destroyed;}
 void EnsurePendingAppTimer() {++appEnsures;}
 using UINT = unsigned;
 void Wh_Log(const wchar_t*, ...) {}
@@ -89,6 +91,7 @@ int main() {
     HandleShellActivation(1,1); HandleShellActivation(32774,1); // create / flash
     HandleShellActivation(4,0); HandleShellActivation(4,2); assert(handled==0);
     HandleShellActivation(4,1); assert(handled==1); // missing WinEvent case
+    HandleShellActivation(2,7); assert(destroyed==1 && handled==1);
     HandleShellActivation(32772,1); assert(handled==2);
     HandleForegroundNotification(11); assert(handled==3); // normalized child
     foreground=0; HandleShellActivation(4,1); assert(handled==3);

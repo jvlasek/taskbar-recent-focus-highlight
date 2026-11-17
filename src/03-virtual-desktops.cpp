@@ -125,6 +125,28 @@ GUID ResolveCurrentDesktopId() {
     return g_currentDesktopId;
 }
 
+// Desktop to credit a confirmed focus to (Fable review 2.3). The pending
+// record keeps the registry's current desktop from when focus arrived, and
+// the registry lags a switch by a moment. At confirm (after min-focus) the
+// registry has caught up: if the window is on the current desktop (public
+// IVirtualDesktopManager, worker thread), credit that one. GUID_NULL keeps
+// the caller's default (current desktop).
+GUID ConfirmDesktopId(const GUID& pendingDesktop, HWND hwnd) {
+    GUID current{};
+    if (!ReadCurrentDesktopFromRegistry(&current) ||
+        InlineIsEqualGUID(current, pendingDesktop)) {
+        return pendingDesktop;
+    }
+    IVirtualDesktopManager* vdm = EnsureVdm();
+    BOOL onCurrent = FALSE;
+    if (hwnd && vdm &&
+        SUCCEEDED(vdm->IsWindowOnCurrentVirtualDesktop(hwnd, &onCurrent)) &&
+        onCurrent) {
+        return current;
+    }
+    return pendingDesktop;
+}
+
 // Returns true when the current-desktop id changed after the first successful
 // read (i.e. a real switch, not startup). Safe to call without g_stateMutex.
 bool RefreshCurrentDesktopId() {

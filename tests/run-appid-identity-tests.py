@@ -33,6 +33,7 @@ types = '\n'.join([
     block('// One synchronous snapshot of a taskbar button', '\n};\n'),
     block('struct ButtonPathCacheEntry {', '\n};\n'),
     block('struct ButtonIdentity {', '\n};\n'),
+    block('struct WindowAppIdEntry {', '\n};\n'),
 ])
 helpers = '\n'.join([
     function('std::wstring ProvisionalAppKey('),
@@ -45,7 +46,9 @@ helpers = '\n'.join([
     function('bool IsExcludedKey('),
     function('bool IdentityMatchesRank('),
     function('bool AppAppearsOnTaskbar('),
+    function('DWORD WindowPid('),
     function('void PublishWindowAppIds('),
+    function('void ForgetWindowAppId('),
     function('std::wstring LookupWindowAppId('),
     function('std::wstring EnsureButtonIdentity('),
 ])
@@ -81,6 +84,8 @@ std::wstring FileNameFromPath(const std::wstring& p) {
 struct HwndHash { size_t operator()(HWND h) const { return std::hash<void*>{}(h); } };
 bool IsWindow(HWND h) { return h != nullptr; }
 bool HwndMatchesStoredPid(HWND h, DWORD p) { return h && p == 42; }
+DWORD g_recycledPid = 0;  // nonzero: every window now belongs to this PID
+void GetWindowThreadProcessId(HWND h, DWORD* pid) { *pid = h ? (g_recycledPid ? g_recycledPid : 42) : 0; }
 enum class TaskbarEdge { Bottom };
 namespace Media { struct ScaleTransform {}; }
 namespace winrt {
@@ -99,8 +104,8 @@ ULONGLONG GetTickCount64() { return tick; }
 std::atomic<bool> g_unloading{false}, g_taskbandResolveReady{true};
 std::mutex g_buttonPathMutex, g_windowAppIdMutex;
 // HELPERS_DECL
+std::unordered_map<HWND, WindowAppIdEntry, HwndHash> g_windowAppId;
 std::unordered_map<void*, ButtonPathCacheEntry> g_buttonPathCache;
-std::unordered_map<HWND, std::wstring, HwndHash> g_windowAppId;
 ButtonResolveData g_nextCapture;
 void* InspectableIdentity(FrameworkElement b) { return b.get(); }
 template<class T> bool WeakIsSameElement(const winrt::weak_ref<T>& w, FrameworkElement b) { return w.p == b; }
@@ -116,6 +121,14 @@ int main() {
     assert(LookupWindowAppId(tcWin) == tc);
     assert(LookupWindowAppId(listerWin) == lister);
     assert(LookupWindowAppId(newWin).empty());
+    // A recycled handle (another process now) does not inherit the AppId.
+    g_recycledPid = 7;
+    assert(LookupWindowAppId(listerWin).empty());
+    g_recycledPid = 0;
+    PublishWindowAppIds({listerWin}, lister);
+    ForgetWindowAppId(listerWin);
+    assert(LookupWindowAppId(listerWin).empty());
+    PublishWindowAppIds({listerWin}, lister);
 
     // Synchronous button identity; a change invalidates the paint rank.
     auto b1 = std::make_shared<int>(1);

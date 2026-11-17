@@ -47,7 +47,22 @@ kept and moved to `APPID:<AppId>` by `AttributeProvisionalAppsLocked` (start of
 every rank recompute) once a button lists the window. Provisional keys are
 never ranked, so a window that never gets a button (tray widgets, popups)
 just decays. This replaced the `requireTaskbarButton` setting (removed in
-0.11.33) and the 0.11.33–0.11.36 retry timer.
+0.11.33) and the 0.11.33–0.11.36 retry timer. Since 0.11.42 the app confirm
+looks the AppId up again (a button captured during min-focus avoids the
+provisional key), and the first button seen on a taskbar seeds every button
+its `ItemsRepeater` shows (`SeedButtonsFromRepeater_UIThread`), so after a
+mod load one button state change captures the whole taskbar.
+
+The window → AppId map stores the PID with each window and drops an entry
+whose handle now belongs to another process (0.11.42). `HSHELL_WINDOWDESTROYED`
+removes the window from the map, the preview and per-window maps and the
+pending focus, then requests a debounced repaint (`HandleWindowDestroyed`).
+
+Provisional keys stay: removing them needs Explorer's `TaskbarAppsList`
+independent of buttons, and the only route to it without taskbar.dll is a
+`TaskbarController` event hook that fires on activation, not at load
+(checked 2026-11-17: `TaskbarModel.AppsList` has no static accessor in
+windowsudk.winmd).
 
 Examples (shadow logs 2026-11-16): TC `{6D809377-…}\TOTALCMD\TOTALCMD64.EXE`,
 Lister `LISTER{CECFE544-…}`, VS Code `MICROSOFT.VISUALSTUDIOCODE`, Terminal
