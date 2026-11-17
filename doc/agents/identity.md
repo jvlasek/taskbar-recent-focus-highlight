@@ -15,7 +15,7 @@ Highlights are applied to `Taskbar.TaskListButton` elements inside
 one queued per UI thread, worker and UI requests coalesce) detects the taskbar
 edge once and calls
 `EnsureButtonIdentity` for every live button: a **synchronous** capture
-(`CaptureButtonResolveData`, ~10 µs) of the button's public WindowsUdk
+(`CaptureButton`, ~10 µs) of the button's public WindowsUdk
 `ITaskItem` / `ITaskGroup`:
 
 | Field | Source | Role |
@@ -97,7 +97,7 @@ its AppId keeps its history but takes no slot. If capture is unavailable,
 
 - A button is **uncombined** when its AutomationId is `Window: 0x<hwnd>` and
   that window is the window of the button's own TaskItem
-  (`GetButtonAutomationWindow`, `CaptureButtonResolveData`). It then lists only
+  (`GetButtonAutomationWindow`, `CaptureButton`). It then lists only
   that one window. Combined buttons carry `Appid: <AUMID>`.
 - Uncombined windows are kept per UI thread in `g_uncombinedWindowsByThread`.
   Each full pass replaces its own thread's set from the buttons it shows, so
@@ -131,7 +131,7 @@ its AppId keeps its history but takes no slot. If capture is unavailable,
 - `AppAppearsOnTaskbar` is called under `g_stateMutex`, also from the focus
   worker. It reads the cache only and must not `weak.get()`. Rows whose button
   is dead are erased on the UI thread first
-  (`PruneDeadButtonPathCache_UIThread`).
+  (`PruneDeadButtonStates_UIThread`).
 - Every full pass snapshots `IsRunning` for every shown button **before**
   recomputing ranks, also when the rank list is empty.
 

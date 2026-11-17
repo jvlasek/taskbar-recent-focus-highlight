@@ -151,15 +151,15 @@ void PruneTrackedButtons_UIThread() {
 
 // A destroyed TaskListButton often never reports IsRunning=false.
 // AppAppearsOnTaskbar runs off this thread and must not weak.get().
-// Weak refs are resolved outside g_buttonPathMutex: resolving touches every
+// Weak refs are resolved outside g_buttonStateMutex: resolving touches every
 // cached XAML object, and after an idle period (pages trimmed) that once held
 // the lock for 14 ms while the worker may need it (perf run 2026-11-17).
-void PruneDeadButtonPathCache_UIThread() {
+void PruneDeadButtonStates_UIThread() {
     std::vector<std::pair<void*, winrt::weak_ref<FrameworkElement>>> entries;
     {
-        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-        entries.reserve(g_buttonPathCache.size());
-        for (const auto& [id, e] : g_buttonPathCache) {
+        std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+        entries.reserve(g_buttonStates.size());
+        for (const auto& [id, e] : g_buttonStates) {
             entries.emplace_back(id, e.button);
         }
     }
@@ -177,10 +177,10 @@ void PruneDeadButtonPathCache_UIThread() {
     if (dead.empty()) {
         return;
     }
-    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
+    std::lock_guard<std::mutex> lock(g_buttonStateMutex);
     for (void* id : dead) {
-        auto it = g_buttonPathCache.find(id);
-        if (it == g_buttonPathCache.end()) {
+        auto it = g_buttonStates.find(id);
+        if (it == g_buttonStates.end()) {
             continue;
         }
         bool alive = false;
@@ -189,7 +189,7 @@ void PruneDeadButtonPathCache_UIThread() {
         } catch (...) {
         }
         if (!alive) {  // re-check: the slot may have been reused meanwhile
-            g_buttonPathCache.erase(it);
+            g_buttonStates.erase(it);
         }
     }
 }

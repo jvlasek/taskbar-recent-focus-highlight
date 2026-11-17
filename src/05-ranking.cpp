@@ -14,8 +14,8 @@ bool AppAppearsOnTaskbar(const std::wstring& key) {
         return false;
     }
     const ULONGLONG now = GetTickCount64();
-    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-    for (const auto& [cacheKey, e] : g_buttonPathCache) {
+    std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+    for (const auto& [cacheKey, e] : g_buttonStates) {
         (void)cacheKey;
         const bool recentlyRunning =
             e.lastRunningTick != 0 &&

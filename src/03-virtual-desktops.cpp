@@ -175,8 +175,8 @@ DesktopRecencyState& CurrentDeskLocked() {
 }
 
 void ClearButtonRunningGrace() {
-    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-    for (auto& [id, e] : g_buttonPathCache) {
+    std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+    for (auto& [id, e] : g_buttonStates) {
         e.lastRunningTick = 0;
         e.observedRunning = false;
     }

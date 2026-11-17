@@ -158,7 +158,7 @@ struct Scope {
         ReportIfDue();
     }
 };
-// Replaces std::lock_guard on g_stateMutex / g_buttonPathMutex: wait time
+// Replaces std::lock_guard on g_stateMutex / g_buttonStateMutex: wait time
 // to acquire and hold time, split by thread (worker = a thread that ran a
 // Worker scope). Not counted as busy time (already inside the callers'
 // scopes).

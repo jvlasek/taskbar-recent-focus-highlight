@@ -48,7 +48,7 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
 | `g_desktopMaps`, `g_currentDesktopId`, `g_pendingFocus` | `g_stateMutex` | Worker writes; UI reads, and recomputes ranks, under the lock |
 | `g_windowAppId` (window → Explorer AppId) | `g_windowAppIdMutex` | UI capture writes; worker reads |
 | `g_uncombinedWindowsByThread` | `g_uncombinedMutex` | One set per UI thread, written by that thread; readers use the union |
-| `g_buttonPathCache` (identity, running state, paint cache, icon scale) | `g_buttonPathMutex` | UI. Keyed by `IUnknown*`, validated by `weak_ref`. Only `AppAppearsOnTaskbar` reads it off the UI thread |
+| `g_buttonStates` (identity, running state, paint cache, icon scale) | `g_buttonStateMutex` | UI. Keyed by `IUnknown*`, validated by `weak_ref`. Only `AppAppearsOnTaskbar` reads it off the UI thread |
 | `g_trackedButtons`, `g_trackedThumbViews` | `g_buttonsMutex`, `g_thumbViewsMutex` | UI. Weak refs; never `weak.get()` off the UI thread |
 | `g_layoutWatches` (`SizeChanged`), `g_repeaterWatches` (`ElementClearing`) | `g_layoutWatchMutex`, `g_repeaterWatchMutex` | UI. Registered only if `RememberUiDispatcher` recorded the thread; revoked on that dispatcher at unload |
 | `g_uiDispatchers` | `g_dispatchersMutex` | `[[clang::no_destroy]] optional<vector<shared_ptr<UiDispatcher>>>`: dispatcher plus a real `SYNCHRONIZE` thread handle captured on the UI thread. `reset()` in Uninit |
@@ -59,7 +59,7 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
 | `g_hookThreadHwnd`, `g_hookThreadId` | atomics | Worker writes; others `PostMessage`. `SetTimer` / `KillTimer` only on the worker |
 | `g_unloading` | atomic | Any thread |
 
-**Lock order:** `g_stateMutex` first, then any one of `g_buttonPathMutex`,
+**Lock order:** `g_stateMutex` first, then any one of `g_buttonStateMutex`,
 `g_windowAppIdMutex`, `g_uncombinedMutex`, `g_settingsMutex`. Never the
 reverse, and never publish settings while holding `g_stateMutex`.
 

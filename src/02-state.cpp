@@ -217,7 +217,7 @@ struct CapturedWindow {
 
 // One synchronous snapshot of a taskbar button (UI thread). Only value data
 // is kept; no XAML or task-item pointers outlive the capture.
-struct ButtonResolveData {
+struct ButtonCapture {
     void* buttonId = nullptr;  // opaque lookup key
     HWND hwnd = nullptr;       // first window of the button
     DWORD pid = 0;
@@ -228,7 +228,7 @@ struct ButtonResolveData {
 };
 
 
-struct ButtonPathCacheEntry {
+struct ButtonState {
     winrt::weak_ref<FrameworkElement> button;
     // Explorer's AppId for this button (ITaskGroup / ITaskItem get_AppId,
     // upper case), refreshed synchronously on every full pass.
@@ -247,8 +247,8 @@ struct ButtonPathCacheEntry {
     int lastPaintBoxW = 0;
     int lastPaintBoxH = 0;
 };
-std::mutex g_buttonPathMutex;
-std::unordered_map<void*, ButtonPathCacheEntry> g_buttonPathCache;
+std::mutex g_buttonStateMutex;
+std::unordered_map<void*, ButtonState> g_buttonStates;
 // Button identity lookups (Taskbar.View.dll symbols) are hooked and usable.
 std::atomic<bool> g_taskbandResolveReady{false};
 
@@ -323,6 +323,31 @@ bool WeakIsSameElement(winrt::weak_ref<FrameworkElement> const& weak,
     } catch (...) {
         return false;
     }
+}
+
+// Requires g_buttonStateMutex. This button's cached state, or nullptr. An
+// entry left at the same address by a destroyed element is dropped first;
+// with create, a fresh entry is made for this button.
+ButtonState* FindButtonStateLocked(FrameworkElement const& button,
+                                            bool create) {
+    void* id = button ? InspectableIdentity(button) : nullptr;
+    if (!id) {
+        return nullptr;
+    }
+    auto it = g_buttonStates.find(id);
+    if (it != g_buttonStates.end() &&
+        !WeakIsSameElement(it->second.button, button)) {
+        g_buttonStates.erase(it);
+        it = g_buttonStates.end();
+    }
+    if (it == g_buttonStates.end()) {
+        if (!create) {
+            return nullptr;
+        }
+        it = g_buttonStates.emplace(id, ButtonState{}).first;
+        it->second.button = winrt::make_weak(button);
+    }
+    return &it->second;
 }
 
 // UI-thread tracking of task list buttons (weak refs, keyed by IUnknown*).

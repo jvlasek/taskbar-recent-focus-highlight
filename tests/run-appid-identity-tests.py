@@ -31,11 +31,12 @@ types = '\n'.join([
     block('struct AppFocusInfo {', '\n};\n'),
     block('struct CapturedWindow {', '\n};\n'),
     block('// One synchronous snapshot of a taskbar button', '\n};\n'),
-    block('struct ButtonPathCacheEntry {', '\n};\n'),
+    block('struct ButtonState {', '\n};\n'),
     block('struct ButtonIdentity {', '\n};\n'),
     block('struct WindowAppIdEntry {', '\n};\n'),
 ])
 helpers = '\n'.join([
+    function('ButtonState* FindButtonStateLocked('),
     function('std::wstring ProvisionalAppKey('),
     function('bool IsProvisionalAppKey('),
     function('bool IsShellHostFileName('),
@@ -102,14 +103,14 @@ constexpr ULONGLONG kIsRunningGraceMs = 400;
 ULONGLONG tick = 1000;
 ULONGLONG GetTickCount64() { return tick; }
 std::atomic<bool> g_unloading{false}, g_taskbandResolveReady{true};
-std::mutex g_buttonPathMutex, g_windowAppIdMutex;
+std::mutex g_buttonStateMutex, g_windowAppIdMutex;
 // HELPERS_DECL
 std::unordered_map<HWND, WindowAppIdEntry, HwndHash> g_windowAppId;
-std::unordered_map<void*, ButtonPathCacheEntry> g_buttonPathCache;
-ButtonResolveData g_nextCapture;
+std::unordered_map<void*, ButtonState> g_buttonStates;
+ButtonCapture g_nextCapture;
 void* InspectableIdentity(FrameworkElement b) { return b.get(); }
 template<class T> bool WeakIsSameElement(const winrt::weak_ref<T>& w, FrameworkElement b) { return w.p == b; }
-ButtonResolveData CaptureButtonResolveData(FrameworkElement) { return g_nextCapture; }
+ButtonCapture CaptureButton(FrameworkElement) { return g_nextCapture; }
 // HELPERS
 int main() {
     HWND tcWin = (HWND)1, listerWin = (HWND)2, newWin = (HWND)3;
@@ -137,7 +138,7 @@ int main() {
     g_nextCapture.running = true; g_nextCapture.windows = {{tcWin, 42}};
     g_nextCapture.explorerAppId = tc;
     assert(EnsureButtonIdentity(b1) == tc);
-    auto& e = g_buttonPathCache[b1.get()];
+    auto& e = g_buttonStates[b1.get()];
     e.lastPaintRank = 1; e.observedRunning = true;
     assert(EnsureButtonIdentity(b1) == tc && e.lastPaintRank == 1);  // unchanged
     g_nextCapture.windows = {{tcWin, 42}, {newWin, 42}};

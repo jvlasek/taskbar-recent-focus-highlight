@@ -233,8 +233,8 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
 
 // Synchronous snapshot of the button's Explorer AppId and window list (UI
 // thread, a few COM calls).
-ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
-    ButtonResolveData data;
+ButtonCapture CaptureButton(FrameworkElement button) {
+    ButtonCapture data;
     data.buttonId = InspectableIdentity(button);
     data.running = TaskListButton_IsRunning(button);
     DWORD pid = 0;
@@ -360,17 +360,9 @@ std::wstring EnsureButtonIdentity(FrameworkElement button) {
     if (!id) {
         return {};
     }
-    ButtonResolveData data = CaptureButtonResolveData(button);
-    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-    auto it = g_buttonPathCache.find(id);
-    if (it != g_buttonPathCache.end() &&
-        !WeakIsSameElement(it->second.button, button)) {
-        g_buttonPathCache.erase(it);
-    }
-    auto& e = g_buttonPathCache[id];
-    if (!e.button) {
-        e.button = winrt::make_weak(button);
-    }
+    ButtonCapture data = CaptureButton(button);
+    std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+    auto& e = *FindButtonStateLocked(button, true);
     const bool windowsChanged =
         e.groupWindows.size() != data.windows.size() ||
         !std::equal(e.groupWindows.begin(), e.groupWindows.end(),
@@ -403,17 +395,12 @@ ButtonIdentity GetCachedButtonIdentity(FrameworkElement button) {
     if (!button) {
         return out;
     }
-    void* id = InspectableIdentity(button);
-    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-    auto it = id ? g_buttonPathCache.find(id) : g_buttonPathCache.end();
-    if (it == g_buttonPathCache.end()) {
+    std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+    const ButtonState* state = FindButtonStateLocked(button, false);
+    if (!state) {
         return out;
     }
-    if (!WeakIsSameElement(it->second.button, button)) {
-        g_buttonPathCache.erase(it);
-        return out;
-    }
-    const auto& e = it->second;
+    const auto& e = *state;
     out.appIdUpper = e.appIdUpper;
     out.uncombined = e.uncombined;
     out.sampleHwnd = e.sampleHwnd;
@@ -427,22 +414,17 @@ PaintCacheState GetCachedPaintState(FrameworkElement button) {
     if (!button) {
         return out;
     }
-    void* id = InspectableIdentity(button);
-    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-    auto it = id ? g_buttonPathCache.find(id) : g_buttonPathCache.end();
-    if (it == g_buttonPathCache.end()) {
+    std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+    const ButtonState* e = FindButtonStateLocked(button, false);
+    if (!e) {
         return out;
     }
-    if (!WeakIsSameElement(it->second.button, button)) {
-        g_buttonPathCache.erase(it);
-        return out;
-    }
-    out.rank = it->second.lastPaintRank;
-    out.settingsGen = it->second.lastPaintSettingsGen;
-    out.accent = it->second.lastPaintAccent;
-    out.edge = it->second.lastPaintEdge;
-    out.boxW = it->second.lastPaintBoxW;
-    out.boxH = it->second.lastPaintBoxH;
+    out.rank = e->lastPaintRank;
+    out.settingsGen = e->lastPaintSettingsGen;
+    out.accent = e->lastPaintAccent;
+    out.edge = e->lastPaintEdge;
+    out.boxW = e->lastPaintBoxW;
+    out.boxH = e->lastPaintBoxH;
     return out;
 }
 
@@ -452,39 +434,18 @@ void SetCachedPaintState(FrameworkElement button,
                          TaskbarEdge edge,
                          int boxW,
                          int boxH) {
-    if (!button) {
-        return;
-    }
-    void* id = InspectableIdentity(button);
-    if (!id) {
-        return;
-    }
     const uint32_t accent = g_cachedAccent.load(std::memory_order_relaxed);
-    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-    auto it = g_buttonPathCache.find(id);
-    if (it != g_buttonPathCache.end() &&
-        !WeakIsSameElement(it->second.button, button)) {
-        g_buttonPathCache.erase(it);
-        it = g_buttonPathCache.end();
-    }
-    if (it == g_buttonPathCache.end()) {
-        ButtonPathCacheEntry stub;
-        stub.button = winrt::make_weak(button);
-        stub.lastPaintRank = rank;
-        stub.lastPaintSettingsGen = gen;
-        stub.lastPaintAccent = accent;
-        stub.lastPaintEdge = edge;
-        stub.lastPaintBoxW = boxW;
-        stub.lastPaintBoxH = boxH;
-        g_buttonPathCache.emplace(id, std::move(stub));
+    std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+    ButtonState* e = FindButtonStateLocked(button, true);
+    if (!e) {
         return;
     }
-    it->second.lastPaintRank = rank;
-    it->second.lastPaintSettingsGen = gen;
-    it->second.lastPaintAccent = accent;
-    it->second.lastPaintEdge = edge;
-    it->second.lastPaintBoxW = boxW;
-    it->second.lastPaintBoxH = boxH;
+    e->lastPaintRank = rank;
+    e->lastPaintSettingsGen = gen;
+    e->lastPaintAccent = accent;
+    e->lastPaintEdge = edge;
+    e->lastPaintBoxW = boxW;
+    e->lastPaintBoxH = boxH;
 }
 
 template <typename Fn>
@@ -600,7 +561,7 @@ bool SeedButtonsFromRepeater_UIThread(FrameworkElement const& button) {
 
 std::vector<FrameworkElement> CollectLiveButtonsOnThisDispatcher() {
     PruneTrackedButtons_UIThread();
-    PruneDeadButtonPathCache_UIThread();
+    PruneDeadButtonStates_UIThread();
     std::vector<winrt::weak_ref<FrameworkElement>> buttons;
     {
         std::lock_guard<std::mutex> lock(g_buttonsMutex);
@@ -620,14 +581,12 @@ std::vector<FrameworkElement> CollectLiveButtonsOnThisDispatcher() {
 // stops counting as running for ranking. Returns its last painted rank
 // (0 = already clear) and marks it clear.
 int ParkButtonState(FrameworkElement button) {
-    void* id = InspectableIdentity(button);
-    std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-    auto it = id ? g_buttonPathCache.find(id) : g_buttonPathCache.end();
-    if (it == g_buttonPathCache.end() ||
-        !WeakIsSameElement(it->second.button, button)) {
+    std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+    ButtonState* state = FindButtonStateLocked(button, false);
+    if (!state) {
         return -1;
     }
-    auto& e = it->second;
+    auto& e = *state;
     e.observedRunning = false;
     e.lastRunningTick = 0;
     const int prior = e.lastPaintRank;

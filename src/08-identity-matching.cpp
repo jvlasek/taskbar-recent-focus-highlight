@@ -28,16 +28,12 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
     void* id = InspectableIdentity(button);
     bool grace = false;
     {
-        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-        auto it = id ? g_buttonPathCache.find(id) : g_buttonPathCache.end();
-        if (it == g_buttonPathCache.end()) {
+        std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+        ButtonState* state = FindButtonStateLocked(button, false);
+        if (!state) {
             return running;
         }
-        if (!WeakIsSameElement(it->second.button, button)) {
-            g_buttonPathCache.erase(it);
-            return running;
-        }
-        auto& e = it->second;
+        auto& e = *state;
         if (running != e.observedRunning) {
             Wh_Log(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u appId=%s",
                    id, e.observedRunning, running, e.sampleHwnd, e.samplePid,

@@ -111,8 +111,8 @@ void Wh_ModUninit() {
         g_trackedButtons.clear();
     }
     {
-        std::lock_guard<std::mutex> lock(g_buttonPathMutex);
-        g_buttonPathCache.clear();
+        std::lock_guard<std::mutex> lock(g_buttonStateMutex);
+        g_buttonStates.clear();
     }
     {
         std::lock_guard<std::mutex> lock(g_thumbViewsMutex);

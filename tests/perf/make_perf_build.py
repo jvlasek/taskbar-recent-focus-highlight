@@ -43,7 +43,7 @@ SLOTS = [
     ("RefreshButtonHighlight", "UI", "void RefreshButtonHighlight(FrameworkElement button) {"),
     ("ApplyButtonHighlight", "UI", "void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {"),
     ("EnsureButtonIdentity", "UI", "std::wstring EnsureButtonIdentity(FrameworkElement button) {"),
-    ("CaptureButtonResolve", "UI", "ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {"),
+    ("CaptureButtonResolve", "UI", "ButtonCapture CaptureButton(FrameworkElement button) {"),
     ("RefreshFlyout", "UI", "void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {"),
     ("ApplyThumbHighlight", "UI", "void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {"),
     # Focus worker thread (never blocks the taskbar).
@@ -75,7 +75,7 @@ LOCK_SLOTS = [
     ("WorkerButtonLockHold", "Worker"),
 ]
 STATE_LOCK = "std::lock_guard<std::mutex> lock(g_stateMutex);"
-BUTTON_LOCK = "std::lock_guard<std::mutex> lock(g_buttonPathMutex);"
+BUTTON_LOCK = "std::lock_guard<std::mutex> lock(g_buttonStateMutex);"
 
 
 def build(text, quiet=False):
@@ -88,7 +88,7 @@ def build(text, quiet=False):
         raise SystemExit("no g_stateMutex lock_guard found")
     body = body.replace(STATE_LOCK, "perf::TimedLock lock(g_stateMutex);")
     body = body.replace(BUTTON_LOCK,
-                        "perf::TimedLock lock(g_buttonPathMutex, true);")
+                        "perf::TimedLock lock(g_buttonStateMutex, true);")
     lines = body.split("\n")
 
     def find_unique(sub):
