@@ -7,7 +7,7 @@
 // time in outermost instrumented scopes per thread kind.
 // ===========================================================================
 namespace perf {
-enum class Kind { UI, Worker };
+enum class Kind { UI, Worker, Inner };  // Inner: either thread, nested
 struct SlotDef {
     const wchar_t* name;
     Kind kind;
@@ -115,7 +115,10 @@ inline void Record(int slot, long long start, long long end, bool outer) {
     s.interval[slot].Add(ns);
     s.total[slot].Add(ns);
     if (outer) {
-        const int k = kSlots[slot].kind == Kind::UI ? 0 : 1;
+        const Kind kind = kSlots[slot].kind;
+        const int k = kind == Kind::UI ? 0
+                      : kind == Kind::Worker ? 1
+                                             : (t_isWorker ? 1 : 0);
         s.busyNs[k] += ns;
         s.busyTotalNs[k] += ns;
     }
@@ -139,25 +142,30 @@ struct Scope {
         Record(slot, start, end, outer);
     }
 };
-// Replaces std::lock_guard on g_stateMutex: wait time to acquire and hold
-// time, split by thread (worker = a thread that ran a Worker scope).
-// Not counted as busy time (already inside the callers' scopes).
+// Replaces std::lock_guard on g_stateMutex / g_buttonPathMutex: wait time
+// to acquire and hold time, split by thread (worker = a thread that ran a
+// Worker scope). Not counted as busy time (already inside the callers'
+// scopes).
 struct TimedLock {
     std::mutex& m;
     long long acquired;
     bool worker;
-    explicit TimedLock(std::mutex& mu) : m(mu), worker(t_isWorker) {
+    bool buttonPath;
+    explicit TimedLock(std::mutex& mu, bool isButtonPath = false)
+        : m(mu), worker(t_isWorker), buttonPath(isButtonPath) {
         const long long start = Now();
         m.lock();
         acquired = Now();
-        Record(worker ? WorkerStateLockWait : UIStateLockWait, start, acquired,
-               false);
+        Record(buttonPath ? (worker ? WorkerButtonLockWait : UIButtonLockWait)
+                          : (worker ? WorkerStateLockWait : UIStateLockWait),
+               start, acquired, false);
     }
     ~TimedLock() {
         const long long end = Now();
         m.unlock();
-        Record(worker ? WorkerStateLockHold : UIStateLockHold, acquired, end,
-               false);
+        Record(buttonPath ? (worker ? WorkerButtonLockHold : UIButtonLockHold)
+                          : (worker ? WorkerStateLockHold : UIStateLockHold),
+               acquired, end, false);
     }
     TimedLock(const TimedLock&) = delete;
     TimedLock& operator=(const TimedLock&) = delete;

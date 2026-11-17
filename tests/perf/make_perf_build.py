@@ -53,6 +53,13 @@ SLOTS = [
     ("AppMinFocusConfirm", "Worker", "void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {"),
     ("PreviewMinFocusConfirm", "Worker", "void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {"),
     ("DecayTimer", "Worker", "void OnDecayTimer() {"),
+    # Either thread, nested in the above (ranking runs under g_stateMutex on
+    # the worker and in the UI full pass). Added 2026-11-17 for 11-19 ms
+    # worker lock holds in DecayTimer / AppMinFocusConfirm.
+    ("RecomputeRanks", "Inner", "void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {"),
+    ("AttributeProvisional", "Inner", "void AttributeProvisionalAppsLocked(DesktopRecencyState& desk) {"),
+    ("AppAppearsOnTaskbar", "Inner", "bool AppAppearsOnTaskbar(const std::wstring& key) {"),
+    ("PruneWindowFocusMap", "Inner", "void PruneWindowFocusMapLocked(DesktopRecencyState& desk) {"),
 ]
 
 
@@ -62,8 +69,13 @@ LOCK_SLOTS = [
     ("UIStateLockHold", "UI"),
     ("WorkerStateLockWait", "Worker"),
     ("WorkerStateLockHold", "Worker"),
+    ("UIButtonLockWait", "UI"),
+    ("UIButtonLockHold", "UI"),
+    ("WorkerButtonLockWait", "Worker"),
+    ("WorkerButtonLockHold", "Worker"),
 ]
 STATE_LOCK = "std::lock_guard<std::mutex> lock(g_stateMutex);"
+BUTTON_LOCK = "std::lock_guard<std::mutex> lock(g_buttonPathMutex);"
 
 
 def build(text, quiet=False):
@@ -75,6 +87,8 @@ def build(text, quiet=False):
     if STATE_LOCK not in body:
         raise SystemExit("no g_stateMutex lock_guard found")
     body = body.replace(STATE_LOCK, "perf::TimedLock lock(g_stateMutex);")
+    body = body.replace(BUTTON_LOCK,
+                        "perf::TimedLock lock(g_buttonPathMutex, true);")
     lines = body.split("\n")
 
     def find_unique(sub):
@@ -118,7 +132,7 @@ def build(text, quiet=False):
     slots = "\n".join(
         [f"enum Slot {{ {', '.join(s for s, _ in all_slots)}, kSlotCount }};",
          "constexpr SlotDef kSlots[kSlotCount] = {"]
-        + [f'    {{L"{s}", Kind::{"Worker" if k == "Worker" else "UI"}}},'
+        + [f'    {{L"{s}", Kind::{k if k in ("Worker", "Inner") else "UI"}}},'
            for s, k in all_slots] + ["};"])
     header = (HERE / "perf_header.inc").read_text(encoding="utf-8")
     header = header.replace("// PERF_SLOTS", slots)
