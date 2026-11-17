@@ -11,7 +11,9 @@ buttons by (one taskbar button = one app). Design note:
 ## World B — taskbar XAML buttons (captured first)
 
 Highlights are applied to `Taskbar.TaskListButton` elements inside
-`Taskbar.View.dll`. Each full pass (`ApplyAllHighlights_UIThread`) calls
+`Taskbar.View.dll`. Each full pass (`ApplyAllHighlights_UIThread`; at most
+one queued per UI thread, worker and UI requests coalesce) detects the taskbar
+edge once and calls
 `EnsureButtonIdentity` for every live button: a **synchronous** capture
 (`CaptureButtonResolveData`, ~10 µs) of the button's public WindowsUdk
 `ITaskItem` / `ITaskGroup`:

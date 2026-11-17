@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.38
+// @version         0.11.39
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -409,6 +409,7 @@ struct Settings {
     PromoteMode promoteMode = PromoteMode::ImmediateTracked;
     GlowColorMode glowColor = GlowColorMode::Accent;
     std::wstring customGlowColor = L"#00C853";
+    uint32_t customGlowPacked = 0xFF00C853;  // parsed once in LoadSettings
     int glowIntensity[3] = {100, 70, 45};
     GlowStyle glowStyle = GlowStyle::LeftBar;
     int glowThickness = 3;      // px
@@ -2112,7 +2113,10 @@ bool ParseHexColor(const std::wstring& text, winrt::Windows::UI::Color& out) {
 
 winrt::Windows::UI::Color QuerySystemAccentColor() {
     try {
-        winrt::Windows::UI::ViewManagement::UISettings uiSettings;
+        // Hook thread only (as Subscribe/Unsubscribe): reuse its UISettings.
+        winrt::Windows::UI::ViewManagement::UISettings uiSettings =
+            g_uiSettings ? *g_uiSettings
+                         : winrt::Windows::UI::ViewManagement::UISettings{};
         auto c = uiSettings.GetColorValue(
             winrt::Windows::UI::ViewManagement::UIColorType::Accent);
         c.A = 255;
@@ -2179,9 +2183,7 @@ winrt::Windows::UI::Color ResolveGlowBaseColor(const Settings& settings) {
             c = {255, 255, 255, 255};
             break;
         case GlowColorMode::Custom:
-            if (!ParseHexColor(settings.customGlowColor, c)) {
-                c = {255, 0, 200, 83};
-            }
+            c = UnpackColor(settings.customGlowPacked);
             break;
     }
     return c;
@@ -3277,11 +3279,17 @@ TaskbarEdge CachedTaskbarEdge(FrameworkElement iconPanel) {
     return edge;
 }
 
-void RefreshCachedTaskbarEdge(FrameworkElement iconPanel) {
+// Stores the edge for this panel's watch. The edge belongs to the taskbar,
+// not the button, so a full pass detects it once and passes it in.
+void RefreshCachedTaskbarEdge(FrameworkElement iconPanel,
+                              std::optional<TaskbarEdge>& passEdge) {
     if (!iconPanel) {
         return;
     }
-    const TaskbarEdge edge = DetectTaskbarEdge(iconPanel);
+    if (!passEdge) {
+        passEdge = DetectTaskbarEdge(iconPanel);
+    }
+    const TaskbarEdge edge = *passEdge;
     void* id = InspectableIdentity(iconPanel);
     if (!id) {
         return;
@@ -4174,9 +4182,12 @@ void ApplyAllHighlights_UIThread() {
     std::vector<std::wstring> buttonAppIds(live.size());
     std::vector<ButtonIdentity> idents(live.size());
     std::vector<char> running(live.size(), 0);
+    // Bottom <-> top moves keep the panel size (no SizeChanged), so the pass
+    // refreshes the edge; once per pass, not per button (Fable review 5).
+    std::optional<TaskbarEdge> passEdge;
     for (size_t bi = 0; bi < live.size(); ++bi) {
         if (auto ip = GetIconPanel(live[bi])) {
-            RefreshCachedTaskbarEdge(ip);
+            RefreshCachedTaskbarEdge(ip, passEdge);
         }
         buttonAppIds[bi] = EnsureButtonIdentity(live[bi]);
         running[bi] = ButtonCountsAsRunning(live[bi]) ? 1 : 0;
@@ -5972,11 +5983,72 @@ bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler) {
 }
 
 
+// One queued full pass per UI thread: worker requests (RequestApplyVisuals)
+// and UI requests (ScheduleRefreshAllHighlights) coalesce (Fable review 5).
+// The flag is cleared when the pass starts, so a request made during a pass
+// queues the next one.
+std::mutex g_fullPassQueuedMutex;
+std::unordered_set<DWORD> g_fullPassQueuedThreads;
+
+void ClearFullPassQueued(DWORD threadId) {
+    std::lock_guard<std::mutex> lock(g_fullPassQueuedMutex);
+    g_fullPassQueuedThreads.erase(threadId);
+}
+
+// True if a pass is queued (now or already) on that thread.
+bool QueueFullPass(winrt::Windows::UI::Core::CoreDispatcher const& dispatcher,
+                   DWORD threadId,
+                   winrt::Windows::UI::Core::CoreDispatcherPriority prio) {
+    {
+        std::lock_guard<std::mutex> lock(g_fullPassQueuedMutex);
+        if (!g_fullPassQueuedThreads.insert(threadId).second) {
+            return true;
+        }
+    }
+    bool ok = false;
+    try {
+        ok = DispatcherTryRun(dispatcher, prio, []() {
+            ClearFullPassQueued(GetCurrentThreadId());
+            try {
+                if (!g_unloading.load()) {
+                    ApplyAllHighlights_UIThread();
+                }
+            } catch (...) {
+            }
+        });
+    } catch (...) {
+    }
+    if (!ok) {
+        ClearFullPassQueued(threadId);
+    }
+    return ok;
+}
+
 void RequestApplyVisuals() {
     if (g_unloading.load()) {
         return;
     }
-    if (!RunOnUiThread([]() { ApplyAllHighlights_UIThread(); })) {
+    bool any = false;
+    for (const auto& ui : CollectUiDispatchers()) {
+        if (UiThreadExited(*ui)) {
+            continue;
+        }
+        try {
+            if (ui->dispatcher.HasThreadAccess()) {
+                ApplyAllHighlights_UIThread();
+                any = true;
+            } else if (QueueFullPass(
+                           ui->dispatcher, ui->threadId,
+                           winrt::Windows::UI::Core::CoreDispatcherPriority::
+                               Normal)) {
+                any = true;
+            }
+        } catch (...) {
+            HRESULT hr = winrt::to_hresult();
+            Wh_Log(L"RequestApplyVisuals error %08X", hr);
+        }
+    }
+    if (!any) {
         // Buttons not tracked yet — will apply on next UpdateVisualStates.
         DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -6105,8 +6177,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
     }
 }
 
-// Full identity rebind. Hover UVS paints the cached rank immediately; this
-// pass restores siblings whose visuals Windows reset without another UVS.
+// Full identity rebind on the anchor's UI thread (Low priority, debounced).
 // The anchor only selects the dispatcher. The queued bind still runs if
 // that button is destroyed before Low priority.
 void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor) {
@@ -6122,18 +6193,9 @@ void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor) {
     try {
         auto dispatcher = dispatcherAnchor.Dispatcher();
         if (!dispatcher ||
-            !DispatcherTryRun(
-                dispatcher,
-                winrt::Windows::UI::Core::CoreDispatcherPriority::Low,
-                []() {
-                    try {
-                        if (g_unloading.load()) {
-                            return;
-                        }
-                        ApplyAllHighlights_UIThread();
-                    } catch (...) {
-                    }
-                })) {
+            !QueueFullPass(
+                dispatcher, GetCurrentThreadId(),
+                winrt::Windows::UI::Core::CoreDispatcherPriority::Low)) {
             PostToHookThread(WM_APP_REQUEST_APPLY_DEBOUNCED);
             return;
         }
@@ -6165,9 +6227,11 @@ void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {
 
     TrackButton_UIThread(button);
     RefreshButtonHighlight(button);
+    // Only an unknown rank (-1) or a pending sweep needs a full pass. Our
+    // overlays are own elements that Explorer's hover states do not reset,
+    // so a ranked button no longer re-binds every sibling (Fable review 5).
     const int rank = GetCachedPaintState(button).rank;
-    // rank -1 = identity not resolved yet; do not treat as "unranked".
-    if (rank != 0 || g_pendingOverlaySweep.load()) {
+    if (rank < 0 || g_pendingOverlaySweep.load()) {
         ScheduleRefreshAllHighlights(button);
     }
 }
@@ -6341,7 +6405,18 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
     // now and paint at Low after layout so new HWNDs are not bound to the
     // previous app's views.
     try {
-        ClearAllThumbnailHighlights_UIThread();
+        // Explorer sets the same key repeatedly while one button's flyout
+        // stays open; clearing every tracked card each time was the cost
+        // (Fable review 5). Only a different button needs the clear.
+        static thread_local std::wstring lastKey;
+        std::wstring key;
+        if (param1) {
+            key = reinterpret_cast<const winrt::hstring*>(param1)->c_str();
+        }
+        if (key.empty() || key != lastKey) {
+            ClearAllThumbnailHighlights_UIThread();
+        }
+        lastKey = std::move(key);
         FrameworkElement el = PickLiveFlyoutThumbOnThisDispatcher();
         if (el) {
             SchedulePreviewFlyoutRefresh(el);
@@ -7012,23 +7087,41 @@ void OnDecayTimer() {
             keysBefore.push_back(app.key);
         }
         windowsBefore = CurrentDeskLocked().windowFocusMap.size();
-        for (auto it = g_desktopMaps.begin(); it != g_desktopMaps.end();) {
-            RecomputeRanksForDesktopLocked(it->second);
-            PruneWindowFocusMapLocked(it->second);
-            if (it->second.appFocusMap.empty() &&
-                it->second.windowFocusMap.empty() &&
-                !InlineIsEqualGUID(it->first, g_currentDesktopId)) {
-                it = g_desktopMaps.erase(it);
-            } else {
-                ++it;
-            }
-        }
+        // Only the current desktop affects paint; the others are pruned
+        // below in separate short holds (Fable review 2.5).
+        RecomputeRanksForDesktopLocked(CurrentDeskLocked());
+        PruneWindowFocusMapLocked(CurrentDeskLocked());
         const auto& afterApps = CurrentDeskLocked().rankedApps;
         keysAfter.reserve(afterApps.size());
         for (const auto& app : afterApps) {
             keysAfter.push_back(app.key);
         }
         windowsAfter = CurrentDeskLocked().windowFocusMap.size();
+    }
+    std::vector<GUID> otherDesktops;
+    {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        for (const auto& [id, desk] : g_desktopMaps) {
+            (void)desk;
+            if (!InlineIsEqualGUID(id, g_currentDesktopId)) {
+                otherDesktops.push_back(id);
+            }
+        }
+    }
+    for (const GUID& id : otherDesktops) {
+        DeferredLogScope logScope;  // logs after unlock
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        auto it = g_desktopMaps.find(id);
+        if (it == g_desktopMaps.end() ||
+            InlineIsEqualGUID(id, g_currentDesktopId)) {
+            continue;
+        }
+        RecomputeRanksForDesktopLocked(it->second);
+        PruneWindowFocusMapLocked(it->second);
+        if (it->second.appFocusMap.empty() &&
+            it->second.windowFocusMap.empty()) {
+            g_desktopMaps.erase(it);
+        }
     }
     // Same length can still be a different ladder ([A,B,C] -> [A,C,D]).
     // An empty list keeps requesting a sweep so a missed clear can retry.
@@ -7525,6 +7618,13 @@ void LoadSettings(bool userSavedSettings) {
         WindhawkUtils::StringSetting::make(L"icons.customGlowColor");
     s.customGlowColor =
         *customColor.get() ? customColor.get() : L"#00C853";
+    {
+        winrt::Windows::UI::Color parsed{255, 0, 200, 83};
+        if (!ParseHexColor(s.customGlowColor, parsed)) {
+            parsed = {255, 0, 200, 83};
+        }
+        s.customGlowPacked = PackColor(parsed);
+    }
 
     s.glowIntensity[0] = Wh_GetIntSetting(L"icons.glowIntensityRank1");
     s.glowIntensity[1] = Wh_GetIntSetting(L"icons.glowIntensityRank2");

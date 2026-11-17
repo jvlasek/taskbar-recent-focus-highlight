@@ -21,6 +21,10 @@ Short timeline:
 - 0.11.38: Fable review cleanup; size boost, glow roundness / layers and
   outline fill opacity settings removed; logs written after `g_stateMutex`
   is released (`DeferredLogScope`).
+- 0.11.39: Fable review perf items: no hover-triggered full pass for known
+  ranks, edge once per pass, `QueueFullPass` coalescing, flyout retarget
+  clears only on a new key, decay prunes other desktops in separate holds,
+  custom colour parsed once, accent read from the subscribed `UISettings`.
 
 ## Review lessons about removed mechanisms
 

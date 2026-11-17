@@ -39,7 +39,9 @@ next round’s required finding.
    not a second-thread partition.
 3. **Do not tax the shell UI thread.** `UpdateVisualStates` is hover-hot.
    No `ReportClicked`, `EnumWindows`, property-store, `UISettings`, or
-   registry on that path. Coalesce flyout work to one Low pass. Cache
+   registry on that path. Coalesce flyout work to one Low pass, and full
+   passes to one queued pass per UI thread (`QueueFullPass`, 0.11.39); a
+   hovered button with a known rank schedules no full pass. Cache
    accent/desktop id. Debounce with a deadline (skip re-arm), not a reset
    that can postpone forever. Cite: `taskbar-volume-control-per-app` only
    probes identity from real input.

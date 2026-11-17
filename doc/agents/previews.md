@@ -44,7 +44,9 @@ refresh; card removal (window closed from the flyout) fires neither, so the
 flyout `ItemsRepeater.ElementClearing` is subscribed once per repeater (UI
 thread) and revoked per dispatcher in `Wh_ModUninit`
 (`RevokeRepeaterWatchesOnThisDispatcher`); `HoverFlyoutModel::TargetItemKey`
-clears and repaints on retarget.
+repaints on retarget and clears tracked cards only when the key differs from
+the previous one on that thread (0.11.39; the same key repeats while one
+flyout stays open).
 
 Removed in 0.11.19 (history): the `TaskItemThumbnail` constructor hooks and
 their DataContext ↔ model map (never matched on 26100-era builds — the card
