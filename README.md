@@ -14,7 +14,7 @@ notifications; no foreground recovery polling. Targeted Calculator recordings
 cover missing-event activation and a positive preview delay. See
 [results and coverage limits](doc/focus-shell-calculator-results.md).
 
-For deep design notes aimed at contributors / coding agents, see **[AGENTS.md](./AGENTS.md)**.
+For design notes aimed at contributors / coding agents, start at **[AGENTS.md](./AGENTS.md)** (an index; the topic files are in [`doc/agents/`](./doc/agents)).
 
 ## Problem
 
@@ -340,7 +340,8 @@ between a small set of active programs — and often multiple windows per app.
 ```
 whawk-lru/
   README.md                              ← product + architecture (this file)
-  AGENTS.md                              ← design decisions for contributors/agents
+  AGENTS.md                              ← index for contributors/agents
+  doc/agents/                            ← design decisions per topic
   taskbar-recent-focus-highlight.wh.cpp  ← the Windhawk mod (single file)
   example/                               ← reference mods (read-only)
 ```
