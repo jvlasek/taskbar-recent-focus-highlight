@@ -93,6 +93,20 @@ int main() {
         assert(s.total[WorkerStateLockHold].totalNs == 2000);
         assert(s.total[UIStateLockWait].count == 0);
     }
+    {  // The report is printed only outside every scope and lock, so its
+       // own printing time never inflates a measured scope or lock hold.
+        std::mutex m;
+        g_fake += 61000000000LL;
+        const size_t before = g_log.size();
+        {
+            PERF_SCOPE(DecayTimer);
+            perf::TimedLock lock(m);
+            { PERF_SCOPE(RecomputeRanks); g_fake += 1000; }
+            assert(g_log.size() == before);  // inside scope + lock: deferred
+        }
+        assert(g_log.find(L"PERF interval DecayTimer: n=1", before) != std::wstring::npos);
+        assert(g_log.find(L"PERF interval RecomputeRanks: n=1", before) != std::wstring::npos);
+    }
     fputws(g_log.c_str(), stdout);
 }
 '''.replace("// HEADER", header)
