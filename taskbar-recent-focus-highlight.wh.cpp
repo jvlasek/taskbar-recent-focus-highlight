@@ -611,7 +611,8 @@ struct DesktopRecencyState {
 std::mutex g_stateMutex;
 
 // Log lines produced while g_stateMutex is held are queued per thread and
-// written once the outermost DeferredLogScope ends. Declare the scope before
+// written once the outermost DeferredLogScope ends, prefixed with the
+// function that produced them (Wh_Log's own prefix shows the destructor). Declare the scope before
 // the lock so it is destroyed after it: Wh_Log is OutputDebugString plus
 // file I/O, and the UI thread waits on this lock. Without a scope, logs
 // directly.
@@ -640,8 +641,15 @@ struct DeferredLogScope {
             Wh_Log(__VA_ARGS__);                                       \
         } else {                                                       \
             wchar_t deferredLogBuf_[1024];                             \
-            _snwprintf_s(deferredLogBuf_, _countof(deferredLogBuf_),   \
-                         _TRUNCATE, __VA_ARGS__);                      \
+            const int deferredLogPre_ = _snwprintf_s(                  \
+                deferredLogBuf_, _countof(deferredLogBuf_), _TRUNCATE, \
+                L"(%S) ", __func__);                                   \
+            if (deferredLogPre_ > 0) {                                 \
+                _snwprintf_s(deferredLogBuf_ + deferredLogPre_,        \
+                             _countof(deferredLogBuf_) -               \
+                                 deferredLogPre_,                      \
+                             _TRUNCATE, __VA_ARGS__);                  \
+            }                                                          \
             t_deferredLogs.emplace_back(deferredLogBuf_);              \
         }                                                              \
     } while (0)
