@@ -1,5 +1,10 @@
 """Check the perf-build generator against the current mod and run its timing
 header (with Windows stubs) through a small scenario."""
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from mod_source import source_raw_text  # src/*.cpp joined
 from pathlib import Path
 import importlib.util
 import subprocess
@@ -10,7 +15,7 @@ spec = importlib.util.spec_from_file_location("mpb", root / "tests/perf/make_per
 mpb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mpb)
 
-source = (root / "taskbar-recent-focus-highlight.wh.cpp").read_bytes().decode("utf-8")
+source = source_raw_text()
 out = mpb.build(source).replace("\r\n", "\n")
 for slot, _, _ in mpb.SLOTS:
     assert out.count(f"PERF_SCOPE({slot});") == 1, slot

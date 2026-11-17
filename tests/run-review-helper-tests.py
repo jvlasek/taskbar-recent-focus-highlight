@@ -1,9 +1,14 @@
 """Exercise the production hook-attempt guard and nested path-cache scope."""
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from mod_source import source_text  # src/*.cpp joined
 from pathlib import Path
 import subprocess
 import tempfile
 root = Path(__file__).resolve().parent.parent
-source = (root / 'taskbar-recent-focus-highlight.wh.cpp').read_text(encoding='utf-8')
+source = source_text()
 cache = source[source.index('thread_local DWORD g_imagePathCachePid'):source.index('std::wstring GetProcessImagePath(')]
 hook = source[source.index('void HandleLoadedModuleIfTaskbarView('):source.index('using LoadLibraryExW_t')]
 cpp = r'''

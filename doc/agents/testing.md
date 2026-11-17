@@ -6,7 +6,8 @@ was not.
 
 ## Automated checks
 
-`tests/run-*.py` cut production functions out of the `.wh.cpp` by signature
+`tests/run-*.py` cut production functions out of the mod source (`src/*.cpp`
+joined, via `tests/mod_source.py`) by signature
 and compile them with stubs, so a rename needs the test updated in the same
 commit.
 

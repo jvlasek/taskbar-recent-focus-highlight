@@ -4,10 +4,15 @@ Until 0.11.19 this also exercised GetWindowForThumbnailTaskItem (native
 click / ctor HWND getter); that code was removed in 0.11.20 along with every
 taskbar.dll hook.
 """
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from mod_source import source_text  # src/*.cpp joined
 from pathlib import Path
 import subprocess
 import tempfile
-source = (Path(__file__).resolve().parent.parent / 'taskbar-recent-focus-highlight.wh.cpp').read_text(encoding='utf-8')
+source = source_text()
 def function(signature):
     start = 0
     while True:

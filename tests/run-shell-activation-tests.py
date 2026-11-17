@@ -1,9 +1,14 @@
 """Exercise production notification filtering and duplicate-preview deadlines."""
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from mod_source import source_text  # src/*.cpp joined
 from pathlib import Path
 import subprocess
 import tempfile
 
-source = (Path(__file__).resolve().parent.parent / 'taskbar-recent-focus-highlight.wh.cpp').read_text(encoding='utf-8')
+source = source_text()
 
 def function(signature):
     start = source.index(signature)

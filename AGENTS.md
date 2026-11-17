@@ -1,6 +1,6 @@
 # Agent / contributor guide
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.39).
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.40).
 
 This file is the index. It holds the rules that always apply and says which
 topic file to read for the task at hand. Read the topic file before changing
@@ -21,11 +21,20 @@ Reference mods are in `example/` (read-only).
 
 ## Rules that always apply
 
+- **Edit `src/`, not the `.wh.cpp`.** The mod is developed as parts
+  `src/NN-*.cpp`, joined in name order by `python tools/build_mod.py` into
+  `taskbar-recent-focus-highlight.wh.cpp` (byte for byte, no separators).
+  Commit both; `tests/run-build-tests.py` fails when they differ. Tests read
+  the joined parts (`tests/mod_source.py`). The Windhawk metadata, README and
+  settings YAML are in `src/00-metadata.cpp`. One translation unit: a part
+  may use anything declared in an earlier part.
+
 - **Version checkpoint.** After each version increase, commit the corresponding source, documentation,
   and checks to local Git before handing the version to the user. Run the relevant
   checks first and record any unverified behavior. Do not push unless requested.
   Do not include unrelated user changes in the version commit.
-- **Version sync.** With a version bump keep in sync: the `@version` line,
+- **Version sync.** With a version bump keep in sync: the `@version` line
+  (`src/00-metadata.cpp`, then rebuild),
   the version in this file's first line, the README version line,
   `doc/investigation-notes.md` and `doc/runtime-flow.svg` (regenerate with
   `python doc/generate-runtime-flow.py`; edit that source, not only the SVG).

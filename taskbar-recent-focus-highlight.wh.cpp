@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.39
+// @version         0.11.40
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -14,6 +14,7 @@
 // Source code is published under The GNU General Public License v3.0.
 // Development repository, tests and investigation notes:
 // https://github.com/jvlasek/taskbar-recent-focus-highlight
+// (developed as parts in src/, joined into this file by tools/build_mod.py)
 
 // ==WindhawkModReadme==
 /*

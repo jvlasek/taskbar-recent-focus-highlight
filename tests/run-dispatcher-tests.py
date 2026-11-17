@@ -2,12 +2,17 @@
 
 Requires Windows and g++ on PATH. Does not inject into Explorer or touch Windhawk.
 """
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from mod_source import source_text  # src/*.cpp joined
 from pathlib import Path
 import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parent.parent
-source = (root / "taskbar-recent-focus-highlight.wh.cpp").read_text(encoding="utf-8")
+source = source_text()
 start = source.index("// Unload handshake: Completed signals")
 end = source.index("std::vector<std::shared_ptr<UiDispatcher>> CollectUiDispatchers", start)
 helpers = source[start:end]

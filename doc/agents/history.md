@@ -25,6 +25,8 @@ Short timeline:
   ranks, edge once per pass, `QueueFullPass` coalescing, flyout retarget
   clears only on a new key, decay prunes other desktops in separate holds,
   custom colour parsed once, accent read from the subscribed `UISettings`.
+- 0.11.40: source split into `src/NN-*.cpp` parts, joined by
+  `tools/build_mod.py`; tests read the parts.
 
 ## Review lessons about removed mechanisms
 
