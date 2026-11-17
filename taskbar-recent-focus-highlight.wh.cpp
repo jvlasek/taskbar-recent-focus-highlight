@@ -829,7 +829,7 @@ constexpr UINT WM_APP_DESKTOP_SWITCHED = WM_APP + 2;
 constexpr UINT WM_APP_SHUTDOWN = WM_APP + 3;
 constexpr UINT WM_APP_REQUEST_APPLY_DEBOUNCED = WM_APP + 4;
 constexpr UINT WM_APP_REFRESH_ACCENT = WM_APP + 5;
-constexpr UINT WM_APP_SETTINGS_CHANGED = WM_APP + 7;
+constexpr UINT WM_APP_SETTINGS_CHANGED = WM_APP + 6;
 
 constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
@@ -1066,7 +1066,7 @@ void OnVirtualDesktopSwitched() {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         droppedPending = DropPendingIfWrongDesktopLocked();
         // Do not recompute here: grace was just cleared, so every path would
-        // fail PathAppearsOnTaskbar. ApplyAllHighlights snapshots IsRunning
+        // fail AppAppearsOnTaskbar. ApplyAllHighlights snapshots IsRunning
         // on the UI thread, then recomputes.
         LOG_DEFERRED(L"Virtual desktop switch: %s droppedPending=%d",
                GuidToLogString(g_currentDesktopId).c_str(),
@@ -1207,7 +1207,7 @@ void StopDecayTimerIfIdle() {
 
 std::wstring ToUpper(std::wstring s) {
     if (!s.empty()) {
-        LCMapStringEx(LOCALE_NAME_USER_DEFAULT, LCMAP_UPPERCASE, s.data(),
+        LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_UPPERCASE, s.data(),
                       static_cast<int>(s.length()), s.data(),
                       static_cast<int>(s.length()), nullptr, nullptr, 0);
     }
@@ -1939,10 +1939,6 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
     desk.rankedApps = std::move(candidates);
 }
 
-void RecomputeRanksLocked() {
-    RecomputeRanksForDesktopLocked(CurrentDeskLocked());
-}
-
 // ---------------------------------------------------------------------------
 // Window-level recency (thumbnail previews)
 // ---------------------------------------------------------------------------
@@ -2230,7 +2226,7 @@ bool TaskListButton_IsRunning(FrameworkElement taskListButtonElement) {
 // IsRunning, plus a short grace so Alt-Tab flicker does not drop glows.
 // Virtual-desktop switches clear observedRunning so pinned-not-running icons
 // on another desktop never keep a highlight. Call this on the UI thread
-// before PathAppearsOnTaskbar / rank eligibility.
+// before AppAppearsOnTaskbar / rank eligibility.
 bool ButtonCountsAsRunning(FrameworkElement button) {
     const bool running = TaskListButton_IsRunning(button);
     const ULONGLONG now = GetTickCount64();
@@ -2329,8 +2325,8 @@ HWND GetButtonAutomationWindow(FrameworkElement button) {
     }
 }
 
-// Path / AUMID / HWND only. Same rank may bind many buttons (secondary /
-// Never Combine). Filename-only is not a match.
+// Explorer AppId equality, plus per-window slots for uncombined buttons.
+// Same rank may bind many buttons (secondary taskbar / Never Combine).
 bool IdentityMatchesRank(const ButtonIdentity& ident,
                          const AppFocusInfo& info) {
     // Per-window slot: only the button that lists exactly this window (an
@@ -2369,12 +2365,11 @@ bool IdentityMatchesRank(const ButtonIdentity& ident,
 
 // Best rank for a single button (1-based), or 0.
 int FindRankForButton(FrameworkElement button,
-                      const std::vector<AppFocusInfo>& ranks,
-                      bool requireRunning = true) {
+                      const std::vector<AppFocusInfo>& ranks) {
     if (!button || ranks.empty()) {
         return 0;
     }
-    if (requireRunning && !ButtonCountsAsRunning(button)) {
+    if (!ButtonCountsAsRunning(button)) {
         return 0;
     }
 
@@ -2571,30 +2566,9 @@ void ClearButtonHighlight(FrameworkElement button) {
         // Do NOT ClearValue BackgroundElement — we no longer style it; clearing
         // local values can leave a stuck pale hover plate after decay.
 
+        // EnsureGlowHost adds exactly one host, as a direct child.
         if (auto panel = iconPanel.try_as<Controls::Panel>()) {
-            // Remove by name even if multiple generations of hosts exist.
-            for (int guard = 0; guard < 4; ++guard) {
-                if (!FindChildByName(panel, kGlowElementName) &&
-                    !FindDescendantByName(iconPanel, kGlowElementName)) {
-                    break;
-                }
-                RemoveNamedChild(panel, kGlowElementName);
-                // Descendant host (unexpected nesting): walk children once.
-                if (auto orphan =
-                        FindDescendantByName(iconPanel, kGlowElementName)) {
-                    try {
-                        if (auto parent =
-                                Media::VisualTreeHelper::GetParent(orphan)
-                                    .try_as<Controls::Panel>()) {
-                            uint32_t idx = 0;
-                            if (parent.Children().IndexOf(orphan, idx)) {
-                                parent.Children().RemoveAt(idx);
-                            }
-                        }
-                    } catch (...) {
-                    }
-                }
-            }
+            RemoveNamedChild(panel, kGlowElementName);
         }
 
         SetCachedPaintState(button, 0, SettingsSnap()->generation);
@@ -2844,7 +2818,7 @@ PCWSTR PromoteModeName(PromoteMode m) {
 }
 
 // True if this focus change may skip the app min-focus timer.
-// Caller must hold g_stateMutex when checking ranked list (or we take it).
+// Takes g_stateMutex itself; do not call with it held.
 bool ShouldSkipAppMinFocus(const std::wstring& key, bool alreadyTracked) {
     auto settings = SettingsSnap();
     if (settings->minFocusSeconds <= 0) {
@@ -3574,7 +3548,7 @@ void PruneTrackedButtons_UIThread() {
 }
 
 // A destroyed TaskListButton often never reports IsRunning=false.
-// PathAppearsOnTaskbar runs off this thread and must not weak.get().
+// AppAppearsOnTaskbar runs off this thread and must not weak.get().
 void PruneDeadButtonPathCache_UIThread() {
     std::lock_guard<std::mutex> lock(g_buttonPathMutex);
     for (auto it = g_buttonPathCache.begin(); it != g_buttonPathCache.end();) {
@@ -3757,22 +3731,6 @@ bool CollectUdkGroupWindows(void* udkTaskGroup, std::vector<HWND>& out) {
     }
 }
 
-// Where a button's window list came from: Explorer's public
-// TaskGroup.Items / TaskItem.WindowId only since 0.11.18 (the private native
-// path was removed after 0 fallbacks across the 0.11.10-0.11.17 captures).
-// A button with no public list counts as empty; a tally of both is logged
-// every 200 captures.
-std::atomic<unsigned> g_buttonWindowsUdk{0}, g_buttonWindowsEmpty{0};
-
-void NoteButtonWindowsSource(bool usedUdk) {
-    const unsigned udk = usedUdk ? ++g_buttonWindowsUdk : g_buttonWindowsUdk.load();
-    const unsigned empty =
-        usedUdk ? g_buttonWindowsEmpty.load() : ++g_buttonWindowsEmpty;
-    if (((udk + empty) % 200) == 1) {
-        Wh_Log(L"Button windows tally: public=%u empty=%u", udk, empty);
-    }
-}
-
 using TaskListWindowViewModel_get_TaskItem_t = int(WINAPI*)(void* pThis,
                                                             void** taskItem);
 TaskListWindowViewModel_get_TaskItem_t
@@ -3836,7 +3794,8 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
     return g_capturedTaskGroup;
 }
 
-// Capture only UI-affine taskbar identity here. Slow metadata reads are queued.
+// Synchronous snapshot of the button's Explorer AppId and window list (UI
+// thread, a few COM calls).
 ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
     ButtonResolveData data;
     data.buttonId = InspectableIdentity(button);
@@ -3856,7 +3815,6 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         groupWindows.push_back(CapturedWindow{h, PidFromHwnd(h)});
     };
     std::vector<HWND> udkWindows;
-    bool usedUdk = false;
     try {
         UIElement el = button.as<UIElement>();
         // Public path: the button's TaskItem (single window) and its
@@ -3930,7 +3888,6 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         }
         PublishWindowAppIds(udkWindows, data.explorerAppId);
         if (!udkWindows.empty()) {
-            usedUdk = true;
             for (HWND h : udkWindows) {
                 rememberWindow(h);
             }
@@ -3943,10 +3900,7 @@ ButtonResolveData CaptureButtonResolveData(FrameworkElement button) {
         pid = 0;
         hwnd = nullptr;
         groupWindows.clear();
-        usedUdk = false;
     }
-
-    NoteButtonWindowsSource(usedUdk);
 
     data.hwnd = hwnd;
     data.pid = hwnd ? PidFromHwnd(hwnd) : pid;
@@ -4275,8 +4229,8 @@ void ApplyAllHighlights_UIThread() {
         return;
     }
 
-    // Path / AUMID / HWND only. Exact identity may bind the same rank to many
-    // buttons (secondary taskbar / Never Combine).
+    // Explorer AppId (plus per-window slots). One rank may bind many buttons
+    // (secondary taskbar / Never Combine).
     struct Cand {
         size_t rankIdx;
         size_t buttonIdx;
@@ -5456,25 +5410,26 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                     2.55 * t +
                 0.5);
             const int strokeA = static_cast<int>(255 * t + 0.5);
-            bool usedNative = !outline && fillOpacitySetting <= 0;
-            if (!usedNative) {
+            // painted: card overlay drawn, or nothing to draw (zero tint).
+            bool painted = !outline && fillOpacitySetting <= 0;
+            if (!painted) {
                 try {
-                    usedNative = PaintCardOverlay(
+                    painted = PaintCardOverlay(
                         thumbView, withAlpha(base, fillA),
                         withAlpha(base, strokeA),
                         outline ? settings->previewOutlineThickness : 0.0);
                 } catch (...) {
-                    usedNative = false;
+                    painted = false;
                 }
             }
-            if (!usedNative) {
+            if (!painted) {
                 Controls::Grid host = EnsureThumbOverlayHost(panel);
                 HideThumbOverlayChildren(host);
                 if (auto plate = FindChildByName(host, kThumbGlowLayerNames[0])
                                      .try_as<Shapes::Rectangle>()) {
-                    const int fillA = static_cast<int>(
+                    const int plateA = static_cast<int>(
                         fillOpacitySetting * 2.55 + 0.5);
-                    plate.Fill(Media::SolidColorBrush{withAlpha(base, fillA)});
+                    plate.Fill(Media::SolidColorBrush{withAlpha(base, plateA)});
                     plate.Stroke(nullptr);
                     plate.StrokeThickness(0);
                     plate.RadiusX(cardW * roundnessFrac * 0.12);
@@ -5626,63 +5581,38 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     // one stays unmarked. (Before 0.11.19 also a DataContext/ctor-map pass and
     // a repeater-index + captured Thumbnails pass; the first never matched
     // on 26100-era builds, the second shifted after a card was closed.)
-    enum class ResolveHow : int { None = 0, ViewModel };
     struct Scored {
         FrameworkElement view{nullptr};
         HWND hwnd = nullptr;
         ULONGLONG tick = 0;
         ULONGLONG confirmSeq = 0;
-        ResolveHow how = ResolveHow::None;
         int rank = 0;  // 1-based flyout rank; 0 = not highlighted
-        HWND viaViewModel = nullptr;
         CardResolveFail fail = CardResolveFail::None;
         UINT64 rawWindowId = 0;
     };
     std::vector<Scored> scored(siblings.size());
-    std::unordered_set<HWND> usedHwnds;
 
-    auto tickFor = [](HWND hwnd) -> ULONGLONG {
-        ULONGLONG tick = 0;
-        if (!hwnd) {
-            return 0;
-        }
-        std::lock_guard<std::mutex> lock(g_stateMutex);
-        IsWindowRecentForPreviewLocked(CurrentDeskLocked(), hwnd, &tick);
-        return tick;
-    };
-    auto seqFor = [](HWND hwnd) -> ULONGLONG {
-        if (!hwnd) {
-            return 0;
-        }
-        std::lock_guard<std::mutex> lock(g_stateMutex);
-        auto& map = CurrentDeskLocked().windowFocusMap;
-        auto it = map.find(hwnd);
-        if (it == map.end()) {
-            return 0;
-        }
-        return it->second.confirmSeq;
-    };
-
-    auto stampRecency = [&](size_t i, HWND hwnd) {
-        scored[i].hwnd = hwnd;
-        scored[i].tick = tickFor(hwnd);
-        scored[i].confirmSeq = seqFor(hwnd);
-    };
-
+    // Card view model -> ParentItem.WindowId (no lock held).
     for (size_t i = 0; i < siblings.size(); ++i) {
         TrackThumbView_UIThread(siblings[i]);
         scored[i].view = siblings[i];
+        scored[i].hwnd = ResolveHwndFromCardViewModel(
+            siblings[i], &scored[i].fail, &scored[i].rawWindowId);
     }
 
-    // Card view model -> ParentItem.WindowId.
-    for (size_t i = 0; i < siblings.size(); ++i) {
-        HWND hwnd = ResolveHwndFromCardViewModel(
-            siblings[i], &scored[i].fail, &scored[i].rawWindowId);
-        scored[i].viaViewModel = hwnd;
-        if (hwnd && !usedHwnds.count(hwnd)) {
-            stampRecency(i, hwnd);
-            scored[i].how = ResolveHow::ViewModel;
-            usedHwnds.insert(hwnd);
+    // Recency for every card in one hold.
+    {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        auto& desk = CurrentDeskLocked();
+        for (auto& sc : scored) {
+            if (!sc.hwnd) {
+                continue;
+            }
+            IsWindowRecentForPreviewLocked(desk, sc.hwnd, &sc.tick);
+            auto it = desk.windowFocusMap.find(sc.hwnd);
+            if (it != desk.windowFocusMap.end()) {
+                sc.confirmSeq = it->second.confirmSeq;
+            }
         }
     }
 
@@ -5724,27 +5654,17 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
                L"candidates=%zu painted=%zu",
                siblings.size(), limit, order.size(), painted);
         for (size_t i = 0; i < scored.size(); ++i) {
-            PCWSTR how = L"none";
-            switch (scored[i].how) {
-                case ResolveHow::ViewModel:
-                    how = L"viewmodel";
-                    break;
-                default:
-                    break;
-            }
             std::wstring name;
             try {
                 name = Automation::AutomationProperties::GetName(scored[i].view)
                            .c_str();
             } catch (...) {
             }
-            Wh_Log(L"  sibling[%zu]: hwnd=%p tick=%llu how=%s rank=%d%s "
-                   L"vm=%p name=\"%s\"",
+            Wh_Log(L"  sibling[%zu]: hwnd=%p tick=%llu rank=%d%s name=\"%s\"",
                    i, scored[i].hwnd,
-                   static_cast<unsigned long long>(scored[i].tick), how,
+                   static_cast<unsigned long long>(scored[i].tick),
                    scored[i].rank,
-                   scored[i].rank > 0 ? L" [GLOW]" : L"",
-                   scored[i].viaViewModel, name.c_str());
+                   scored[i].rank > 0 ? L" [GLOW]" : L"", name.c_str());
             if (scored[i].fail != CardResolveFail::None) {
                 HWND raw = reinterpret_cast<HWND>(scored[i].rawWindowId);
                 wchar_t cls[96] = L"";
@@ -6157,7 +6077,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
             }
             return;
         }
-        rank = FindRankForButton(button, ranks, /*requireRunning=*/true);
+        rank = FindRankForButton(button, ranks);
     }
 
     if (rank > 0) {
@@ -6788,8 +6708,8 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
 
     EnsureDecayTimerArmed();
 
-    // Async identity results trigger a new eligibility pass when ready. Keep
-    // confirmed history while resolution is pending; missing identity paints nothing.
+    // The UI pass re-binds ranks to buttons; a rank with no button paints
+    // nothing but keeps its history.
     RequestApplyVisuals();
 }
 
@@ -7778,7 +7698,7 @@ BOOL Wh_ModInit() {
     if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
         if (!HookTaskbarViewDllSymbols(taskbarViewModule)) {
             Wh_Log(L"Taskbar.View hooks failed");
-                return FALSE;
+            return FALSE;
         }
         g_taskbarViewHookAttempted = true;
     } else {
