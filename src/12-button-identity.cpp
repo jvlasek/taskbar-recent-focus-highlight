@@ -748,43 +748,23 @@ void ApplyAllHighlights_UIThread() {
     }
 
     // Explorer AppId (plus per-window slots). One rank may bind many buttons
-    // (secondary taskbar / Never Combine).
-    struct Cand {
-        size_t rankIdx;
-        size_t buttonIdx;
-    };
-    std::vector<Cand> cands;
+    // (secondary taskbar / Never Combine); a button takes its best rank.
+    std::vector<bool> rankTaken(ranks.size(), false);
     for (size_t bi = 0; bi < live.size(); ++bi) {
-        if (!running[bi]) {
-            continue;
-        }
-        for (size_t ri = 0; ri < ranks.size(); ++ri) {
+        int rank = 0;
+        for (size_t ri = 0; running[bi] && ri < ranks.size(); ++ri) {
             if (IdentityMatchesRank(idents[bi], ranks[ri])) {
-                cands.push_back({ri, bi});
+                rank = static_cast<int>(ri) + 1;
+                rankTaken[ri] = true;
+                Wh_Log(L"  bind rank %zu %s -> \"%s\" (appId=%s)", ri + 1,
+                       ranks[ri].displayName.c_str(),
+                       GetButtonAutomationName(live[bi]).c_str(),
+                       buttonAppIds[bi].c_str());
+                break;
             }
         }
-    }
-
-    std::vector<int> buttonRank(live.size(), 0);  // 1-based rank or 0
-    std::vector<bool> rankTaken(ranks.size(), false);
-    std::vector<bool> buttonTaken(live.size(), false);
-
-    for (const auto& c : cands) {
-        if (buttonTaken[c.buttonIdx]) {
-            continue;
-        }
-        buttonTaken[c.buttonIdx] = true;
-        rankTaken[c.rankIdx] = true;
-        buttonRank[c.buttonIdx] = static_cast<int>(c.rankIdx) + 1;
-        Wh_Log(L"  bind rank %zu %s -> \"%s\" (appId=%s)",
-               c.rankIdx + 1, ranks[c.rankIdx].displayName.c_str(),
-               GetButtonAutomationName(live[c.buttonIdx]).c_str(),
-               buttonAppIds[c.buttonIdx].c_str());
-    }
-
-    for (size_t bi = 0; bi < live.size(); ++bi) {
-        if (buttonRank[bi] > 0) {
-            ApplyButtonHighlight(live[bi], buttonRank[bi]);
+        if (rank > 0) {
+            ApplyButtonHighlight(live[bi], rank);
         } else {
             ClearButtonHighlight(live[bi]);
         }

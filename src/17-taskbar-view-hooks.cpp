@@ -16,6 +16,16 @@ FrameworkElement TaskListButtonElementFromThis(void* pThis) {
 
 // Re-paint one button from the last full bind. Does not re-score identity —
 // hover UpdateVisualStates would otherwise O(buttons×ranks) every mouse-over.
+// Unranked button: an unknown identity needs a full pass; a known one is
+// stored as rank 0 so hover repaints skip it.
+void MarkButtonUnranked(FrameworkElement button) {
+    if (GetCachedButtonIdentity(button).appIdUpper.empty()) {
+        ScheduleRefreshAllHighlights(button);
+    } else {
+        SetCachedPaintState(button, 0, SettingsSnap()->generation);
+    }
+}
+
 void RefreshButtonHighlight(FrameworkElement button) {
     if (!button || g_unloading.load()) {
         return;
@@ -58,12 +68,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
             SetCachedPaintState(button, 0, SettingsSnap()->generation);
             ScheduleRefreshAllHighlights(button);
         } else if (cached < 0) {
-            auto ident = GetCachedButtonIdentity(button);
-            if (ident.appIdUpper.empty()) {
-                ScheduleRefreshAllHighlights(button);
-            } else {
-                SetCachedPaintState(button, 0, SettingsSnap()->generation);
-            }
+            MarkButtonUnranked(button);
         }
         return;
     }
@@ -81,12 +86,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
             if (ButtonHasOurChrome(button)) {
                 ClearButtonHighlight(button);
             } else {
-                auto ident = GetCachedButtonIdentity(button);
-                if (ident.appIdUpper.empty()) {
-                    ScheduleRefreshAllHighlights(button);
-                } else {
-                    SetCachedPaintState(button, 0, SettingsSnap()->generation);
-                }
+                MarkButtonUnranked(button);
             }
             return;
         }
@@ -98,12 +98,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
     } else if (ButtonHasOurChrome(button)) {
         ClearButtonHighlight(button);
     } else {
-        auto ident = GetCachedButtonIdentity(button);
-        if (ident.appIdUpper.empty()) {
-            ScheduleRefreshAllHighlights(button);
-        } else {
-            SetCachedPaintState(button, 0, SettingsSnap()->generation);
-        }
+        MarkButtonUnranked(button);
     }
 }
 

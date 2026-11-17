@@ -1,25 +1,9 @@
 PCWSTR GlowStyleName(GlowStyle s) {
-    switch (s) {
-        case GlowStyle::Full:
-            return L"full";
-        case GlowStyle::LeftBar:
-            return L"leftBar";
-        case GlowStyle::Frame:
-        default:
-            return L"frame";
-    }
+    return EnumToName(kGlowStyleNames, s);
 }
 
 PCWSTR PromoteModeName(PromoteMode m) {
-    switch (m) {
-        case PromoteMode::ImmediateTopN:
-            return L"immediateTopN";
-        case PromoteMode::AlwaysWait:
-            return L"alwaysWait";
-        case PromoteMode::ImmediateTracked:
-        default:
-            return L"immediateTracked";
-    }
+    return EnumToName(kPromoteModeNames, m);
 }
 
 // True if this focus change may skip the app min-focus timer.
@@ -51,47 +35,15 @@ bool ShouldSkipAppMinFocus(const std::wstring& key, bool alreadyTracked) {
 }
 
 PCWSTR PreviewStyleName(PreviewStyle s) {
-    switch (s) {
-        case PreviewStyle::TitleBg:
-            return L"titleBg";
-        case PreviewStyle::Plate:
-            return L"plate";
-        case PreviewStyle::TitleBar:
-            return L"titleBar";
-        case PreviewStyle::Outline:
-            return L"outline";
-        case PreviewStyle::None:
-        default:
-            return L"none";
-    }
+    return EnumToName(kPreviewStyleNames, s);
 }
 
 PCWSTR TaskbarEdgeName(TaskbarEdge e) {
-    switch (e) {
-        case TaskbarEdge::Left:
-            return L"left";
-        case TaskbarEdge::Top:
-            return L"top";
-        case TaskbarEdge::Right:
-            return L"right";
-        case TaskbarEdge::Bottom:
-        default:
-            return L"bottom";
-    }
+    return EnumToName(kTaskbarEdgeNames, e);
 }
 
 PCWSTR BarSideName(BarSide s) {
-    switch (s) {
-        case BarSide::Left:
-            return L"left";
-        case BarSide::Top:
-            return L"top";
-        case BarSide::Right:
-            return L"right";
-        case BarSide::Bottom:
-        default:
-            return L"bottom";
-    }
+    return EnumToName(kBarSideNames, s);
 }
 
 bool IsInVisualState(FrameworkElement root, PCWSTR stateName) {

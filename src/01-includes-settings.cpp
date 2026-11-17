@@ -115,6 +115,64 @@ enum class PreviewStyle {
     None,       // not marked (ranks 2+ only)
 };
 
+// Setting ids <-> enum values. The ids double as log names.
+template <typename E>
+struct EnumName {
+    PCWSTR name;
+    E value;
+};
+constexpr EnumName<GlowColorMode> kGlowColorNames[] = {
+    {L"accent", GlowColorMode::Accent}, {L"green", GlowColorMode::Green},
+    {L"blue", GlowColorMode::Blue},     {L"orange", GlowColorMode::Orange},
+    {L"white", GlowColorMode::White},   {L"custom", GlowColorMode::Custom},
+};
+constexpr EnumName<GlowStyle> kGlowStyleNames[] = {
+    {L"leftBar", GlowStyle::LeftBar},
+    {L"frame", GlowStyle::Frame},
+    {L"full", GlowStyle::Full},
+};
+constexpr EnumName<PromoteMode> kPromoteModeNames[] = {
+    {L"immediateTracked", PromoteMode::ImmediateTracked},
+    {L"immediateTopN", PromoteMode::ImmediateTopN},
+    {L"alwaysWait", PromoteMode::AlwaysWait},
+};
+constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
+    {L"plate", PreviewStyle::Plate},       {L"outline", PreviewStyle::Outline},
+    {L"titleBg", PreviewStyle::TitleBg},   {L"titleBar", PreviewStyle::TitleBar},
+    {L"none", PreviewStyle::None},
+};
+constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {
+    {L"bottom", TaskbarEdge::Bottom}, {L"left", TaskbarEdge::Left},
+    {L"top", TaskbarEdge::Top},       {L"right", TaskbarEdge::Right},
+};
+constexpr EnumName<BarSide> kBarSideNames[] = {
+    {L"left", BarSide::Left}, {L"top", BarSide::Top},
+    {L"right", BarSide::Right}, {L"bottom", BarSide::Bottom},
+};
+
+// Name of a value; the table's first entry for an unknown one.
+template <typename E, size_t N>
+PCWSTR EnumToName(const EnumName<E> (&table)[N], E value) {
+    for (const auto& entry : table) {
+        if (entry.value == value) {
+            return entry.name;
+        }
+    }
+    return table[0].name;
+}
+
+// Value for a name; false (out unchanged) for an unknown one.
+template <typename E, size_t N>
+bool NameToEnum(const EnumName<E> (&table)[N], PCWSTR name, E& out) {
+    for (const auto& entry : table) {
+        if (name && wcscmp(entry.name, name) == 0) {
+            out = entry.value;
+            return true;
+        }
+    }
+    return false;
+}
+
 struct Settings {
     int highlightCount = 3;
     int minFocusSeconds = 8;
