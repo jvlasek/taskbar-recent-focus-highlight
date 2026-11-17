@@ -606,6 +606,42 @@ struct DesktopRecencyState {
 };
 
 std::mutex g_stateMutex;
+
+// Log lines produced while g_stateMutex is held are queued per thread and
+// written once the outermost DeferredLogScope ends. Declare the scope before
+// the lock so it is destroyed after it: Wh_Log is OutputDebugString plus
+// file I/O, and the UI thread waits on this lock. Without a scope, logs
+// directly.
+thread_local std::vector<std::wstring> t_deferredLogs;
+thread_local int t_deferredLogDepth = 0;
+
+struct DeferredLogScope {
+    DeferredLogScope() { ++t_deferredLogDepth; }
+    ~DeferredLogScope() {
+        if (--t_deferredLogDepth != 0 || t_deferredLogs.empty()) {
+            return;
+        }
+        std::vector<std::wstring> lines;
+        lines.swap(t_deferredLogs);
+        for (const auto& line : lines) {
+            Wh_Log(L"%s", line.c_str());
+        }
+    }
+    DeferredLogScope(const DeferredLogScope&) = delete;
+    DeferredLogScope& operator=(const DeferredLogScope&) = delete;
+};
+
+#define LOG_DEFERRED(...)                                              \
+    do {                                                               \
+        if (t_deferredLogDepth == 0) {                                 \
+            Wh_Log(__VA_ARGS__);                                       \
+        } else {                                                       \
+            wchar_t deferredLogBuf_[1024];                             \
+            _snwprintf_s(deferredLogBuf_, _countof(deferredLogBuf_),   \
+                         _TRUNCATE, __VA_ARGS__);                      \
+            t_deferredLogs.emplace_back(deferredLogBuf_);              \
+        }                                                              \
+    } while (0)
 std::unordered_map<GUID, DesktopRecencyState, GuidHash, GuidEqual> g_desktopMaps;
 GUID g_currentDesktopId{};
 bool g_haveCurrentDesktop = false;
@@ -977,6 +1013,7 @@ GUID ResolveCurrentDesktopId() {
 // read (i.e. a real switch, not startup). Safe to call without g_stateMutex.
 bool RefreshCurrentDesktopId() {
     const GUID id = ResolveCurrentDesktopId();
+    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_stateMutex);
     const bool first = !g_haveCurrentDesktop;
     const bool changed = !InlineIsEqualGUID(id, g_currentDesktopId);
@@ -984,7 +1021,7 @@ bool RefreshCurrentDesktopId() {
     g_haveCurrentDesktop = true;
     g_desktopMaps[id];
     if (changed) {
-        Wh_Log(L"Current virtual desktop: %s (%zu tracked)",
+        LOG_DEFERRED(L"Current virtual desktop: %s (%zu tracked)",
                GuidToLogString(id).c_str(), g_desktopMaps.size());
     }
     return !first && changed;
@@ -1025,12 +1062,13 @@ void OnVirtualDesktopSwitched() {
     RefreshCurrentDesktopId();
     bool droppedPending = false;
     {
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         droppedPending = DropPendingIfWrongDesktopLocked();
         // Do not recompute here: grace was just cleared, so every path would
         // fail PathAppearsOnTaskbar. ApplyAllHighlights snapshots IsRunning
         // on the UI thread, then recomputes.
-        Wh_Log(L"Virtual desktop switch: %s droppedPending=%d",
+        LOG_DEFERRED(L"Virtual desktop switch: %s droppedPending=%d",
                GuidToLogString(g_currentDesktopId).c_str(),
                droppedPending ? 1 : 0);
     }
@@ -1775,7 +1813,7 @@ void AttributeProvisionalAppsLocked(DesktopRecencyState& desk) {
         AppFocusInfo moved = std::move(it->second);
         desk.appFocusMap.erase(it);
         moved.key = newKey;
-        Wh_Log(L"Attributed %s window %p to %s", moved.displayName.c_str(),
+        LOG_DEFERRED(L"Attributed %s window %p to %s", moved.displayName.c_str(),
                moved.lastHwnd, newKey.c_str());
         auto& dst = desk.appFocusMap[newKey];
         if (dst.key.empty() ||
@@ -1819,7 +1857,7 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
             continue;
         }
         if (IsTickDecayed(info.lastConfirmedFocusTick, decayMs, now)) {
-            Wh_Log(L"Decayed: %s", info.displayName.c_str());
+            LOG_DEFERRED(L"Decayed: %s", info.displayName.c_str());
             it = desk.appFocusMap.erase(it);
             continue;
         }
@@ -4204,6 +4242,7 @@ void ApplyAllHighlights_UIThread() {
     std::vector<AppFocusInfo> ranks;
     GUID deskId{};
     {
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         RecomputeRanksForDesktopLocked(CurrentDeskLocked());
         ranks = CurrentDeskLocked().rankedApps;
@@ -6008,12 +6047,13 @@ void RequestApplyVisuals() {
     }
     if (!RunOnUiThread([]() { ApplyAllHighlights_UIThread(); })) {
         // Buttons not tracked yet — will apply on next UpdateVisualStates.
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         const auto& ranks = CurrentDeskLocked().rankedApps;
-        Wh_Log(L"Ranks ready (%zu) — waiting for TaskListButton hooks",
+        LOG_DEFERRED(L"Ranks ready (%zu) — waiting for TaskListButton hooks",
                ranks.size());
         for (size_t i = 0; i < ranks.size(); i++) {
-            Wh_Log(L"  Rank %zu: %s", i + 1, ranks[i].displayName.c_str());
+            LOG_DEFERRED(L"  Rank %zu: %s", i + 1, ranks[i].displayName.c_str());
         }
     }
 }
@@ -6052,12 +6092,18 @@ void RefreshButtonHighlight(FrameworkElement button) {
     // paint rank still belongs to the old path if that HWND is gone or now
     // belongs to another process. PID only — do not OpenProcess from
     // UpdateVisualStates.
-    if (TaskListButton_IsRunning(button)) {
-        const ButtonIdentity ident = GetCachedButtonIdentity(button);
-        if (ident.sampleHwnd &&
-            (!IsWindow(ident.sampleHwnd) ||
-             (ident.samplePid &&
-              !HwndMatchesStoredPid(ident.sampleHwnd, ident.samplePid)))) {
+    // A grouped button whose sample window closed while siblings remain is
+    // re-captured and re-ranked inline, without a visible off/on (Fable 2.2).
+    auto sampleDead = [](const ButtonIdentity& ident) {
+        return ident.sampleHwnd &&
+               (!IsWindow(ident.sampleHwnd) ||
+                (ident.samplePid &&
+                 !HwndMatchesStoredPid(ident.sampleHwnd, ident.samplePid)));
+    };
+    if (TaskListButton_IsRunning(button) &&
+        sampleDead(GetCachedButtonIdentity(button))) {
+        EnsureButtonIdentity(button);
+        if (sampleDead(GetCachedButtonIdentity(button))) {
             if (ButtonHasOurChrome(button)) {
                 ClearButtonHighlight(button);
             }
@@ -6560,6 +6606,7 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
 
     const ULONGLONG now = GetTickCount64();
     {
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto& desk =
             InlineIsEqualGUID(pending.desktopId, GUID_NULL)
@@ -6573,7 +6620,7 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
                 g_pendingFocus = {};
             }
         }
-        Wh_Log(L"Preview focus confirmed: hwnd=%p %s title=\"%s\" (map=%zu "
+        LOG_DEFERRED(L"Preview focus confirmed: hwnd=%p %s title=\"%s\" (map=%zu "
                L"desktop=%s)",
                confirmHwnd, pending.displayName.c_str(), title.c_str(),
                desk.windowFocusMap.size(),
@@ -6691,6 +6738,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
 
     const ULONGLONG now = GetTickCount64();
     {
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto& desk =
             InlineIsEqualGUID(pending.desktopId, GUID_NULL)
@@ -6730,7 +6778,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         }
 
         RecomputeRanksForDesktopLocked(desk);
-        Wh_Log(L"Confirmed focus: %s key=%s (map size=%zu, ranks=%zu, "
+        LOG_DEFERRED(L"Confirmed focus: %s key=%s (map size=%zu, ranks=%zu, "
                L"title=\"%s\" desktop=%s)",
                pending.displayName.c_str(), pending.key.c_str(),
                desk.appFocusMap.size(), desk.rankedApps.size(),
@@ -7025,6 +7073,7 @@ void OnDecayTimer() {
     size_t windowsAfter = 0;
     RefreshCurrentDesktopId();
     {
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         const auto& beforeApps = CurrentDeskLocked().rankedApps;
         keysBefore.reserve(beforeApps.size());
@@ -7842,6 +7891,7 @@ void Wh_ModSettingsChanged() {
     }
 
     {
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         for (auto& [id, desk] : g_desktopMaps) {
             (void)id;
