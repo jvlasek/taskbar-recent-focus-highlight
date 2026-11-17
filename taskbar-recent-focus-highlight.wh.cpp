@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.40
+// @version         0.11.41
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -7135,8 +7135,18 @@ void OnDecayTimer() {
         }
     }
     // Same length can still be a different ladder ([A,B,C] -> [A,C,D]).
-    // An empty list keeps requesting a sweep so a missed clear can retry.
-    if (keysBefore != keysAfter || keysAfter.empty()) {
+    // An empty list requests a few more sweeps so a missed clear can retry,
+    // then stops: an idle desktop used to run a full pass on every decay
+    // tick for hours (capture 2026-11-17, 0.11.39). Focus thread only.
+    static int emptySweepsLeft = 0;
+    if (keysBefore != keysAfter) {
+        emptySweepsLeft = 2;
+    }
+    const bool retrySweep = keysAfter.empty() && emptySweepsLeft > 0;
+    if (retrySweep && keysBefore == keysAfter) {
+        --emptySweepsLeft;
+    }
+    if (keysBefore != keysAfter || retrySweep) {
         if (keysBefore != keysAfter) {
             Wh_Log(L"Decay recompute: ranks %zu -> %zu", keysBefore.size(),
                    keysAfter.size());
