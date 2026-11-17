@@ -6683,21 +6683,41 @@ bool StillPendingForeground(const PendingFocus& pending,
     return true;
 }
 
-void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
-    auto settings = SettingsSnap();
-    if (!settings->previewHighlightEnabled || g_unloading.load()) {
-        return;
-    }
+// The app and preview min-focus confirmations are one state machine (Fable
+// review 4.1): the deadline, the still-foreground check with the bounded
+// Alt-Tab grace, then a track-specific confirm. A track names its timer,
+// its seconds, its start tick and its retry field.
+struct MinFocusTrack {
+    bool preview = false;
+    UINT_PTR timerId = 0;
+    int seconds = 0;
+    ULONGLONG start = 0;
+    ULONGLONG PendingFocus::*retryStart = nullptr;
+    PCWSTR logName = L"";
+};
 
-    PendingFocus pending;
+MinFocusTrack AppTrack(const PendingFocus& p, const Settings& s) {
+    return {false, kMinFocusTimerId, s.minFocusSeconds, p.focusStartTick,
+            &PendingFocus::transientRetryStartTick, L"Min-focus timer"};
+}
+
+MinFocusTrack PreviewTrack(const PendingFocus& p, const Settings& s) {
+    return {true, kPreviewMinFocusTimerId, s.previewMinFocusSeconds,
+            p.previewStartTick ? p.previewStartTick : p.focusStartTick,
+            &PendingFocus::previewTransientRetryStartTick,
+            L"Preview min-focus"};
+}
+
+// Copies the pending focus. False if there is none, or if it is excluded
+// (then it is dropped).
+bool TakePendingForConfirm(PendingFocus& pending) {
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         if (!g_pendingFocus.valid) {
-            return;
+            return false;
         }
         pending = g_pendingFocus;
     }
-
     std::wstring pendingAppId = pending.appIdUpper;
     if (pendingAppId.empty() && pending.hwnd) {
         pendingAppId = ExclusionAumid(pending.hwnd);
@@ -6708,54 +6728,100 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         if (g_pendingFocus.hwnd == pending.hwnd) {
             g_pendingFocus = {};
         }
+        return false;
+    }
+    return true;
+}
+
+// Drops the pending focus (app track only: a preview track leaves the app
+// timer running).
+void DropPendingFor(const MinFocusTrack& track, const PendingFocus& pending) {
+    if (track.preview) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        if (g_pendingFocus.hwnd == pending.hwnd) {
+            g_pendingFocus = {};
+        }
+    }
+    StopDecayTimerIfIdle();
+}
+
+// True when the track may confirm now, with the window to confirm (it may
+// be another top-level window of the same app). Otherwise the deadline was
+// re-armed, Alt-Tab grace continues, or the candidate was dropped.
+bool MinFocusDeadlineReached(const MinFocusTrack& track,
+                             const PendingFocus& pending,
+                             MinFocusConfirmMode mode,
+                             HWND* confirmHwnd,
+                             std::wstring* title) {
+    if (mode == MinFocusConfirmMode::FromTimer) {
+        // KillTimer does not dequeue a WM_TIMER already posted.
+        const ULONGLONG remaining =
+            RemainingDeadlineMs(track.start, track.seconds, GetTickCount64());
+        if (remaining > 0) {
+            ArmHookTimer(track.timerId, remaining);
+            return false;
+        }
+    }
+    if (StillPendingForeground(pending, confirmHwnd, title)) {
+        return true;
+    }
+    if (mode == MinFocusConfirmMode::FromTimer &&
+        IsTransientForeground(GetForegroundWindow())) {
+        // Alt-Tab / taskbar holds FG briefly: keep the candidate through a
+        // bounded grace, then drop.
+        ULONGLONG retryStart = pending.*track.retryStart;
+        const ULONGLONG delay = TransientRetryDelayMs(
+            track.start, track.seconds, GetTickCount64(), retryStart);
+        {
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            if (g_pendingFocus.valid && g_pendingFocus.hwnd == pending.hwnd) {
+                g_pendingFocus.*track.retryStart = retryStart;
+            }
+        }
+        if (delay == 0) {
+            Wh_Log(L"%s: gave up waiting through transient FG for %s",
+                   track.logName, pending.displayName.c_str());
+            DropPendingFor(track, pending);
+            return false;
+        }
+        ArmHookTimer(track.timerId, delay);
+        if (!track.preview) {
+            Wh_Log(L"Min-focus timer: transient FG, still waiting on %s "
+                   L"(%llums left)",
+                   pending.displayName.c_str(),
+                   static_cast<unsigned long long>(delay));
+        }
+        return false;
+    }
+    if (!track.preview) {
+        Wh_Log(L"Min-focus timer: focus left %s before confirmation",
+               pending.displayName.c_str());
+    }
+    DropPendingFor(track, pending);
+    return false;
+}
+
+void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
+    auto settings = SettingsSnap();
+    if (!settings->previewHighlightEnabled || g_unloading.load()) {
         return;
     }
 
-    if (mode == MinFocusConfirmMode::FromTimer) {
-        const ULONGLONG now = GetTickCount64();
-        const ULONGLONG start = pending.previewStartTick
-                                    ? pending.previewStartTick
-                                    : pending.focusStartTick;
-        const ULONGLONG remaining = RemainingDeadlineMs(
-            start, settings->previewMinFocusSeconds, now);
-        if (remaining > 0) {
-            ArmHookTimer(kPreviewMinFocusTimerId, remaining);
-            return;
-        }
+    PendingFocus pending;
+    if (!TakePendingForConfirm(pending)) {
+        return;
     }
-
+    const MinFocusTrack track = PreviewTrack(pending, *settings);
     HWND confirmHwnd = nullptr;
     std::wstring title;
-    if (!StillPendingForeground(pending, &confirmHwnd, &title)) {
-        if (mode == MinFocusConfirmMode::FromTimer &&
-            IsTransientForeground(GetForegroundWindow())) {
-            const ULONGLONG start = pending.previewStartTick
-                                        ? pending.previewStartTick
-                                        : pending.focusStartTick;
-            const ULONGLONG now = GetTickCount64();
-            ULONGLONG retryStart = pending.previewTransientRetryStartTick;
-            const ULONGLONG delay = TransientRetryDelayMs(
-                start, settings->previewMinFocusSeconds, now, retryStart);
-            {
-                std::lock_guard<std::mutex> lock(g_stateMutex);
-                if (g_pendingFocus.valid &&
-                    g_pendingFocus.hwnd == pending.hwnd) {
-                    g_pendingFocus.previewTransientRetryStartTick = retryStart;
-                }
-            }
-            if (delay == 0) {
-                Wh_Log(L"Preview min-focus: gave up waiting through transient "
-                       L"FG for %s",
-                       pending.displayName.c_str());
-                return;
-            }
-            ArmHookTimer(kPreviewMinFocusTimerId, delay);
-        }
-        // Focus left the app — drop only preview; app timer may still be pending.
-        return;
+    if (!MinFocusDeadlineReached(track, pending, mode, &confirmHwnd, &title)) {
+        return;  // re-armed, waiting through Alt-Tab, or focus left
     }
 
-    pendingAppId = ExclusionAumid(confirmHwnd);
+    std::wstring pendingAppId = ExclusionAumid(confirmHwnd);
     if (IsExcludedKey(pending.key, ToUpper(pending.displayName), pendingAppId,
                       pending.pathUpper)) {
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -6804,86 +6870,14 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         return;
     }
     PendingFocus pending;
-    {
-        std::lock_guard<std::mutex> lock(g_stateMutex);
-        if (!g_pendingFocus.valid) {
-            return;
-        }
-        pending = g_pendingFocus;
-    }
-
-    std::wstring pendingAppId = pending.appIdUpper;
-    if (pendingAppId.empty() && pending.hwnd) {
-        pendingAppId = ExclusionAumid(pending.hwnd);
-    }
-    if (IsExcludedKey(pending.key, ToUpper(pending.displayName), pendingAppId,
-                      pending.pathUpper)) {
-        std::lock_guard<std::mutex> lock(g_stateMutex);
-        if (g_pendingFocus.hwnd == pending.hwnd) {
-            g_pendingFocus = {};
-        }
+    if (!TakePendingForConfirm(pending)) {
         return;
     }
-
-    if (mode == MinFocusConfirmMode::FromTimer) {
-        const ULONGLONG now = GetTickCount64();
-        const ULONGLONG remaining = RemainingDeadlineMs(
-            pending.focusStartTick, settings->minFocusSeconds, now);
-        if (remaining > 0) {
-            ArmHookTimer(kMinFocusTimerId, remaining);
-            return;
-        }
-    }
-
+    const MinFocusTrack track = AppTrack(pending, *settings);
     HWND confirmHwnd = nullptr;
     std::wstring title;
-    if (!StillPendingForeground(pending, &confirmHwnd, &title)) {
-        if (mode == MinFocusConfirmMode::FromTimer &&
-            IsTransientForeground(GetForegroundWindow())) {
-            // Alt-Tab / taskbar stole FG briefly. WndProc already KillTimer'd;
-            // keep the candidate through a bounded grace, then drop.
-            const ULONGLONG now = GetTickCount64();
-            ULONGLONG retryStart = pending.transientRetryStartTick;
-            const ULONGLONG delay = TransientRetryDelayMs(
-                pending.focusStartTick, settings->minFocusSeconds, now,
-                retryStart);
-            {
-                std::lock_guard<std::mutex> lock(g_stateMutex);
-                if (g_pendingFocus.valid &&
-                    g_pendingFocus.hwnd == pending.hwnd) {
-                    g_pendingFocus.transientRetryStartTick = retryStart;
-                }
-            }
-            if (delay == 0) {
-                Wh_Log(L"Min-focus timer: gave up waiting through transient "
-                       L"FG for %s",
-                       pending.displayName.c_str());
-                {
-                    std::lock_guard<std::mutex> lock(g_stateMutex);
-                    if (g_pendingFocus.hwnd == pending.hwnd) {
-                        g_pendingFocus = {};
-                    }
-                }
-                StopDecayTimerIfIdle();
-                return;
-            }
-            ArmHookTimer(kMinFocusTimerId, delay);
-            Wh_Log(L"Min-focus timer: transient FG, still waiting on %s "
-                   L"(%llums left)",
-                   pending.displayName.c_str(),
-                   static_cast<unsigned long long>(delay));
-            return;
-        }
-        Wh_Log(L"Min-focus timer: focus left %s before confirmation",
-               pending.displayName.c_str());
-        {
-            std::lock_guard<std::mutex> lock(g_stateMutex);
-            if (g_pendingFocus.hwnd == pending.hwnd) {
-                g_pendingFocus = {};
-            }
-        }
-        StopDecayTimerIfIdle();
-        return;
+    if (!MinFocusDeadlineReached(track, pending, mode, &confirmHwnd, &title)) {
+        return;  // re-armed, waiting through Alt-Tab, or dropped
     }
     pending.hwnd = confirmHwnd;
     if (!title.empty()) {
@@ -6981,6 +6975,25 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     RequestApplyVisuals();
 }
 
+// Arms the track's timer for the rest of its deadline, or confirms now.
+// An already due deadline confirms FromTimer, which still honors the
+// Alt-Tab grace; Immediate would drop the candidate while the switcher
+// holds foreground.
+void ArmOrConfirmTrack(const MinFocusTrack& track,
+                       void (*elapsed)(MinFocusConfirmMode)) {
+    if (track.seconds <= 0) {
+        elapsed(MinFocusConfirmMode::Immediate);
+        return;
+    }
+    const ULONGLONG remaining =
+        RemainingDeadlineMs(track.start, track.seconds, GetTickCount64());
+    if (remaining == 0) {
+        elapsed(MinFocusConfirmMode::FromTimer);
+        return;
+    }
+    ArmHookTimer(track.timerId, remaining);
+}
+
 // Keep the app min-focus one-shot alive. A stale WM_TIMER KillTimer's the
 // live timer; same-app FOREGROUND used to assume it was still running.
 void EnsurePendingAppTimer() {
@@ -6992,20 +7005,8 @@ void EnsurePendingAppTimer() {
         }
         pending = g_pendingFocus;
     }
-    auto settings = SettingsSnap();
-    if (settings->minFocusSeconds <= 0) {
-        OnMinFocusTimerElapsed(MinFocusConfirmMode::Immediate);
-        return;
-    }
-    const ULONGLONG remaining = RemainingDeadlineMs(
-        pending.focusStartTick, settings->minFocusSeconds, GetTickCount64());
-    if (remaining == 0) {
-        // Already due. FromTimer still honors Alt-Tab grace; Immediate
-        // would drop the candidate while the switcher holds foreground.
-        OnMinFocusTimerElapsed(MinFocusConfirmMode::FromTimer);
-        return;
-    }
-    ArmHookTimer(kMinFocusTimerId, remaining);
+    ArmOrConfirmTrack(AppTrack(pending, *SettingsSnap()),
+                      OnMinFocusTimerElapsed);
 }
 
 void EnsurePendingPreviewTimer() {
@@ -7030,22 +7031,8 @@ void EnsurePendingPreviewTimer() {
         CancelPreviewMinFocusTimer();
         return;
     }
-    const int previewMin = (std::max)(0, settings->previewMinFocusSeconds);
-    if (previewMin <= 0) {
-        OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode::Immediate);
-        return;
-    }
-    const ULONGLONG start = pending.previewStartTick
-                                ? pending.previewStartTick
-                                : pending.focusStartTick;
-    const ULONGLONG remaining =
-        RemainingDeadlineMs(start, previewMin, GetTickCount64());
-    if (remaining == 0) {
-        // Same as the app timer: a due deadline resumes grace handling.
-        OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode::FromTimer);
-        return;
-    }
-    ArmHookTimer(kPreviewMinFocusTimerId, remaining);
+    ArmOrConfirmTrack(PreviewTrack(pending, *settings),
+                      OnPreviewMinFocusTimerElapsed);
 }
 
 void SchedulePreviewConfirm(bool windowAlreadyTracked) {

@@ -14,9 +14,11 @@ def function(signature):
     start = source.index(signature)
     return source[start:source.index('\n}', start) + 2]
 
-helpers = '\n'.join(function(s) for s in (
+track_start = source.index('struct MinFocusTrack {')
+track_types = source[track_start:source.index('// Copies the pending focus.', track_start)]
+helpers = track_types + '\n'.join(function(s) for s in (
     'void HandleForegroundNotification(', 'void HandleShellActivation(',
-    'void EnsurePendingPreviewTimer() {'))
+    'void ArmOrConfirmTrack(', 'void EnsurePendingPreviewTimer() {'))
 start = source.index('    if (sameAppPending) {', source.index('void HandleForegroundChanged('))
 end = source.index('\n    CancelMinFocusTimer();', start)
 duplicate = source[start:end]
@@ -32,7 +34,9 @@ using HWND = int;
 using WPARAM = unsigned long long;
 using ULONGLONG = unsigned long long;
 constexpr WPARAM HSHELL_WINDOWACTIVATED=4, HSHELL_RUDEAPPACTIVATED=32772, HSHELL_WINDOWDESTROYED=2;
-constexpr int kPreviewMinFocusTimerId=3;
+constexpr int kPreviewMinFocusTimerId=3, kMinFocusTimerId=1;
+using UINT_PTR = unsigned long long;
+using PCWSTR = const wchar_t*;
 std::atomic<bool> g_unloading=false;
 HWND foreground=1;
 int handled=0, scheduled=0, appEnsures=0, confirmed=0, canceled=0;
@@ -41,8 +45,9 @@ struct PendingFocus {
     bool valid=true, previewConfirmed=false, appConfirmed=false;
     HWND hwnd=1;
     ULONGLONG previewStartTick=100, focusStartTick=100;
+    ULONGLONG transientRetryStartTick=0, previewTransientRetryStartTick=0;
 } g_pendingFocus;
-struct Settings {bool previewHighlightEnabled=true; int previewMinFocusSeconds=1;} settings;
+struct Settings {bool previewHighlightEnabled=true; int previewMinFocusSeconds=1; int minFocusSeconds=8;} settings;
 std::mutex g_stateMutex;
 enum class MinFocusConfirmMode {Immediate, FromTimer};
 Settings* SettingsSnap() {return &settings;}
