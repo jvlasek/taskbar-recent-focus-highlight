@@ -3588,10 +3588,20 @@ void TrackButton_UIThread(FrameworkElement button) {
         return;
     }
 
-    RememberUiDispatcher(button);
+    // Hover-hot (every UpdateVisualStates): a thread has one dispatcher, and
+    // a known button keeps its weak ref unless Explorer reused the address.
+    static thread_local bool dispatcherRemembered = false;
+    if (!dispatcherRemembered) {
+        dispatcherRemembered = RememberUiDispatcher(button);
+    }
     if (void* id = InspectableIdentity(button)) {
         std::lock_guard<std::mutex> lock(g_buttonsMutex);
-        g_trackedButtons[id] = winrt::make_weak(button);
+        auto it = g_trackedButtons.find(id);
+        if (it == g_trackedButtons.end()) {
+            g_trackedButtons.emplace(id, winrt::make_weak(button));
+        } else if (!WeakIsSameElement(it->second, button)) {
+            it->second = winrt::make_weak(button);
+        }
     }
 }
 
