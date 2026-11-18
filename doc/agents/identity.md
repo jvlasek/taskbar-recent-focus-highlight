@@ -40,36 +40,40 @@ reports the new AppId. No worker round trip, serials, deadlines or rechecks
 2. checks the exclude list (names, paths, AUMIDs — unchanged setting);
 3. looks the window up in the window → AppId map: key = `APPID:<AppId>`.
 
-A window that no captured button lists yet (just opened, or the mod just
-loaded: Explorer reports a button only when its visual state updates) gets a
-provisional key `WINDOW:<hwnd>` and a full pass is requested. Its recency is
-kept and moved to `APPID:<AppId>` by `AttributeProvisionalAppsLocked` (start of
-every rank recompute) once a button lists the window. Provisional keys are
-never ranked, so a window that never gets a button (tray widgets, popups)
-just decays. This replaced the `requireTaskbarButton` setting (removed in
-0.11.33) and the 0.11.33–0.11.36 retry timer. Since 0.11.42 the app confirm
-looks the AppId up again (a button captured during min-focus avoids the
-provisional key), and the first button seen on a taskbar seeds every button
-its `ItemsRepeater` shows (`SeedButtonsFromRepeater_UIThread`), so after a
-mod load one button state change captures the whole taskbar. A desktop switch
-or a focused window without a known button bumps `g_buttonSeedGeneration`,
-and the next full pass re-walks each taskbar's repeater (0.11.43; live
-2026-11-17: a Terminal window on another desktop stayed provisional until
-its confirm). 0.11.44: the switch also re-seeds on the next debounced pass
-(Explorer realizes that desktop's buttons a moment later; the immediate pass
-missed them on 2026-11-17), and an app confirm still without an AppId
-re-seeds and waits 300 ms once (`PendingFocus::appIdRetried`).
+Recency is recorded **per window** (`windowAppFocus`: pid, tick, title,
+exclude data; 0.11.46, Fable review 4.3). The app is not stored with the
+record: each rank recompute starts with `DeriveAppsFromWindowsLocked`, which
+drops dead / recycled / decayed window records and folds the others into
+`appFocusMap[APPID:<AppId>]` by the window's *current* Explorer AppId
+(newest confirmation wins). So:
+
+- a window no captured button lists yet (just opened, or the mod just
+  loaded: Explorer reports a button only when its visual state updates) is
+  recorded but not ranked yet, and joins its app as soon as a button lists
+  it; a window that never gets a button (tray widgets, popups) just decays;
+- a window whose AppId changes follows it;
+- the app record outlives its windows until decay: an app keeps its rank
+  while another of its windows is open, and a reopened app promotes at once
+  within the decay time (small map, one entry per app used in that time).
+
+`WINDOW:<hwnd>` (`ProvisionalAppKey`) survives only as the pending-focus
+identity of such a window, never in a recency map. This replaced the
+provisional app keys and `AttributeProvisionalAppsLocked` (0.11.36-0.11.45),
+the `requireTaskbarButton` setting (removed in 0.11.33) and the 0.11.44
+confirm-time AppId retry.
+
+The first button seen on a taskbar seeds every button its `ItemsRepeater`
+shows (`SeedButtonsFromRepeater_UIThread`, 0.11.42), so after a mod load one
+button state change captures the whole taskbar. A desktop switch or a
+focused window without a known button bumps `g_buttonSeedGeneration`; the
+next full pass and the next debounced pass re-walk each taskbar's repeater
+(0.11.43/0.11.44: Explorer realizes another desktop's buttons a moment after
+the switch).
 
 The window → AppId map stores the PID with each window and drops an entry
 whose handle now belongs to another process (0.11.42). `HSHELL_WINDOWDESTROYED`
 removes the window from the map, the preview and per-window maps and the
 pending focus, then requests a debounced repaint (`HandleWindowDestroyed`).
-
-Provisional keys stay: removing them needs Explorer's `TaskbarAppsList`
-independent of buttons, and the only route to it without taskbar.dll is a
-`TaskbarController` event hook that fires on activation, not at load
-(checked 2026-11-17: `TaskbarModel.AppsList` has no static accessor in
-windowsudk.winmd).
 
 Examples (shadow logs 2026-11-16): TC `{6D809377-…}\TOTALCMD\TOTALCMD64.EXE`,
 Lister `LISTER{CECFE544-…}`, VS Code `MICROSOFT.VISUALSTUDIOCODE`, Terminal

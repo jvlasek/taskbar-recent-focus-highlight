@@ -37,54 +37,51 @@ bool AppAppearsOnTaskbar(const std::wstring& key) {
     return false;
 }
 
-// Requires g_stateMutex. Moves recency recorded under a provisional
-// WINDOW: key to the APPID: key of the button that now lists that window
-// (newer confirmation wins when the app already has a record).
-void AttributeProvisionalAppsLocked(DesktopRecencyState& desk) {
-    std::vector<std::pair<std::wstring, std::wstring>> moves;  // old, new
-    for (const auto& [key, info] : desk.appFocusMap) {
-        if (!IsProvisionalAppKey(key) || !info.lastHwnd ||
-            !HwndMatchesStoredPid(info.lastHwnd, info.lastPid)) {
+// Requires g_stateMutex. Drops dead, recycled and decayed window records,
+// then folds the others into their app's record by the window's current
+// Explorer AppId (newest confirmation wins). A window without a known AppId
+// keeps its record and is folded in once a button lists it.
+void DeriveAppsFromWindowsLocked(DesktopRecencyState& desk,
+                                 ULONGLONG decayMs,
+                                 ULONGLONG now) {
+    for (auto it = desk.windowAppFocus.begin();
+         it != desk.windowAppFocus.end();) {
+        HWND hwnd = it->first;
+        WindowAppFocus& w = it->second;
+        if (!IsWindow(hwnd) || !HwndMatchesStoredPid(hwnd, w.pid) ||
+            IsTickDecayed(w.tick, decayMs, now)) {
+            it = desk.windowAppFocus.erase(it);
             continue;
         }
-        const std::wstring appId = LookupWindowAppId(info.lastHwnd);
-        if (!appId.empty()) {
-            moves.emplace_back(key, std::wstring(L"APPID:") + appId);
+        const std::wstring appId = LookupWindowAppId(hwnd);
+        const std::wstring key =
+            appId.empty() ? std::wstring{} : std::wstring(L"APPID:") + appId;
+        if (key != w.key && !key.empty()) {
+            LOG_DEFERRED(L"Window %p (%s) belongs to %s", hwnd,
+                         w.displayName.c_str(), key.c_str());
         }
-    }
-    for (const auto& [oldKey, newKey] : moves) {
-        auto it = desk.appFocusMap.find(oldKey);
-        if (it == desk.appFocusMap.end()) {
-            continue;
-        }
-        AppFocusInfo moved = std::move(it->second);
-        desk.appFocusMap.erase(it);
-        moved.key = newKey;
-        LOG_DEFERRED(L"Attributed %s window %p to %s", moved.displayName.c_str(),
-               moved.lastHwnd, newKey.c_str());
-        auto& dst = desk.appFocusMap[newKey];
-        if (dst.key.empty() ||
-            moved.lastConfirmedFocusTick > dst.lastConfirmedFocusTick) {
-            dst = std::move(moved);
-        }
-        for (auto& [hwnd, w] : desk.windowAppFocus) {
-            (void)hwnd;
-            if (w.key == oldKey) {
-                w.key = newKey;
+        w.key = key;
+        if (!key.empty()) {
+            AppFocusInfo& app = desk.appFocusMap[key];
+            if (app.key.empty() || w.tick >= app.lastConfirmedFocusTick) {
+                app.key = key;
+                app.displayName = w.displayName;
+                if (!w.title.empty()) {
+                    app.lastWindowTitle = w.title;
+                }
+                app.appIdUpper = w.appIdUpper;
+                app.pathUpper = w.pathUpper;
+                app.lastHwnd = hwnd;
+                app.lastPid = w.pid;
+                app.lastConfirmedFocusTick = w.tick;
             }
         }
-        for (auto& [hwnd, w] : desk.windowFocusMap) {
-            (void)hwnd;
-            if (w.processKey == oldKey) {
-                w.processKey = newKey;
-            }
-        }
+        ++it;
     }
 }
 
 void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
     desk.rankedApps.clear();
-    AttributeProvisionalAppsLocked(desk);
 
     auto settings = SettingsSnap();
     if (g_unloading.load()) {
@@ -93,6 +90,7 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
 
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG decayMs = DecayMsFromMinutes(settings->decayMinutes);
+    DeriveAppsFromWindowsLocked(desk, decayMs, now);
 
     std::vector<AppFocusInfo> candidates;
     candidates.reserve(desk.appFocusMap.size());
@@ -118,14 +116,7 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
         ++it;
     }
 
-    // Per-window slots. Drop dead/recycled/forgotten windows first.
-    for (auto it = desk.windowAppFocus.begin(); it != desk.windowAppFocus.end();) {
-        const bool keep = IsWindow(it->first) &&
-                          HwndMatchesStoredPid(it->first, it->second.pid) &&
-                          desk.appFocusMap.count(it->second.key) &&
-                          !IsTickDecayed(it->second.tick, decayMs, now);
-        it = keep ? std::next(it) : desk.windowAppFocus.erase(it);
-    }
+    // Per-window slots (window records were pruned by the derive step).
     {
         std::unordered_set<HWND, HwndHash> uncombined;
         {

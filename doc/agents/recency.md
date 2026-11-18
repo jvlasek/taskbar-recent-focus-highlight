@@ -8,7 +8,7 @@ in `identity.md`.
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| App rank key | `APPID:<Explorer AppId>` of the button that lists the window; provisional `WINDOW:<hwnd>` until a button lists it (never ranked) | One taskbar button = one app, by Explorer's own grouping (see `identity.md`) |
+| App rank key | `APPID:<Explorer AppId>` of the button that lists the window, derived at each recompute from the per-window records (`DeriveAppsFromWindowsLocked`); a window without a known AppId is recorded but not ranked | One taskbar button = one app, by Explorer's own grouping (see `identity.md`) |
 | Recency scope | Per virtual desktop GUID | Workspaces don’t share top-N |
 | Current desktop | Registry `CurrentVirtualDesktop`, VDM fallback | Public APIs only |
 | Window key | `HWND` + PID (per desktop map) | Multi-instance previews; PID rejects a recycled handle |

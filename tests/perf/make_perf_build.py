@@ -57,7 +57,7 @@ SLOTS = [
     # the worker and in the UI full pass). Added 2026-11-17 for 11-19 ms
     # worker lock holds in DecayTimer / AppMinFocusConfirm.
     ("RecomputeRanks", "Inner", "void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {"),
-    ("AttributeProvisional", "Inner", "void AttributeProvisionalAppsLocked(DesktopRecencyState& desk) {"),
+    ("DeriveApps", "Inner", "void DeriveAppsFromWindowsLocked(DesktopRecencyState& desk,"),
     ("AppAppearsOnTaskbar", "Inner", "bool AppAppearsOnTaskbar(const std::wstring& key) {"),
     ("PruneWindowFocusMap", "Inner", "void PruneWindowFocusMapLocked(DesktopRecencyState& desk) {"),
 ]

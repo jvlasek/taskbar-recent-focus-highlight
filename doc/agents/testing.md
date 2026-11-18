@@ -11,7 +11,7 @@ joined, via `tests/mod_source.py`) by signature
 and compile them with stubs, so a rename needs the test updated in the same
 commit.
 
-- `run-appid-identity-tests.py`: AppId identity, provisional keys, exclude
+- `run-appid-identity-tests.py`: AppId identity, per-window derivation, exclude
   list, rank 4+ intensity.
 - `run-preview-identity-tests.py`: card → window resolve.
 - `run-shell-activation-tests.py`: focus notification path.
@@ -59,7 +59,7 @@ adds an independent foreground observer.
 | `Current virtual desktop:` / `Virtual desktop switch:` | Per-desktop recency |
 | `Button identity:` | A button's Explorer AppId changed (first capture, reuse) |
 | `Identity state:` | A button's running state changed |
-| `Attributed … window … to` | Provisional `WINDOW:` recency moved to its `APPID:` key |
+| `Window … belongs to APPID:…` | A window record joined (or changed) its app at a recompute |
 | `Button windows:` / `Uncombined windows` | Never Combine detection |
 | `ApplyAllHighlights:` / `rank list[` / `bind rank` | Full pass |
 | `UNMATCHED rank` | A ranked app bound to no shown button |

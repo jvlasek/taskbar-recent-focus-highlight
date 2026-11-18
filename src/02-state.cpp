@@ -2,8 +2,12 @@
 // Focus / recency state
 // ---------------------------------------------------------------------------
 
+// Per-app record, derived from the window records at each rank recompute
+// (DeriveAppsFromWindowsLocked). It outlives its windows until decay, so an
+// app keeps its rank while another of its windows is open and promotes at
+// once when reopened within the decay time.
 struct AppFocusInfo {
-    std::wstring key;          // APPID:<Explorer AppId> or provisional WINDOW:…
+    std::wstring key;          // APPID:<Explorer AppId>
     std::wstring displayName;  // e.g. WindowsTerminal.exe
     std::wstring lastWindowTitle;  // unmatched-rank logs only
     std::wstring pathUpper;    // process image path (exclusion sweeps)
@@ -33,8 +37,6 @@ struct PendingFocus {
     bool valid = false;
     bool appConfirmed = false;
     bool previewConfirmed = false;
-    // App confirm found no AppId yet: one short wait for a re-seeded pass.
-    bool appIdRetried = false;
 };
 
 // Per-window recency for multi-instance thumbnail previews (separate timers).
@@ -127,12 +129,18 @@ struct GuidEqual {
 };
 
 // App + window recency for one virtual desktop (session-wide, not per-monitor).
-// App-level (min-focus) confirmation of one window. Only used to split an
-// app into per-window rank slots when its windows have their own taskbar
-// buttons ("Never combine" / "combine when full"): one button = one unit.
+// App-level (min-focus) confirmation of one window: the recency record
+// (Fable review 4.3, 0.11.46). The app is not stored with it: each rank
+// recompute looks the window up in Explorer's window -> AppId map, so a
+// window no captured button lists yet is simply not ranked yet (no
+// provisional keys), and a window whose AppId changes follows it. The same
+// records give the per-window slots of uncombined buttons (Never Combine).
 struct WindowAppFocus {
-    std::wstring key;
+    std::wstring key;          // derived APPID:<AppId>; empty = not known yet
+    std::wstring displayName;
     std::wstring title;
+    std::wstring appIdUpper;   // window AUMID (exclude list)
+    std::wstring pathUpper;    // process image path (exclude list)
     DWORD pid = 0;
     ULONGLONG tick = 0;
 };

@@ -277,28 +277,6 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         return;
     }
 
-    // A window whose button was captured since focus arrived is recorded
-    // under its AppId right away instead of a provisional key.
-    if (IsProvisionalAppKey(pending.key)) {
-        const std::wstring appId = LookupWindowAppId(pending.hwnd);
-        if (!appId.empty()) {
-            pending.key = std::wstring(L"APPID:") + appId;
-        } else if (mode == MinFocusConfirmMode::FromTimer &&
-                   !pending.appIdRetried) {
-            // Its button may exist but not be tracked yet (newly realized on
-            // this desktop): re-seed in a pass and confirm 300 ms later.
-            {
-                std::lock_guard<std::mutex> lock(g_stateMutex);
-                if (g_pendingFocus.valid && g_pendingFocus.hwnd == pending.hwnd) {
-                    g_pendingFocus.appIdRetried = true;
-                }
-            }
-            ++g_buttonSeedGeneration;
-            RequestApplyVisuals();
-            ArmHookTimer(kMinFocusTimerId, 300);
-            return;
-        }
-    }
     const ULONGLONG now = GetTickCount64();
     pending.desktopId = ConfirmDesktopId(pending.desktopId, pending.hwnd);
     {
@@ -308,25 +286,18 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
             InlineIsEqualGUID(pending.desktopId, GUID_NULL)
                 ? CurrentDeskLocked()
                 : DeskStateLocked(pending.desktopId);
-        AppFocusInfo& info = desk.appFocusMap[pending.key];
-        info.key = pending.key;
-        info.displayName = pending.displayName;
+        // The window record is the recency; the recompute below folds it
+        // into its app once Explorer's AppId for the window is known.
+        WindowAppFocus& w = desk.windowAppFocus[pending.hwnd];
+        w.displayName = pending.displayName;
         if (!pending.windowTitle.empty()) {
-            info.lastWindowTitle = pending.windowTitle;
-        }
-        info.lastHwnd = pending.hwnd;
-        info.lastPid = pending.processId ? pending.processId
-                                         : PidFromHwnd(pending.hwnd);
-        info.appIdUpper = appIdUpper;
-        info.pathUpper = pending.pathUpper;
-        info.lastConfirmedFocusTick = now;
-        {
-            WindowAppFocus& w = desk.windowAppFocus[pending.hwnd];
-            w.key = pending.key;
             w.title = pending.windowTitle;
-            w.pid = info.lastPid;
-            w.tick = now;
         }
+        w.appIdUpper = appIdUpper;
+        w.pathUpper = pending.pathUpper;
+        w.pid = pending.processId ? pending.processId
+                                  : PidFromHwnd(pending.hwnd);
+        w.tick = now;
 
         // Preview min-focus is independent: do not stamp the current HWND
         // here. A window switch just before the app deadline must wait out
@@ -342,10 +313,16 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         }
 
         RecomputeRanksForDesktopLocked(desk);
-        LOG_DEFERRED(L"Confirmed focus: %s key=%s (map size=%zu, ranks=%zu, "
-               L"title=\"%s\" desktop=%s)",
-               pending.displayName.c_str(), pending.key.c_str(),
-               desk.appFocusMap.size(), desk.rankedApps.size(),
+        auto rec = desk.windowAppFocus.find(pending.hwnd);
+        const std::wstring derived =
+            rec == desk.windowAppFocus.end() || rec->second.key.empty()
+                ? std::wstring(L"(no button yet)")
+                : rec->second.key;
+        LOG_DEFERRED(L"Confirmed focus: %s window=%p app=%s (apps=%zu, "
+               L"windows=%zu, ranks=%zu, title=\"%s\" desktop=%s)",
+               pending.displayName.c_str(), pending.hwnd, derived.c_str(),
+               desk.appFocusMap.size(), desk.windowAppFocus.size(),
+               desk.rankedApps.size(),
                pending.windowTitle.c_str(),
                GuidToLogString(pending.desktopId).c_str());
     }
@@ -523,7 +500,18 @@ void HandleForegroundChanged(HWND hWnd) {
             alreadyTracked = !IsTickDecayed(it->second.lastConfirmedFocusTick,
                                             decayMs, now);
         }
-        // Log title only. Identity is path / AUMID, not the window title.
+        // A window confirmed before whose button is not known yet is
+        // tracked too (its record joins the app at the next recompute).
+        if (!alreadyTracked) {
+            auto w = desk.windowAppFocus.find(hWnd);
+            if (w != desk.windowAppFocus.end() &&
+                HwndMatchesStoredPid(hWnd, w->second.pid)) {
+                alreadyTracked = !IsTickDecayed(
+                    w->second.tick,
+                    DecayMsFromMinutes(SettingsSnap()->decayMinutes), now);
+            }
+        }
+        // Log title only. Identity is the AppId, not the window title.
         if (it != desk.appFocusMap.end() && !windowTitle.empty()) {
             it->second.lastWindowTitle = windowTitle;
         }
@@ -674,6 +662,7 @@ void OnDecayTimer() {
         RecomputeRanksForDesktopLocked(it->second);
         PruneWindowFocusMapLocked(it->second);
         if (it->second.appFocusMap.empty() &&
+            it->second.windowAppFocus.empty() &&
             it->second.windowFocusMap.empty()) {
             g_desktopMaps.erase(it);
         }

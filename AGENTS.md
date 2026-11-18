@@ -1,6 +1,6 @@
 # Agent / contributor guide
 
-Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.45).
+Developer context for `taskbar-recent-focus-highlight.wh.cpp` (v0.11.46).
 
 This file is the index. It holds the rules that always apply and says which
 topic file to read for the task at hand. Read the topic file before changing

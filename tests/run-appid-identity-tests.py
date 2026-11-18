@@ -34,11 +34,12 @@ types = '\n'.join([
     block('struct ButtonState {', '\n};\n'),
     block('struct ButtonIdentity {', '\n};\n'),
     block('struct WindowAppIdEntry {', '\n};\n'),
+    block('struct WindowAppFocus {', '\n};\n'),
 ])
 helpers = '\n'.join([
     function('ButtonState* FindButtonStateLocked('),
     function('std::wstring ProvisionalAppKey('),
-    function('bool IsProvisionalAppKey('),
+    function('bool IsTickDecayed('),
     function('bool IsShellHostFileName('),
     function('int RankIntensity('),
     function('std::wstring AppIdFromAppKey('),
@@ -52,6 +53,7 @@ helpers = '\n'.join([
     function('void ForgetWindowAppId('),
     function('std::wstring LookupWindowAppId('),
     function('std::wstring EnsureButtonIdentity('),
+    function('void DeriveAppsFromWindowsLocked('),
 ])
 
 cpp = r'''
@@ -105,6 +107,11 @@ ULONGLONG GetTickCount64() { return tick; }
 std::atomic<bool> g_unloading{false}, g_taskbandResolveReady{true};
 std::mutex g_buttonStateMutex, g_windowAppIdMutex;
 // HELPERS_DECL
+struct DesktopRecencyState {
+    std::unordered_map<HWND, WindowAppFocus, HwndHash> windowAppFocus;
+    std::unordered_map<std::wstring, AppFocusInfo> appFocusMap;
+};
+#define LOG_DEFERRED(...) ((void)0)
 std::unordered_map<HWND, WindowAppIdEntry, HwndHash> g_windowAppId;
 std::unordered_map<void*, ButtonState> g_buttonStates;
 ButtonCapture g_nextCapture;
@@ -192,10 +199,32 @@ int main() {
     g_settings.excludedPrograms = {L"MICROSOFT.WINDOWSCALCULATOR_8WEKYB3D8BBWE!APP"};
     assert(IsExcludedKey(L"APPID:MICROSOFT.WINDOWSCALCULATOR_8WEKYB3D8BBWE!APP",
                          L"CALCULATOR", L"", L"C:\\WINDOWS\\SYSTEM32\\APPLICATIONFRAMEHOST.EXE"));
-    // Provisional keys: never an AppId, never ranked.
+    // Pending-focus key of a window without a button: never an AppId.
     const std::wstring prov = ProvisionalAppKey(newWin);
-    assert(IsProvisionalAppKey(prov) && AppIdFromAppKey(prov).empty());
-    assert(!AppAppearsOnTaskbar(prov));
+    assert(AppIdFromAppKey(prov).empty() && !AppAppearsOnTaskbar(prov));
+    // Recency is per window; the app is derived from Explorer's AppId at
+    // rank time (Fable 4.3). No AppId yet: recorded, not ranked.
+    {
+        DesktopRecencyState desk;
+        HWND w5 = (HWND)5, w6 = (HWND)6;
+        const std::wstring calc = L"MICROSOFT.WINDOWSCALCULATOR_8WEKYB3D8BBWE!APP";
+        desk.windowAppFocus[w5] = {L"", L"Calculator", L"Calc", L"", L"", 42, 100};
+        DeriveAppsFromWindowsLocked(desk, 0, 200);
+        assert(desk.appFocusMap.empty() && desk.windowAppFocus[w5].key.empty());
+        PublishWindowAppIds({w5, w6}, calc);
+        DeriveAppsFromWindowsLocked(desk, 0, 200);
+        assert(desk.windowAppFocus[w5].key == L"APPID:" + calc);
+        auto& app = desk.appFocusMap[L"APPID:" + calc];
+        assert(app.lastHwnd == w5 && app.lastConfirmedFocusTick == 100);
+        // An older window of the same app does not overwrite a newer one.
+        desk.windowAppFocus[w6] = {L"", L"Calculator", L"Calc 2", L"", L"", 42, 50};
+        DeriveAppsFromWindowsLocked(desk, 0, 200);
+        assert(app.lastHwnd == w5);
+        // Decayed windows go; the app record keeps its history until its own
+        // decay in the recompute.
+        DeriveAppsFromWindowsLocked(desk, 1000, 2000);
+        assert(desk.windowAppFocus.empty() && desk.appFocusMap.size() == 1);
+    }
     // Shell UI is transient, not an app (jump lists, Start menu).
     assert(IsShellHostFileName(L"SHELLEXPERIENCEHOST.EXE"));
     assert(IsShellHostFileName(L"STARTMENUEXPERIENCEHOST.EXE"));

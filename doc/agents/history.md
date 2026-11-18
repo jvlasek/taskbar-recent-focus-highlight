@@ -45,6 +45,10 @@ Short timeline:
   single-loop full-pass binding, `MarkButtonUnranked`. Not done: one
   per-window recency model (4.3), a generic event-watch container (unload
   path, left as is), a catch-logging helper.
+- 0.11.46: one per-window recency model (Fable 4.3): `windowAppFocus` is the
+  record, `DeriveAppsFromWindowsLocked` builds `appFocusMap` by current
+  AppId at each recompute; provisional app keys, `AttributeProvisionalAppsLocked`
+  and the confirm-time AppId retry removed.
 
 ## Review lessons about removed mechanisms
 

@@ -89,7 +89,8 @@ void DisarmHookTimer(UINT_PTR id) {
 bool RecencyMapsEmptyLocked() {
     for (const auto& [id, desk] : g_desktopMaps) {
         (void)id;
-        if (!desk.appFocusMap.empty() || !desk.windowFocusMap.empty()) {
+        if (!desk.appFocusMap.empty() || !desk.windowAppFocus.empty() ||
+            !desk.windowFocusMap.empty()) {
             return false;
         }
     }
@@ -398,15 +399,12 @@ std::wstring AppIdFromAppKey(const std::wstring& key) {
     return key.substr(6);
 }
 
-// Window not (yet) listed by any captured taskbar button. Never ranked.
+// Pending-focus identity of a window not (yet) listed by any captured
+// taskbar button. Never stored in the recency maps.
 std::wstring ProvisionalAppKey(HWND hwnd) {
     wchar_t buf[40];
     swprintf_s(buf, L"WINDOW:%p", hwnd);
     return buf;
-}
-
-bool IsProvisionalAppKey(const std::wstring& key) {
-    return key.rfind(L"WINDOW:", 0) == 0;
 }
 
 std::wstring GetWindowTitle(HWND hWnd);
@@ -523,10 +521,11 @@ std::wstring GetWindowTitle(HWND hWnd) {
 // App key = APPID:<Explorer AppId> of the taskbar button that lists this
 // window (0.11.33; was the window AUMID or process path). A window that no
 // captured button lists yet (just opened, or the mod just loaded and
-// Explorer has not reported its buttons) gets a provisional per-window key
-// (noButton set). Its recency is kept and moved to the AppId key once a
-// button lists the window (AttributeProvisionalAppsLocked); a window that
-// never gets a button (tray widget) is never ranked and decays.
+// Explorer has not reported its buttons) gets a per-window key WINDOW:<hwnd>
+// (noButton set). That key only identifies the pending focus; recency is
+// recorded per window and joins its app once a button lists the window
+// (DeriveAppsFromWindowsLocked). A window that never gets a button (tray
+// widget) is never ranked and decays.
 struct AppIdentity {
     std::wstring key;          // APPID:<AppId>, or provisional WINDOW:<hwnd>
     std::wstring displayName;  // logs / exclude list

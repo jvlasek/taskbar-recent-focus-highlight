@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.45
+// @version         0.11.46
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -545,8 +545,12 @@ enum class MinFocusConfirmMode {
 // Focus / recency state
 // ---------------------------------------------------------------------------
 
+// Per-app record, derived from the window records at each rank recompute
+// (DeriveAppsFromWindowsLocked). It outlives its windows until decay, so an
+// app keeps its rank while another of its windows is open and promotes at
+// once when reopened within the decay time.
 struct AppFocusInfo {
-    std::wstring key;          // APPID:<Explorer AppId> or provisional WINDOW:…
+    std::wstring key;          // APPID:<Explorer AppId>
     std::wstring displayName;  // e.g. WindowsTerminal.exe
     std::wstring lastWindowTitle;  // unmatched-rank logs only
     std::wstring pathUpper;    // process image path (exclusion sweeps)
@@ -576,8 +580,6 @@ struct PendingFocus {
     bool valid = false;
     bool appConfirmed = false;
     bool previewConfirmed = false;
-    // App confirm found no AppId yet: one short wait for a re-seeded pass.
-    bool appIdRetried = false;
 };
 
 // Per-window recency for multi-instance thumbnail previews (separate timers).
@@ -670,12 +672,18 @@ struct GuidEqual {
 };
 
 // App + window recency for one virtual desktop (session-wide, not per-monitor).
-// App-level (min-focus) confirmation of one window. Only used to split an
-// app into per-window rank slots when its windows have their own taskbar
-// buttons ("Never combine" / "combine when full"): one button = one unit.
+// App-level (min-focus) confirmation of one window: the recency record
+// (Fable review 4.3, 0.11.46). The app is not stored with it: each rank
+// recompute looks the window up in Explorer's window -> AppId map, so a
+// window no captured button lists yet is simply not ranked yet (no
+// provisional keys), and a window whose AppId changes follows it. The same
+// records give the per-window slots of uncombined buttons (Never Combine).
 struct WindowAppFocus {
-    std::wstring key;
+    std::wstring key;          // derived APPID:<AppId>; empty = not known yet
+    std::wstring displayName;
     std::wstring title;
+    std::wstring appIdUpper;   // window AUMID (exclude list)
+    std::wstring pathUpper;    // process image path (exclude list)
     DWORD pid = 0;
     ULONGLONG tick = 0;
 };
@@ -1328,7 +1336,8 @@ void DisarmHookTimer(UINT_PTR id) {
 bool RecencyMapsEmptyLocked() {
     for (const auto& [id, desk] : g_desktopMaps) {
         (void)id;
-        if (!desk.appFocusMap.empty() || !desk.windowFocusMap.empty()) {
+        if (!desk.appFocusMap.empty() || !desk.windowAppFocus.empty() ||
+            !desk.windowFocusMap.empty()) {
             return false;
         }
     }
@@ -1637,15 +1646,12 @@ std::wstring AppIdFromAppKey(const std::wstring& key) {
     return key.substr(6);
 }
 
-// Window not (yet) listed by any captured taskbar button. Never ranked.
+// Pending-focus identity of a window not (yet) listed by any captured
+// taskbar button. Never stored in the recency maps.
 std::wstring ProvisionalAppKey(HWND hwnd) {
     wchar_t buf[40];
     swprintf_s(buf, L"WINDOW:%p", hwnd);
     return buf;
-}
-
-bool IsProvisionalAppKey(const std::wstring& key) {
-    return key.rfind(L"WINDOW:", 0) == 0;
 }
 
 std::wstring GetWindowTitle(HWND hWnd);
@@ -1762,10 +1768,11 @@ std::wstring GetWindowTitle(HWND hWnd) {
 // App key = APPID:<Explorer AppId> of the taskbar button that lists this
 // window (0.11.33; was the window AUMID or process path). A window that no
 // captured button lists yet (just opened, or the mod just loaded and
-// Explorer has not reported its buttons) gets a provisional per-window key
-// (noButton set). Its recency is kept and moved to the AppId key once a
-// button lists the window (AttributeProvisionalAppsLocked); a window that
-// never gets a button (tray widget) is never ranked and decays.
+// Explorer has not reported its buttons) gets a per-window key WINDOW:<hwnd>
+// (noButton set). That key only identifies the pending focus; recency is
+// recorded per window and joins its app once a button lists the window
+// (DeriveAppsFromWindowsLocked). A window that never gets a button (tray
+// widget) is never ranked and decays.
 struct AppIdentity {
     std::wstring key;          // APPID:<AppId>, or provisional WINDOW:<hwnd>
     std::wstring displayName;  // logs / exclude list
@@ -1920,54 +1927,51 @@ bool AppAppearsOnTaskbar(const std::wstring& key) {
     return false;
 }
 
-// Requires g_stateMutex. Moves recency recorded under a provisional
-// WINDOW: key to the APPID: key of the button that now lists that window
-// (newer confirmation wins when the app already has a record).
-void AttributeProvisionalAppsLocked(DesktopRecencyState& desk) {
-    std::vector<std::pair<std::wstring, std::wstring>> moves;  // old, new
-    for (const auto& [key, info] : desk.appFocusMap) {
-        if (!IsProvisionalAppKey(key) || !info.lastHwnd ||
-            !HwndMatchesStoredPid(info.lastHwnd, info.lastPid)) {
+// Requires g_stateMutex. Drops dead, recycled and decayed window records,
+// then folds the others into their app's record by the window's current
+// Explorer AppId (newest confirmation wins). A window without a known AppId
+// keeps its record and is folded in once a button lists it.
+void DeriveAppsFromWindowsLocked(DesktopRecencyState& desk,
+                                 ULONGLONG decayMs,
+                                 ULONGLONG now) {
+    for (auto it = desk.windowAppFocus.begin();
+         it != desk.windowAppFocus.end();) {
+        HWND hwnd = it->first;
+        WindowAppFocus& w = it->second;
+        if (!IsWindow(hwnd) || !HwndMatchesStoredPid(hwnd, w.pid) ||
+            IsTickDecayed(w.tick, decayMs, now)) {
+            it = desk.windowAppFocus.erase(it);
             continue;
         }
-        const std::wstring appId = LookupWindowAppId(info.lastHwnd);
-        if (!appId.empty()) {
-            moves.emplace_back(key, std::wstring(L"APPID:") + appId);
+        const std::wstring appId = LookupWindowAppId(hwnd);
+        const std::wstring key =
+            appId.empty() ? std::wstring{} : std::wstring(L"APPID:") + appId;
+        if (key != w.key && !key.empty()) {
+            LOG_DEFERRED(L"Window %p (%s) belongs to %s", hwnd,
+                         w.displayName.c_str(), key.c_str());
         }
-    }
-    for (const auto& [oldKey, newKey] : moves) {
-        auto it = desk.appFocusMap.find(oldKey);
-        if (it == desk.appFocusMap.end()) {
-            continue;
-        }
-        AppFocusInfo moved = std::move(it->second);
-        desk.appFocusMap.erase(it);
-        moved.key = newKey;
-        LOG_DEFERRED(L"Attributed %s window %p to %s", moved.displayName.c_str(),
-               moved.lastHwnd, newKey.c_str());
-        auto& dst = desk.appFocusMap[newKey];
-        if (dst.key.empty() ||
-            moved.lastConfirmedFocusTick > dst.lastConfirmedFocusTick) {
-            dst = std::move(moved);
-        }
-        for (auto& [hwnd, w] : desk.windowAppFocus) {
-            (void)hwnd;
-            if (w.key == oldKey) {
-                w.key = newKey;
+        w.key = key;
+        if (!key.empty()) {
+            AppFocusInfo& app = desk.appFocusMap[key];
+            if (app.key.empty() || w.tick >= app.lastConfirmedFocusTick) {
+                app.key = key;
+                app.displayName = w.displayName;
+                if (!w.title.empty()) {
+                    app.lastWindowTitle = w.title;
+                }
+                app.appIdUpper = w.appIdUpper;
+                app.pathUpper = w.pathUpper;
+                app.lastHwnd = hwnd;
+                app.lastPid = w.pid;
+                app.lastConfirmedFocusTick = w.tick;
             }
         }
-        for (auto& [hwnd, w] : desk.windowFocusMap) {
-            (void)hwnd;
-            if (w.processKey == oldKey) {
-                w.processKey = newKey;
-            }
-        }
+        ++it;
     }
 }
 
 void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
     desk.rankedApps.clear();
-    AttributeProvisionalAppsLocked(desk);
 
     auto settings = SettingsSnap();
     if (g_unloading.load()) {
@@ -1976,6 +1980,7 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
 
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG decayMs = DecayMsFromMinutes(settings->decayMinutes);
+    DeriveAppsFromWindowsLocked(desk, decayMs, now);
 
     std::vector<AppFocusInfo> candidates;
     candidates.reserve(desk.appFocusMap.size());
@@ -2001,14 +2006,7 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
         ++it;
     }
 
-    // Per-window slots. Drop dead/recycled/forgotten windows first.
-    for (auto it = desk.windowAppFocus.begin(); it != desk.windowAppFocus.end();) {
-        const bool keep = IsWindow(it->first) &&
-                          HwndMatchesStoredPid(it->first, it->second.pid) &&
-                          desk.appFocusMap.count(it->second.key) &&
-                          !IsTickDecayed(it->second.tick, decayMs, now);
-        it = keep ? std::next(it) : desk.windowAppFocus.erase(it);
-    }
+    // Per-window slots (window records were pruned by the derive step).
     {
         std::unordered_set<HWND, HwndHash> uncombined;
         {
@@ -6869,28 +6867,6 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         return;
     }
 
-    // A window whose button was captured since focus arrived is recorded
-    // under its AppId right away instead of a provisional key.
-    if (IsProvisionalAppKey(pending.key)) {
-        const std::wstring appId = LookupWindowAppId(pending.hwnd);
-        if (!appId.empty()) {
-            pending.key = std::wstring(L"APPID:") + appId;
-        } else if (mode == MinFocusConfirmMode::FromTimer &&
-                   !pending.appIdRetried) {
-            // Its button may exist but not be tracked yet (newly realized on
-            // this desktop): re-seed in a pass and confirm 300 ms later.
-            {
-                std::lock_guard<std::mutex> lock(g_stateMutex);
-                if (g_pendingFocus.valid && g_pendingFocus.hwnd == pending.hwnd) {
-                    g_pendingFocus.appIdRetried = true;
-                }
-            }
-            ++g_buttonSeedGeneration;
-            RequestApplyVisuals();
-            ArmHookTimer(kMinFocusTimerId, 300);
-            return;
-        }
-    }
     const ULONGLONG now = GetTickCount64();
     pending.desktopId = ConfirmDesktopId(pending.desktopId, pending.hwnd);
     {
@@ -6900,25 +6876,18 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
             InlineIsEqualGUID(pending.desktopId, GUID_NULL)
                 ? CurrentDeskLocked()
                 : DeskStateLocked(pending.desktopId);
-        AppFocusInfo& info = desk.appFocusMap[pending.key];
-        info.key = pending.key;
-        info.displayName = pending.displayName;
+        // The window record is the recency; the recompute below folds it
+        // into its app once Explorer's AppId for the window is known.
+        WindowAppFocus& w = desk.windowAppFocus[pending.hwnd];
+        w.displayName = pending.displayName;
         if (!pending.windowTitle.empty()) {
-            info.lastWindowTitle = pending.windowTitle;
-        }
-        info.lastHwnd = pending.hwnd;
-        info.lastPid = pending.processId ? pending.processId
-                                         : PidFromHwnd(pending.hwnd);
-        info.appIdUpper = appIdUpper;
-        info.pathUpper = pending.pathUpper;
-        info.lastConfirmedFocusTick = now;
-        {
-            WindowAppFocus& w = desk.windowAppFocus[pending.hwnd];
-            w.key = pending.key;
             w.title = pending.windowTitle;
-            w.pid = info.lastPid;
-            w.tick = now;
         }
+        w.appIdUpper = appIdUpper;
+        w.pathUpper = pending.pathUpper;
+        w.pid = pending.processId ? pending.processId
+                                  : PidFromHwnd(pending.hwnd);
+        w.tick = now;
 
         // Preview min-focus is independent: do not stamp the current HWND
         // here. A window switch just before the app deadline must wait out
@@ -6934,10 +6903,16 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         }
 
         RecomputeRanksForDesktopLocked(desk);
-        LOG_DEFERRED(L"Confirmed focus: %s key=%s (map size=%zu, ranks=%zu, "
-               L"title=\"%s\" desktop=%s)",
-               pending.displayName.c_str(), pending.key.c_str(),
-               desk.appFocusMap.size(), desk.rankedApps.size(),
+        auto rec = desk.windowAppFocus.find(pending.hwnd);
+        const std::wstring derived =
+            rec == desk.windowAppFocus.end() || rec->second.key.empty()
+                ? std::wstring(L"(no button yet)")
+                : rec->second.key;
+        LOG_DEFERRED(L"Confirmed focus: %s window=%p app=%s (apps=%zu, "
+               L"windows=%zu, ranks=%zu, title=\"%s\" desktop=%s)",
+               pending.displayName.c_str(), pending.hwnd, derived.c_str(),
+               desk.appFocusMap.size(), desk.windowAppFocus.size(),
+               desk.rankedApps.size(),
                pending.windowTitle.c_str(),
                GuidToLogString(pending.desktopId).c_str());
     }
@@ -7115,7 +7090,18 @@ void HandleForegroundChanged(HWND hWnd) {
             alreadyTracked = !IsTickDecayed(it->second.lastConfirmedFocusTick,
                                             decayMs, now);
         }
-        // Log title only. Identity is path / AUMID, not the window title.
+        // A window confirmed before whose button is not known yet is
+        // tracked too (its record joins the app at the next recompute).
+        if (!alreadyTracked) {
+            auto w = desk.windowAppFocus.find(hWnd);
+            if (w != desk.windowAppFocus.end() &&
+                HwndMatchesStoredPid(hWnd, w->second.pid)) {
+                alreadyTracked = !IsTickDecayed(
+                    w->second.tick,
+                    DecayMsFromMinutes(SettingsSnap()->decayMinutes), now);
+            }
+        }
+        // Log title only. Identity is the AppId, not the window title.
         if (it != desk.appFocusMap.end() && !windowTitle.empty()) {
             it->second.lastWindowTitle = windowTitle;
         }
@@ -7266,6 +7252,7 @@ void OnDecayTimer() {
         RecomputeRanksForDesktopLocked(it->second);
         PruneWindowFocusMapLocked(it->second);
         if (it->second.appFocusMap.empty() &&
+            it->second.windowAppFocus.empty() &&
             it->second.windowFocusMap.empty()) {
             g_desktopMaps.erase(it);
         }
@@ -8017,6 +8004,12 @@ void Wh_ModSettingsChanged() {
                     windowHwnds.push_back(hwnd);
                 }
             }
+            for (const auto& [hwnd, w] : desk.windowAppFocus) {
+                (void)w;
+                if (hwnd) {
+                    windowHwnds.push_back(hwnd);
+                }
+            }
         }
     }
     std::unordered_map<HWND, std::wstring, HwndHash> windowAppIds;
@@ -8039,6 +8032,24 @@ void Wh_ModSettingsChanged() {
                                   it->second.appIdUpper,
                                   it->second.pathUpper)) {
                     it = desk.appFocusMap.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            // Window records too, or the next recompute would derive the
+            // excluded app again.
+            for (auto it = desk.windowAppFocus.begin();
+                 it != desk.windowAppFocus.end();) {
+                auto& w = it->second;
+                if (w.appIdUpper.empty()) {
+                    auto found = windowAppIds.find(it->first);
+                    if (found != windowAppIds.end()) {
+                        w.appIdUpper = found->second;
+                    }
+                }
+                if (IsExcludedKey(w.key, ToUpper(w.displayName), w.appIdUpper,
+                                  w.pathUpper)) {
+                    it = desk.windowAppFocus.erase(it);
                 } else {
                     ++it;
                 }

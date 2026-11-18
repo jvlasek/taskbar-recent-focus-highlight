@@ -140,6 +140,12 @@ void Wh_ModSettingsChanged() {
                     windowHwnds.push_back(hwnd);
                 }
             }
+            for (const auto& [hwnd, w] : desk.windowAppFocus) {
+                (void)w;
+                if (hwnd) {
+                    windowHwnds.push_back(hwnd);
+                }
+            }
         }
     }
     std::unordered_map<HWND, std::wstring, HwndHash> windowAppIds;
@@ -162,6 +168,24 @@ void Wh_ModSettingsChanged() {
                                   it->second.appIdUpper,
                                   it->second.pathUpper)) {
                     it = desk.appFocusMap.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            // Window records too, or the next recompute would derive the
+            // excluded app again.
+            for (auto it = desk.windowAppFocus.begin();
+                 it != desk.windowAppFocus.end();) {
+                auto& w = it->second;
+                if (w.appIdUpper.empty()) {
+                    auto found = windowAppIds.find(it->first);
+                    if (found != windowAppIds.end()) {
+                        w.appIdUpper = found->second;
+                    }
+                }
+                if (IsExcludedKey(w.key, ToUpper(w.displayName), w.appIdUpper,
+                                  w.pathUpper)) {
+                    it = desk.windowAppFocus.erase(it);
                 } else {
                     ++it;
                 }
