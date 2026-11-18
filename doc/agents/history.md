@@ -49,6 +49,10 @@ Short timeline:
   record, `DeriveAppsFromWindowsLocked` builds `appFocusMap` by current
   AppId at each recompute; provisional app keys, `AttributeProvisionalAppsLocked`
   and the confirm-time AppId retry removed.
+- 0.11.47: `doc/code/state-machines.md` observations 1-3: same-window
+  pending survives WINDOW: -> APPID:, app confirm completes a given-up
+  preview track, desktop change checked before the transient early return
+  and in the decay tick, both through `OnVirtualDesktopSwitched`.
 
 ## Review lessons about removed mechanisms
 

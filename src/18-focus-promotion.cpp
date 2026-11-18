@@ -329,6 +329,24 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
 
     EnsureDecayTimerArmed();
 
+    // The preview track may have given up during a long Alt-Tab while the
+    // app track kept waiting; the window is in front again now, so let it
+    // confirm too (its deadline has passed: FromTimer re-checks the
+    // foreground). Otherwise this visit left no preview recency
+    // (state-machines.md, observation 2).
+    if (settings->previewHighlightEnabled) {
+        bool previewPending = false;
+        {
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            previewPending = g_pendingFocus.valid &&
+                             g_pendingFocus.appConfirmed &&
+                             !g_pendingFocus.previewConfirmed;
+        }
+        if (previewPending) {
+            EnsurePendingPreviewTimer();
+        }
+    }
+
     // The UI pass re-binds ranks to buttons; a rank with no button paints
     // nothing but keeps its history.
     RequestApplyVisuals();
@@ -416,6 +434,14 @@ void HandleForegroundChanged(HWND hWnd) {
 
     hWnd = NormalizeFocusHwnd(hWnd);
 
+    // Before the transient check: switching to an empty desktop gives the
+    // desktop / taskbar foreground, which is transient. Every reader that
+    // sees the GUID change runs the full switch steps (state-machines.md,
+    // observation 3).
+    if (RefreshCurrentDesktopId()) {
+        OnVirtualDesktopSwitched();
+    }
+
     if (IsTransientForeground(hWnd)) {
         // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.
         bool ranksNonEmpty = false;
@@ -427,26 +453,6 @@ void HandleForegroundChanged(HWND hWnd) {
             RequestApplyVisualsDebounced();
         }
         return;
-    }
-
-    const bool desktopChanged = RefreshCurrentDesktopId();
-    if (desktopChanged) {
-        ClearButtonRunningGrace();
-        bool droppedPending = false;
-        {
-            std::lock_guard<std::mutex> lock(g_stateMutex);
-            droppedPending = DropPendingIfWrongDesktopLocked();
-        }
-        if (droppedPending) {
-            CancelMinFocusTimer();
-            CancelPreviewMinFocusTimer();
-        }
-        g_pendingOverlaySweep = true;
-        ++g_buttonSeedGeneration;
-        g_reseedOnDebouncedPass = true;
-        RequestApplyVisualsDebounced();
-        RequestApplyVisuals();
-        RequestApplyPreviewVisuals();
     }
 
     const std::optional<AppIdentity> resolved = ResolveAppIdentity(hWnd);
@@ -535,8 +541,17 @@ void HandleForegroundChanged(HWND hWnd) {
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
 
-        if (g_pendingFocus.valid && g_pendingFocus.key == key &&
+        // Same app as the pending focus: same key, or the same window whose
+        // button became known meanwhile (WINDOW:<hwnd> -> APPID:), which
+        // must not restart the app wait (state-machines.md, observation 1).
+        const bool sameApp =
+            g_pendingFocus.key == key ||
+            (g_pendingFocus.hwnd == hWnd &&
+             g_pendingFocus.processId == processId &&
+             g_pendingFocus.key.rfind(L"WINDOW:", 0) == 0);
+        if (g_pendingFocus.valid && sameApp &&
             InlineIsEqualGUID(g_pendingFocus.desktopId, g_currentDesktopId)) {
+            g_pendingFocus.key = key;
             hwndChanged = g_pendingFocus.hwnd != hWnd;
             g_pendingFocus.hwnd = hWnd;
             g_pendingFocus.processId = processId;
@@ -620,7 +635,9 @@ void OnDecayTimer() {
     std::vector<std::wstring> keysAfter;
     size_t windowsBefore = 0;
     size_t windowsAfter = 0;
-    RefreshCurrentDesktopId();
+    if (RefreshCurrentDesktopId()) {
+        OnVirtualDesktopSwitched();  // the tick saw the switch first
+    }
     {
         DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);

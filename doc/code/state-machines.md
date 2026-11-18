@@ -588,13 +588,19 @@ Found while tracing the machines; worth a look, not verified live.
   example after Alt-Tab and back), the key is now `APPID:...`, so
   `HandleForegroundChanged` treats it as another app and restarts the app
   min-focus wait. Phase 4 (read Explorer's `TaskbarAppsList`, drop provisional
-  keys) would remove this.
+  keys) would remove this. **Fixed in 0.11.47:** the same window (HWND + PID)
+  with a pending `WINDOW:` key counts as the same app, and the pending key is
+  upgraded to the `APPID:` key. (0.11.46 already keeps recency per window, so
+  `WINDOW:` exists only as this pending identity.)
 - **Lingering candidate.** If the preview track gives up but the app track
   later confirms, the candidate stays valid with `appConfirmed` set until the
   next foreground change, and that window gets no preview recency for this
   visit. One way there with default timers: hold Alt-Tab from about 1 s to
   past 3 s (preview deadline 1 s + 2 s grace), then land back on the same
   app without a new foreground event; the app track (8 s) still confirms.
+  **Fixed in 0.11.47:** after the app confirm, a still-unconfirmed preview
+  track is resumed (`EnsurePendingPreviewTimer`; its deadline has passed, so
+  it confirms if the window is in front).
 - **Desktop switch first seen by the decay tick.** `OnDecayTimer` calls
   `RefreshCurrentDesktopId` and ignores whether the desktop changed. If the
   registry still had the old GUID when `EVENT_SYSTEM_DESKTOPSWITCH` was
@@ -603,7 +609,10 @@ Found while tracing the machines; worth a look, not verified live.
   of machine 8 (grace clear, sweep, re-seed, repaint). The next foreground
   change does not catch up either, because the GUID no longer differs. This
   needs no foreground change between the switch and the tick, for example a
-  switch to an empty desktop.
+  switch to an empty desktop. **Fixed in 0.11.47:** `HandleForegroundChanged`
+  checks the desktop before its transient early return (an empty desktop
+  gives the desktop / taskbar foreground), and the decay tick runs
+  `OnVirtualDesktopSwitched` when it sees the change first.
 - **Two clocks for one rebind debounce.** The worker's 300 ms timer
   (`g_fullRebindTimerArmed`) and the UI's `g_lastFullRefreshTick` (per thread)
   both debounce full passes; machine 6 shows how they meet.
