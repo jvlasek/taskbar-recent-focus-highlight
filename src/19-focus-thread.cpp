@@ -63,7 +63,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             HandleForegroundNotification(reinterpret_cast<HWND>(wParam));
             return 0;
         case WM_APP_DESKTOP_SWITCHED:
-            OnVirtualDesktopSwitched();
+            OnVirtualDesktopSwitched(L"input desktop: lock / UAC");
             return 0;
         case WM_APP_SHUTDOWN:
             PostQuitMessage(0);
@@ -317,7 +317,7 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
                 g_desktopKeyWatchActive = false;
             }
             if (!g_unloading.load() && RefreshCurrentDesktopId()) {
-                OnVirtualDesktopSwitched();
+                OnVirtualDesktopSwitched(L"registry");
             }
             continue;
         }

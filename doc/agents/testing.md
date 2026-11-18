@@ -56,7 +56,7 @@ adds an independent foreground observer.
 |-----------|---------|
 | `Focus candidate:` / `Confirmed focus:` | App recency |
 | `Preview focus confirmed:` | Window recency |
-| `Current virtual desktop:` / `Virtual desktop switch:` | Per-desktop recency |
+| `Current virtual desktop:` / `Desktop switch (<reason>):` | Per-desktop recency; reason = registry, input desktop (lock / UAC), foreground (watch fallback), decay tick |
 | `Button identity:` | A button's Explorer AppId changed (first capture, reuse) |
 | `Identity state:` | A button's running state changed |
 | `Window … belongs to APPID:…` | A window record joined (or changed) its app at a recompute |

@@ -192,7 +192,9 @@ bool DropPendingIfWrongDesktopLocked() {
     return false;
 }
 
-void OnVirtualDesktopSwitched() {
+// reason: what noticed it, for the log. The input-desktop event (lock
+// screen, UAC) runs the same steps without a virtual-desktop change.
+void OnVirtualDesktopSwitched(PCWSTR reason) {
     if (g_unloading.load()) {
         return;
     }
@@ -206,8 +208,8 @@ void OnVirtualDesktopSwitched() {
         // Do not recompute here: grace was just cleared, so every path would
         // fail AppAppearsOnTaskbar. ApplyAllHighlights snapshots IsRunning
         // on the UI thread, then recomputes.
-        LOG_DEFERRED(L"Virtual desktop switch: %s droppedPending=%d",
-               GuidToLogString(g_currentDesktopId).c_str(),
+        LOG_DEFERRED(L"Desktop switch (%s): current %s droppedPending=%d",
+               reason, GuidToLogString(g_currentDesktopId).c_str(),
                droppedPending ? 1 : 0);
     }
     if (droppedPending) {

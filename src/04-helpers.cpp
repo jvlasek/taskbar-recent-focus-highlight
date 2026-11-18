@@ -473,7 +473,10 @@ bool IsShellHostFileName(const std::wstring& fileNameUpper) {
            fileNameUpper == L"STARTMENUEXPERIENCEHOST.EXE" ||
            fileNameUpper == L"SHELLEXPERIENCEHOST.EXE" ||
            fileNameUpper == L"SHELLHOST.EXE" ||
-           fileNameUpper == L"TEXTINPUTHOST.EXE";
+           fileNameUpper == L"TEXTINPUTHOST.EXE" ||
+           // Lock screen: shell UI, not an app (0.11.49 sleep capture: it
+           // was confirmed as focus on wake).
+           fileNameUpper == L"LOCKAPP.EXE";
 }
 
 // Ordinary File Explorer windows. Same process as the taskbar, but they are

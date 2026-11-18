@@ -440,7 +440,7 @@ void HandleForegroundChanged(HWND hWnd) {
     // transient. Every reader that sees the GUID change runs the full
     // switch steps (state-machines.md, observation 3).
     if (!g_desktopKeyWatchActive && RefreshCurrentDesktopId()) {
-        OnVirtualDesktopSwitched();
+        OnVirtualDesktopSwitched(L"foreground");
     }
 
     if (IsTransientForeground(hWnd)) {
@@ -637,7 +637,7 @@ void OnDecayTimer() {
     size_t windowsBefore = 0;
     size_t windowsAfter = 0;
     if (RefreshCurrentDesktopId()) {
-        OnVirtualDesktopSwitched();  // the tick saw the switch first
+        OnVirtualDesktopSwitched(L"decay tick");  // it saw the switch first
     }
     {
         DeferredLogScope logScope;  // logs after unlock

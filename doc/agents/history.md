@@ -62,6 +62,9 @@ Short timeline:
   `HKCU\...\Explorer\VirtualDesktops` in the focus thread's wait loop
   (`MsgWaitForMultipleObjectsEx`); the per-foreground read is only the
   fallback when the watch fails, the decay tick keeps its read.
+- 0.11.50: `LOCKAPP.EXE` is shell UI (sleep capture: the lock screen was
+  confirmed as focus on wake); `OnVirtualDesktopSwitched(reason)` logs
+  `Desktop switch (<reason>)`.
 
 ## Review lessons about removed mechanisms
 

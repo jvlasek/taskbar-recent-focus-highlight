@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.49
+// @version         0.11.50
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -1222,7 +1222,9 @@ bool DropPendingIfWrongDesktopLocked() {
     return false;
 }
 
-void OnVirtualDesktopSwitched() {
+// reason: what noticed it, for the log. The input-desktop event (lock
+// screen, UAC) runs the same steps without a virtual-desktop change.
+void OnVirtualDesktopSwitched(PCWSTR reason) {
     if (g_unloading.load()) {
         return;
     }
@@ -1236,8 +1238,8 @@ void OnVirtualDesktopSwitched() {
         // Do not recompute here: grace was just cleared, so every path would
         // fail AppAppearsOnTaskbar. ApplyAllHighlights snapshots IsRunning
         // on the UI thread, then recomputes.
-        LOG_DEFERRED(L"Virtual desktop switch: %s droppedPending=%d",
-               GuidToLogString(g_currentDesktopId).c_str(),
+        LOG_DEFERRED(L"Desktop switch (%s): current %s droppedPending=%d",
+               reason, GuidToLogString(g_currentDesktopId).c_str(),
                droppedPending ? 1 : 0);
     }
     if (droppedPending) {
@@ -1727,7 +1729,10 @@ bool IsShellHostFileName(const std::wstring& fileNameUpper) {
            fileNameUpper == L"STARTMENUEXPERIENCEHOST.EXE" ||
            fileNameUpper == L"SHELLEXPERIENCEHOST.EXE" ||
            fileNameUpper == L"SHELLHOST.EXE" ||
-           fileNameUpper == L"TEXTINPUTHOST.EXE";
+           fileNameUpper == L"TEXTINPUTHOST.EXE" ||
+           // Lock screen: shell UI, not an app (0.11.49 sleep capture: it
+           // was confirmed as focus on wake).
+           fileNameUpper == L"LOCKAPP.EXE";
 }
 
 // Ordinary File Explorer windows. Same process as the taskbar, but they are
@@ -7037,7 +7042,7 @@ void HandleForegroundChanged(HWND hWnd) {
     // transient. Every reader that sees the GUID change runs the full
     // switch steps (state-machines.md, observation 3).
     if (!g_desktopKeyWatchActive && RefreshCurrentDesktopId()) {
-        OnVirtualDesktopSwitched();
+        OnVirtualDesktopSwitched(L"foreground");
     }
 
     if (IsTransientForeground(hWnd)) {
@@ -7234,7 +7239,7 @@ void OnDecayTimer() {
     size_t windowsBefore = 0;
     size_t windowsAfter = 0;
     if (RefreshCurrentDesktopId()) {
-        OnVirtualDesktopSwitched();  // the tick saw the switch first
+        OnVirtualDesktopSwitched(L"decay tick");  // it saw the switch first
     }
     {
         DeferredLogScope logScope;  // logs after unlock
@@ -7427,7 +7432,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             HandleForegroundNotification(reinterpret_cast<HWND>(wParam));
             return 0;
         case WM_APP_DESKTOP_SWITCHED:
-            OnVirtualDesktopSwitched();
+            OnVirtualDesktopSwitched(L"input desktop: lock / UAC");
             return 0;
         case WM_APP_SHUTDOWN:
             PostQuitMessage(0);
@@ -7681,7 +7686,7 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
                 g_desktopKeyWatchActive = false;
             }
             if (!g_unloading.load() && RefreshCurrentDesktopId()) {
-                OnVirtualDesktopSwitched();
+                OnVirtualDesktopSwitched(L"registry");
             }
             continue;
         }

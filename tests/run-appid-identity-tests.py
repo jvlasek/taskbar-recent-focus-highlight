@@ -228,6 +228,7 @@ int main() {
     // Shell UI is transient, not an app (jump lists, Start menu).
     assert(IsShellHostFileName(L"SHELLEXPERIENCEHOST.EXE"));
     assert(IsShellHostFileName(L"STARTMENUEXPERIENCEHOST.EXE"));
+    assert(IsShellHostFileName(L"LOCKAPP.EXE"));
     assert(!IsShellHostFileName(L"TOTALCMD64.EXE"));
     // Ranks 4+ fade from rank 3 instead of repeating it.
     const int per[3] = {100, 70, 45};
