@@ -58,6 +58,10 @@ Short timeline:
   flashing button on an empty desktop switched back, the focus event came
   before the registry update, and the mod kept the empty desktop (no glows)
   for 15 s until the decay tick.
+- 0.11.49: replaced by a `RegNotifyChangeKeyValue` watch on
+  `HKCU\...\Explorer\VirtualDesktops` in the focus thread's wait loop
+  (`MsgWaitForMultipleObjectsEx`); the per-foreground read is only the
+  fallback when the watch fails, the decay tick keeps its read.
 
 ## Review lessons about removed mechanisms
 

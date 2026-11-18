@@ -25,7 +25,9 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
 ```
 
 - **Why a worker thread:** out-of-context WinEvents, the shell hook and the
-  timers need a message pump, and every cross-process read (process path,
+  timers need a message pump (since 0.11.49 `MsgWaitForMultipleObjectsEx`
+  that also waits on the VirtualDesktops registry-change event; the key is
+  closed when the thread exits),, and every cross-process read (process path,
   window AUMID, registry) stays off the taskbar paint path.
 - **Why marshal to the UI thread:** XAML runs on its tree's dispatcher.
   `RunOnUiThread` posts to the agile `CoreDispatcher`s recorded by

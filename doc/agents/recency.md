@@ -10,7 +10,7 @@ in `identity.md`.
 |----------|--------|-----------|
 | App rank key | `APPID:<Explorer AppId>` of the button that lists the window, derived at each recompute from the per-window records (`DeriveAppsFromWindowsLocked`); a window without a known AppId is recorded but not ranked | One taskbar button = one app, by Explorer's own grouping (see `identity.md`) |
 | Recency scope | Per virtual desktop GUID | Workspaces don’t share top-N |
-| Current desktop | Registry `CurrentVirtualDesktop`, VDM fallback; read on every foreground change (before the transient early return), 0.4 / 1.6 / 2.8 s after it (registry written late), and on the decay tick; any reader that sees a change runs `OnVirtualDesktopSwitched` | Public APIs only |
+| Current desktop | Registry `CurrentVirtualDesktop`, VDM fallback. Switches come from a `RegNotifyChangeKeyValue` watch on the `VirtualDesktops` key (focus thread, 0.11.49); without it, every foreground change reads the value (before the transient early return). The decay tick reads it too. Any reader that sees a change runs `OnVirtualDesktopSwitched` | Public APIs only; the watch fires when Explorer writes the value, which can be after the foreground change of the switch |
 | Window key | `HWND` + PID (per desktop map) | Multi-instance previews; PID rejects a recycled handle |
 | App last HWND | `lastHwnd` + `lastPid` | Same recycle guard as preview; HWND-only would bind the rank to whichever button now owns the handle |
 | Display name | Win32: file name; UWP host: window title (else AUMID stem) | Logs / exclude UX |

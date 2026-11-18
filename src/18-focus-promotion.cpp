@@ -434,15 +434,14 @@ void HandleForegroundChanged(HWND hWnd) {
 
     hWnd = NormalizeFocusHwnd(hWnd);
 
-    // Before the transient check: switching to an empty desktop gives the
-    // desktop / taskbar foreground, which is transient. Every reader that
-    // sees the GUID change runs the full switch steps (state-machines.md,
-    // observation 3).
-    if (RefreshCurrentDesktopId()) {
+    // Normally the registry watch on the focus thread reports switches.
+    // Without it, read here, before the transient check: switching to an
+    // empty desktop gives the desktop / taskbar foreground, which is
+    // transient. Every reader that sees the GUID change runs the full
+    // switch steps (state-machines.md, observation 3).
+    if (!g_desktopKeyWatchActive && RefreshCurrentDesktopId()) {
         OnVirtualDesktopSwitched();
     }
-    g_desktopRechecksLeft = 3;
-    ArmHookTimer(kDesktopRecheckTimerId, kDesktopRecheckMs);
 
     if (IsTransientForeground(hWnd)) {
         // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.

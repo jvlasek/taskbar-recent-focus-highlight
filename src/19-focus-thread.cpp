@@ -131,15 +131,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                 OnPreviewMinFocusTimerElapsed();
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
-            } else if (wParam == kDesktopRecheckTimerId) {
-                KillTimer(hWnd, kDesktopRecheckTimerId);
-                if (RefreshCurrentDesktopId()) {
-                    OnVirtualDesktopSwitched();
-                    g_desktopRechecksLeft = 0;
-                } else if (--g_desktopRechecksLeft > 0) {
-                    SetTimer(hWnd, kDesktopRecheckTimerId,
-                             3 * kDesktopRecheckMs, nullptr);
-                }
+
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
@@ -154,12 +146,46 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
-            KillTimer(hWnd, kDesktopRecheckTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }
     return DefWindowProc(hWnd, msg, wParam, lParam);
 }
+
+// Registry watch for virtual-desktop switches (see g_desktopKeyWatchActive).
+// One-shot: re-armed after every signal, before the value is read, so no
+// write between the two is missed. Closing the key ends the registration.
+struct DesktopKeyWatch {
+    HKEY key = nullptr;
+    HANDLE event = nullptr;
+
+    bool Arm() {
+        return key && event &&
+               RegNotifyChangeKeyValue(key, FALSE, REG_NOTIFY_CHANGE_LAST_SET,
+                                       event, TRUE) == ERROR_SUCCESS;
+    }
+    bool Open() {
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                          L"Software\\Microsoft\\Windows\\CurrentVersion\\"
+                          L"Explorer\\VirtualDesktops",
+                          0, KEY_NOTIFY, &key) != ERROR_SUCCESS) {
+            key = nullptr;
+            return false;
+        }
+        event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        return Arm();
+    }
+    void Close() {
+        if (key) {
+            RegCloseKey(key);
+            key = nullptr;
+        }
+        if (event) {
+            CloseHandle(event);
+            event = nullptr;
+        }
+    }
+};
 
 DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
     g_hookThreadId.store(GetCurrentThreadId(), std::memory_order_release);
@@ -257,6 +283,17 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
         Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook installed");
     }
 
+    DesktopKeyWatch desktopWatch;
+    g_desktopKeyWatchActive = desktopWatch.Open();
+    if (g_desktopKeyWatchActive) {
+        Wh_Log(L"Virtual desktop registry watch installed");
+    } else {
+        Wh_Log(L"Virtual desktop registry watch failed: %u; reading the "
+               L"desktop on each foreground change",
+               GetLastError());
+        desktopWatch.Close();
+    }
+
     RefreshCurrentDesktopId();
 
     if (HWND fg = GetForegroundWindow()) {
@@ -264,18 +301,43 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
                     reinterpret_cast<WPARAM>(fg), 0);
     }
 
-    MSG msg;
-    BOOL bRet;
-    while ((bRet = GetMessage(&msg, nullptr, 0, 0)) != 0) {
-        if (bRet == -1) {
+    // Messages (WinEvents, shell hook, timers, posted work) plus the
+    // desktop key event.
+    bool quit = false;
+    while (!quit) {
+        const DWORD handles = desktopWatch.event ? 1 : 0;
+        const DWORD r = MsgWaitForMultipleObjectsEx(
+            handles, handles ? &desktopWatch.event : nullptr, INFINITE,
+            QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        if (handles && r == WAIT_OBJECT_0) {
+            if (!desktopWatch.Arm()) {
+                Wh_Log(L"Virtual desktop registry watch lost; reading the "
+                       L"desktop on each foreground change");
+                desktopWatch.Close();
+                g_desktopKeyWatchActive = false;
+            }
+            if (!g_unloading.load() && RefreshCurrentDesktopId()) {
+                OnVirtualDesktopSwitched();
+            }
+            continue;
+        }
+        if (r != WAIT_OBJECT_0 + handles) {
+            Wh_Log(L"Focus thread wait failed: %u", GetLastError());
             break;
         }
-        if (msg.message == WM_APP && msg.hwnd == nullptr) {
-            break;
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT ||
+                (msg.message == WM_APP && msg.hwnd == nullptr)) {
+                quit = true;
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
     }
+    desktopWatch.Close();
+    g_desktopKeyWatchActive = false;
 
     if (hook) {
         UnhookWinEvent(hook);

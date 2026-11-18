@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.48
+// @version         0.11.49
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -974,13 +974,13 @@ constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
-// The registry's CurrentVirtualDesktop can be written after the foreground
-// change that a desktop switch causes (clicking a flashing button of another
-// desktop: Claude, 2026-11-18). Re-read it a moment after each foreground
-// change: at kDesktopRecheckMs, then twice more 3x that apart (~3 s).
-constexpr UINT_PTR kDesktopRecheckTimerId = 5;
-constexpr UINT kDesktopRecheckMs = 400;
-int g_desktopRechecksLeft = 0;  // hook thread only
+// Change notification on Explorer's VirtualDesktops registry key (public
+// RegNotifyChangeKeyValue). Windows writes CurrentVirtualDesktop there on a
+// switch, sometimes after the foreground change the switch causes (clicking
+// a flashing button of another desktop, 2026-11-18), so the write itself is
+// the signal. Hook thread only. When the watch could not be set up, every
+// foreground change re-reads the value instead.
+bool g_desktopKeyWatchActive = false;
 // Owned and accessed only by the focus thread.
 UINT g_shellHookMessage = 0;
 constexpr UINT kDecayCheckIntervalMs = 30 * 1000;
@@ -7031,15 +7031,14 @@ void HandleForegroundChanged(HWND hWnd) {
 
     hWnd = NormalizeFocusHwnd(hWnd);
 
-    // Before the transient check: switching to an empty desktop gives the
-    // desktop / taskbar foreground, which is transient. Every reader that
-    // sees the GUID change runs the full switch steps (state-machines.md,
-    // observation 3).
-    if (RefreshCurrentDesktopId()) {
+    // Normally the registry watch on the focus thread reports switches.
+    // Without it, read here, before the transient check: switching to an
+    // empty desktop gives the desktop / taskbar foreground, which is
+    // transient. Every reader that sees the GUID change runs the full
+    // switch steps (state-machines.md, observation 3).
+    if (!g_desktopKeyWatchActive && RefreshCurrentDesktopId()) {
         OnVirtualDesktopSwitched();
     }
-    g_desktopRechecksLeft = 3;
-    ArmHookTimer(kDesktopRecheckTimerId, kDesktopRecheckMs);
 
     if (IsTransientForeground(hWnd)) {
         // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.
@@ -7496,15 +7495,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                 OnPreviewMinFocusTimerElapsed();
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
-            } else if (wParam == kDesktopRecheckTimerId) {
-                KillTimer(hWnd, kDesktopRecheckTimerId);
-                if (RefreshCurrentDesktopId()) {
-                    OnVirtualDesktopSwitched();
-                    g_desktopRechecksLeft = 0;
-                } else if (--g_desktopRechecksLeft > 0) {
-                    SetTimer(hWnd, kDesktopRecheckTimerId,
-                             3 * kDesktopRecheckMs, nullptr);
-                }
+
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
@@ -7519,12 +7510,46 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
-            KillTimer(hWnd, kDesktopRecheckTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }
     return DefWindowProc(hWnd, msg, wParam, lParam);
 }
+
+// Registry watch for virtual-desktop switches (see g_desktopKeyWatchActive).
+// One-shot: re-armed after every signal, before the value is read, so no
+// write between the two is missed. Closing the key ends the registration.
+struct DesktopKeyWatch {
+    HKEY key = nullptr;
+    HANDLE event = nullptr;
+
+    bool Arm() {
+        return key && event &&
+               RegNotifyChangeKeyValue(key, FALSE, REG_NOTIFY_CHANGE_LAST_SET,
+                                       event, TRUE) == ERROR_SUCCESS;
+    }
+    bool Open() {
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                          L"Software\\Microsoft\\Windows\\CurrentVersion\\"
+                          L"Explorer\\VirtualDesktops",
+                          0, KEY_NOTIFY, &key) != ERROR_SUCCESS) {
+            key = nullptr;
+            return false;
+        }
+        event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        return Arm();
+    }
+    void Close() {
+        if (key) {
+            RegCloseKey(key);
+            key = nullptr;
+        }
+        if (event) {
+            CloseHandle(event);
+            event = nullptr;
+        }
+    }
+};
 
 DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
     g_hookThreadId.store(GetCurrentThreadId(), std::memory_order_release);
@@ -7622,6 +7647,17 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
         Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook installed");
     }
 
+    DesktopKeyWatch desktopWatch;
+    g_desktopKeyWatchActive = desktopWatch.Open();
+    if (g_desktopKeyWatchActive) {
+        Wh_Log(L"Virtual desktop registry watch installed");
+    } else {
+        Wh_Log(L"Virtual desktop registry watch failed: %u; reading the "
+               L"desktop on each foreground change",
+               GetLastError());
+        desktopWatch.Close();
+    }
+
     RefreshCurrentDesktopId();
 
     if (HWND fg = GetForegroundWindow()) {
@@ -7629,18 +7665,43 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
                     reinterpret_cast<WPARAM>(fg), 0);
     }
 
-    MSG msg;
-    BOOL bRet;
-    while ((bRet = GetMessage(&msg, nullptr, 0, 0)) != 0) {
-        if (bRet == -1) {
+    // Messages (WinEvents, shell hook, timers, posted work) plus the
+    // desktop key event.
+    bool quit = false;
+    while (!quit) {
+        const DWORD handles = desktopWatch.event ? 1 : 0;
+        const DWORD r = MsgWaitForMultipleObjectsEx(
+            handles, handles ? &desktopWatch.event : nullptr, INFINITE,
+            QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        if (handles && r == WAIT_OBJECT_0) {
+            if (!desktopWatch.Arm()) {
+                Wh_Log(L"Virtual desktop registry watch lost; reading the "
+                       L"desktop on each foreground change");
+                desktopWatch.Close();
+                g_desktopKeyWatchActive = false;
+            }
+            if (!g_unloading.load() && RefreshCurrentDesktopId()) {
+                OnVirtualDesktopSwitched();
+            }
+            continue;
+        }
+        if (r != WAIT_OBJECT_0 + handles) {
+            Wh_Log(L"Focus thread wait failed: %u", GetLastError());
             break;
         }
-        if (msg.message == WM_APP && msg.hwnd == nullptr) {
-            break;
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT ||
+                (msg.message == WM_APP && msg.hwnd == nullptr)) {
+                quit = true;
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
     }
+    desktopWatch.Close();
+    g_desktopKeyWatchActive = false;
 
     if (hook) {
         UnhookWinEvent(hook);
