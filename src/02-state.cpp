@@ -431,6 +431,13 @@ constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
+// The registry's CurrentVirtualDesktop can be written after the foreground
+// change that a desktop switch causes (clicking a flashing button of another
+// desktop: Claude, 2026-11-18). Re-read it a moment after each foreground
+// change: at kDesktopRecheckMs, then twice more 3x that apart (~3 s).
+constexpr UINT_PTR kDesktopRecheckTimerId = 5;
+constexpr UINT kDesktopRecheckMs = 400;
+int g_desktopRechecksLeft = 0;  // hook thread only
 // Owned and accessed only by the focus thread.
 UINT g_shellHookMessage = 0;
 constexpr UINT kDecayCheckIntervalMs = 30 * 1000;

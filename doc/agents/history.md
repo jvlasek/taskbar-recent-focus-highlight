@@ -53,6 +53,11 @@ Short timeline:
   pending survives WINDOW: -> APPID:, app confirm completes a given-up
   preview track, desktop change checked before the transient early return
   and in the decay tick, both through `OnVirtualDesktopSwitched`.
+- 0.11.48: desktop re-check timer (`kDesktopRecheckTimerId`, 0.4 / 1.6 /
+  2.8 s after a foreground change). Live 2026-11-18: clicking Claude's
+  flashing button on an empty desktop switched back, the focus event came
+  before the registry update, and the mod kept the empty desktop (no glows)
+  for 15 s until the decay tick.
 
 ## Review lessons about removed mechanisms
 

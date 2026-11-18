@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.47
+// @version         0.11.48
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -974,6 +974,13 @@ constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
+// The registry's CurrentVirtualDesktop can be written after the foreground
+// change that a desktop switch causes (clicking a flashing button of another
+// desktop: Claude, 2026-11-18). Re-read it a moment after each foreground
+// change: at kDesktopRecheckMs, then twice more 3x that apart (~3 s).
+constexpr UINT_PTR kDesktopRecheckTimerId = 5;
+constexpr UINT kDesktopRecheckMs = 400;
+int g_desktopRechecksLeft = 0;  // hook thread only
 // Owned and accessed only by the focus thread.
 UINT g_shellHookMessage = 0;
 constexpr UINT kDecayCheckIntervalMs = 30 * 1000;
@@ -7031,6 +7038,8 @@ void HandleForegroundChanged(HWND hWnd) {
     if (RefreshCurrentDesktopId()) {
         OnVirtualDesktopSwitched();
     }
+    g_desktopRechecksLeft = 3;
+    ArmHookTimer(kDesktopRecheckTimerId, kDesktopRecheckMs);
 
     if (IsTransientForeground(hWnd)) {
         // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.
@@ -7487,6 +7496,15 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                 OnPreviewMinFocusTimerElapsed();
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
+            } else if (wParam == kDesktopRecheckTimerId) {
+                KillTimer(hWnd, kDesktopRecheckTimerId);
+                if (RefreshCurrentDesktopId()) {
+                    OnVirtualDesktopSwitched();
+                    g_desktopRechecksLeft = 0;
+                } else if (--g_desktopRechecksLeft > 0) {
+                    SetTimer(hWnd, kDesktopRecheckTimerId,
+                             3 * kDesktopRecheckMs, nullptr);
+                }
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
@@ -7501,6 +7519,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
+            KillTimer(hWnd, kDesktopRecheckTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }

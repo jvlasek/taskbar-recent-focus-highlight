@@ -441,6 +441,8 @@ void HandleForegroundChanged(HWND hWnd) {
     if (RefreshCurrentDesktopId()) {
         OnVirtualDesktopSwitched();
     }
+    g_desktopRechecksLeft = 3;
+    ArmHookTimer(kDesktopRecheckTimerId, kDesktopRecheckMs);
 
     if (IsTransientForeground(hWnd)) {
         // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.

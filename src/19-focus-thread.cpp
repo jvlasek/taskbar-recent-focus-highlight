@@ -131,6 +131,15 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                 OnPreviewMinFocusTimerElapsed();
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
+            } else if (wParam == kDesktopRecheckTimerId) {
+                KillTimer(hWnd, kDesktopRecheckTimerId);
+                if (RefreshCurrentDesktopId()) {
+                    OnVirtualDesktopSwitched();
+                    g_desktopRechecksLeft = 0;
+                } else if (--g_desktopRechecksLeft > 0) {
+                    SetTimer(hWnd, kDesktopRecheckTimerId,
+                             3 * kDesktopRecheckMs, nullptr);
+                }
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
@@ -145,6 +154,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
+            KillTimer(hWnd, kDesktopRecheckTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }
