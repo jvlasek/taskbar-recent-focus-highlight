@@ -55,7 +55,7 @@ while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
 plate for rank 1, title tint for ranks 2+); also an outline, an outline
-around the title (two experimental variants), a thin bar under the title, or none for
+around the title (three experimental variants), a thin bar under the title, or none for
 ranks 2+.
 
 If you only want the active window highlighted in previews,
@@ -239,7 +239,8 @@ to clear highlights.
         Icons → Thickness). Title outline (experimental) = the title wash
         with an accent border, like Outline but only around the title. Title
         plate outline (experimental) = Outline cut short under the title
-        (same card edges and corners).
+        (same card edges and corners). Inset title plate outline
+        (experimental) = the same, 4 px in from the card edges.
         Plate and Outline keep the card's own rounded corners and stay
         visible on hover.
       $options:
@@ -248,6 +249,7 @@ to clear highlights.
       - titleBg: Title background tint
       - titleOutline: Title with accent outline (experimental)
       - titlePlateOutline: Title plate with accent outline (experimental)
+      - titleInsetOutline: Inset title plate with accent outline (experimental)
       - titleBar: Bar under window title
     - restStyle: titleBg
       $name: Ranks 2+ style
@@ -258,6 +260,7 @@ to clear highlights.
       - titleBg: Title background tint
       - titleOutline: Title with accent outline (experimental)
       - titlePlateOutline: Title plate with accent outline (experimental)
+      - titleInsetOutline: Inset title plate with accent outline (experimental)
       - titleBar: Bar under window title
       - plate: Whole preview plate
       - outline: Plate with accent outline
@@ -265,7 +268,7 @@ to clear highlights.
     - outlineThickness: 2
       $name: Outline thickness
       $description: >-
-        Border width in pixels for the Outline and both Title outline styles
+        Border width in pixels for the Outline and the Title outline styles
         (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
@@ -415,6 +418,7 @@ enum class PreviewStyle {
     Outline,    // plate plus an accent border (card overlay)
     TitleOutline,  // title strip with an accent border (experimental)
     TitlePlateOutline,  // same, flush with the card edges (experimental)
+    TitleInsetOutline,  // same, 4px in from the card edges (experimental)
     None,       // not marked (ranks 2+ only)
 };
 
@@ -444,6 +448,7 @@ constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
     {L"titleBg", PreviewStyle::TitleBg},   {L"titleBar", PreviewStyle::TitleBar},
     {L"titleOutline", PreviewStyle::TitleOutline},
     {L"titlePlateOutline", PreviewStyle::TitlePlateOutline},
+    {L"titleInsetOutline", PreviewStyle::TitleInsetOutline},
     {L"none", PreviewStyle::None},
 };
 constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {
@@ -5640,14 +5645,19 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
 
         if (paintStyle == PreviewStyle::TitleBg ||
             paintStyle == PreviewStyle::TitleOutline ||
-            paintStyle == PreviewStyle::TitlePlateOutline) {
+            paintStyle == PreviewStyle::TitlePlateOutline ||
+            paintStyle == PreviewStyle::TitleInsetOutline) {
             // Title outline (experimental): the titleBg strip with an accent
             // border and half the tint, like Outline does for the card.
-            // Title plate outline (experimental): the same, but flush with
-            // the card (see below).
+            // Title plate outline / title inset outline (experimental): the
+            // same, but placed from the card's edges (see below), 0 or 4px
+            // in from them.
             const bool outline = paintStyle != PreviewStyle::TitleBg;
-            const bool cardEdges =
-                paintStyle == PreviewStyle::TitlePlateOutline;
+            const double edgeInset =
+                paintStyle == PreviewStyle::TitlePlateOutline   ? 0.0
+                : paintStyle == PreviewStyle::TitleInsetOutline ? 4.0
+                                                                : -1.0;
+            const bool cardEdges = edgeInset >= 0.0;
             const double stroke =
                 outline ? settings->previewOutlineThickness : 0.0;
             double top = 4.0;
@@ -5672,12 +5682,14 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 double w = (std::max)(24.0, cardW - 2.0 * pad);
                 // Brace-init {4} only fills TopLeft (C++ struct). All four.
                 CornerRadius radius{4, 4, 4, 4};
-                bool flush = false;
+                bool fromCard = false;
                 if (cardEdges && laidOut) {
-                    // Title plate outline: the top of the card plate — flush
-                    // with the card's BackgroundBorder (edges and corner
-                    // radius) — ending under the title, with the same gap
-                    // below the title as above it (at most 8px + border).
+                    // From the card's BackgroundBorder: `edgeInset` in from
+                    // its left, top and right edges, corners following the
+                    // card's (its radius minus the inset), ending under the
+                    // title with the gap above the title mirrored below it
+                    // (at most 8px - inset + border). Inset 0 = the top of
+                    // the card plate.
                     try {
                         if (auto bb = FindThumbnailBackgroundBorder(thumbView)) {
                             const double bw = bb.ActualWidth();
@@ -5685,24 +5697,32 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                                 bb.TransformToVisual(host).TransformPoint(
                                     winrt::Windows::Foundation::Point{0.f,
                                                                       0.f});
-                            const double gap =
-                                (std::min)(titleTop - origin.Y, 8.0 + stroke);
-                            if (bw > 1.0 && gap >= 0.0) {
-                                x = origin.X;
-                                w = bw;
-                                top = origin.Y;
+                            const double edgeTop = origin.Y + edgeInset;
+                            const double gap = (std::min)(
+                                titleTop - edgeTop, 8.0 - edgeInset + stroke);
+                            if (bw > 2.0 * edgeInset + 24.0 && gap >= 0.0) {
+                                x = origin.X + edgeInset;
+                                w = bw - 2.0 * edgeInset;
+                                top = edgeTop;
                                 stripH = (std::max)(20.0,
                                                     titleBottom + gap - top);
                                 if (auto b = bb.try_as<Controls::Border>()) {
-                                    radius = b.CornerRadius();
+                                    auto r = b.CornerRadius();
+                                    auto less = [&](double v) {
+                                        return (std::max)(0.0, v - edgeInset);
+                                    };
+                                    radius = CornerRadius{
+                                        less(r.TopLeft), less(r.TopRight),
+                                        less(r.BottomRight),
+                                        less(r.BottomLeft)};
                                 }
-                                flush = true;
+                                fromCard = true;
                             }
                         }
                     } catch (...) {
                     }
                 }
-                if (!flush) {
+                if (!fromCard) {
                     const double bottom = top + stripH;
                     top = (std::max)(6.0, top);
                     if (outline) {

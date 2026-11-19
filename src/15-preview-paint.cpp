@@ -141,14 +141,19 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
 
         if (paintStyle == PreviewStyle::TitleBg ||
             paintStyle == PreviewStyle::TitleOutline ||
-            paintStyle == PreviewStyle::TitlePlateOutline) {
+            paintStyle == PreviewStyle::TitlePlateOutline ||
+            paintStyle == PreviewStyle::TitleInsetOutline) {
             // Title outline (experimental): the titleBg strip with an accent
             // border and half the tint, like Outline does for the card.
-            // Title plate outline (experimental): the same, but flush with
-            // the card (see below).
+            // Title plate outline / title inset outline (experimental): the
+            // same, but placed from the card's edges (see below), 0 or 4px
+            // in from them.
             const bool outline = paintStyle != PreviewStyle::TitleBg;
-            const bool cardEdges =
-                paintStyle == PreviewStyle::TitlePlateOutline;
+            const double edgeInset =
+                paintStyle == PreviewStyle::TitlePlateOutline   ? 0.0
+                : paintStyle == PreviewStyle::TitleInsetOutline ? 4.0
+                                                                : -1.0;
+            const bool cardEdges = edgeInset >= 0.0;
             const double stroke =
                 outline ? settings->previewOutlineThickness : 0.0;
             double top = 4.0;
@@ -173,12 +178,14 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 double w = (std::max)(24.0, cardW - 2.0 * pad);
                 // Brace-init {4} only fills TopLeft (C++ struct). All four.
                 CornerRadius radius{4, 4, 4, 4};
-                bool flush = false;
+                bool fromCard = false;
                 if (cardEdges && laidOut) {
-                    // Title plate outline: the top of the card plate — flush
-                    // with the card's BackgroundBorder (edges and corner
-                    // radius) — ending under the title, with the same gap
-                    // below the title as above it (at most 8px + border).
+                    // From the card's BackgroundBorder: `edgeInset` in from
+                    // its left, top and right edges, corners following the
+                    // card's (its radius minus the inset), ending under the
+                    // title with the gap above the title mirrored below it
+                    // (at most 8px - inset + border). Inset 0 = the top of
+                    // the card plate.
                     try {
                         if (auto bb = FindThumbnailBackgroundBorder(thumbView)) {
                             const double bw = bb.ActualWidth();
@@ -186,24 +193,32 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                                 bb.TransformToVisual(host).TransformPoint(
                                     winrt::Windows::Foundation::Point{0.f,
                                                                       0.f});
-                            const double gap =
-                                (std::min)(titleTop - origin.Y, 8.0 + stroke);
-                            if (bw > 1.0 && gap >= 0.0) {
-                                x = origin.X;
-                                w = bw;
-                                top = origin.Y;
+                            const double edgeTop = origin.Y + edgeInset;
+                            const double gap = (std::min)(
+                                titleTop - edgeTop, 8.0 - edgeInset + stroke);
+                            if (bw > 2.0 * edgeInset + 24.0 && gap >= 0.0) {
+                                x = origin.X + edgeInset;
+                                w = bw - 2.0 * edgeInset;
+                                top = edgeTop;
                                 stripH = (std::max)(20.0,
                                                     titleBottom + gap - top);
                                 if (auto b = bb.try_as<Controls::Border>()) {
-                                    radius = b.CornerRadius();
+                                    auto r = b.CornerRadius();
+                                    auto less = [&](double v) {
+                                        return (std::max)(0.0, v - edgeInset);
+                                    };
+                                    radius = CornerRadius{
+                                        less(r.TopLeft), less(r.TopRight),
+                                        less(r.BottomRight),
+                                        less(r.BottomLeft)};
                                 }
-                                flush = true;
+                                fromCard = true;
                             }
                         }
                     } catch (...) {
                     }
                 }
-                if (!flush) {
+                if (!fromCard) {
                     const double bottom = top + stripH;
                     top = (std::max)(6.0, top);
                     if (outline) {

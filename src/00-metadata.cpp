@@ -55,7 +55,7 @@ while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
 plate for rank 1, title tint for ranks 2+); also an outline, an outline
-around the title (two experimental variants), a thin bar under the title, or none for
+around the title (three experimental variants), a thin bar under the title, or none for
 ranks 2+.
 
 If you only want the active window highlighted in previews,
@@ -239,7 +239,8 @@ to clear highlights.
         Icons → Thickness). Title outline (experimental) = the title wash
         with an accent border, like Outline but only around the title. Title
         plate outline (experimental) = Outline cut short under the title
-        (same card edges and corners).
+        (same card edges and corners). Inset title plate outline
+        (experimental) = the same, 4 px in from the card edges.
         Plate and Outline keep the card's own rounded corners and stay
         visible on hover.
       $options:
@@ -248,6 +249,7 @@ to clear highlights.
       - titleBg: Title background tint
       - titleOutline: Title with accent outline (experimental)
       - titlePlateOutline: Title plate with accent outline (experimental)
+      - titleInsetOutline: Inset title plate with accent outline (experimental)
       - titleBar: Bar under window title
     - restStyle: titleBg
       $name: Ranks 2+ style
@@ -258,6 +260,7 @@ to clear highlights.
       - titleBg: Title background tint
       - titleOutline: Title with accent outline (experimental)
       - titlePlateOutline: Title plate with accent outline (experimental)
+      - titleInsetOutline: Inset title plate with accent outline (experimental)
       - titleBar: Bar under window title
       - plate: Whole preview plate
       - outline: Plate with accent outline
@@ -265,7 +268,7 @@ to clear highlights.
     - outlineThickness: 2
       $name: Outline thickness
       $description: >-
-        Border width in pixels for the Outline and both Title outline styles
+        Border width in pixels for the Outline and the Title outline styles
         (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1

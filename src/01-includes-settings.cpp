@@ -114,6 +114,7 @@ enum class PreviewStyle {
     Outline,    // plate plus an accent border (card overlay)
     TitleOutline,  // title strip with an accent border (experimental)
     TitlePlateOutline,  // same, flush with the card edges (experimental)
+    TitleInsetOutline,  // same, 4px in from the card edges (experimental)
     None,       // not marked (ranks 2+ only)
 };
 
@@ -143,6 +144,7 @@ constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
     {L"titleBg", PreviewStyle::TitleBg},   {L"titleBar", PreviewStyle::TitleBar},
     {L"titleOutline", PreviewStyle::TitleOutline},
     {L"titlePlateOutline", PreviewStyle::TitlePlateOutline},
+    {L"titleInsetOutline", PreviewStyle::TitleInsetOutline},
     {L"none", PreviewStyle::None},
 };
 constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {
