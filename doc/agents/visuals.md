@@ -81,6 +81,20 @@ Opacity, once.
   with accent stays recognisable as ours.
 - Open: a ranked app that also flashes — our plate is drawn over Windows'
   attention tint.
+- Multi-window buttons (UWPSpy dump `tests/uwspy/captures/multiwin-20261119-212700`,
+  not committed): IconPanel children = unnamed Border, `BackgroundElement`
+  (Border; VSM `NormalMultiWindowMargin` gives it a right margin of 4, so
+  36×40 instead of 40×40), `MultiWindowElement` (Border, Width 16,
+  HorizontalAlignment Right, 40 high, above the background; 4px stick out),
+  `RunningIndicator`, `Icon`, `DefaultIcon`. Hover fills both Borders with
+  #B3FFFFFF. Our host sits between BackgroundElement and MultiWindowElement
+  (the latter is an above-host anchor). The plates add
+  `WhRecentFocusContourStack`: a copy of MultiWindowElement under our
+  contour, clipped (RectangleGeometry) to the part right of the background,
+  so the stack reads `(O))` in our colour without a doubled tint. Only when
+  the contour came from BackgroundElement (not a Styler plate). Geometry is
+  read at paint time, like the contour: a window-count change that only
+  re-margins BackgroundElement relies on the next pass to repaint.
 
 Geometry must be finite, positive and bounded before XAML assignment or integer
 conversion. No division by native width/height. Failed native reads fall back

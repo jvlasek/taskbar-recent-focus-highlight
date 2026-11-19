@@ -455,6 +455,10 @@ constexpr PCWSTR kGlowElementName = L"WhRecentFocusGlow";
 // The side bar. Until 0.12.1 a second, 2px larger rectangle at low alpha
 // (L1) acted as a halo; XAML cannot blur it, so it showed as a hard rim.
 constexpr PCWSTR kGlowBarName = L"WhRecentFocusGlowBar";
+// Plate / Plate with accent: our copy of BackgroundElement, and of the
+// MultiWindowElement sliver on a multi-window button (0.12.1).
+constexpr PCWSTR kGlowContourName = L"WhRecentFocusContour";
+constexpr PCWSTR kGlowStackName = L"WhRecentFocusContourStack";
 
 // Intensity for a 0-based rank: the three configured values, then each
 // further rank fades by a quarter (floor 10 %, never above rank 3) so ranks

@@ -1011,6 +1011,10 @@ constexpr PCWSTR kGlowElementName = L"WhRecentFocusGlow";
 // The side bar. Until 0.12.1 a second, 2px larger rectangle at low alpha
 // (L1) acted as a halo; XAML cannot blur it, so it showed as a hard rim.
 constexpr PCWSTR kGlowBarName = L"WhRecentFocusGlowBar";
+// Plate / Plate with accent: our copy of BackgroundElement, and of the
+// MultiWindowElement sliver on a multi-window button (0.12.1).
+constexpr PCWSTR kGlowContourName = L"WhRecentFocusContour";
+constexpr PCWSTR kGlowStackName = L"WhRecentFocusContourStack";
 
 // Intensity for a 0-based rank: the three configured values, then each
 // further rank fades by a quarter (floor 10 %, never above rank 3) so ranks
@@ -2772,8 +2776,10 @@ void HideAllGlowLayers(Controls::Grid host) {
     if (!host) {
         return;
     }
-    if (auto contour = FindChildByName(host, L"WhRecentFocusContour")) {
-        contour.Visibility(Visibility::Collapsed);
+    for (auto name : {kGlowContourName, kGlowStackName}) {
+        if (auto el = FindChildByName(host, name)) {
+            el.Visibility(Visibility::Collapsed);
+        }
     }
     if (auto r = FindChildByName(host, kGlowBarName).try_as<Shapes::Rectangle>()) {
         r.Visibility(Visibility::Collapsed);
@@ -2879,9 +2885,11 @@ void PaintNativeContour(Controls::Grid host,
     bool found = false;
     if (plate)
         found = ReadNativeGlowShape(indicator, iconPanel, shape);
-    if (!found)
-        found = ReadNativeGlowShape(
+    bool fromBackground = false;
+    if (!found) {
+        found = fromBackground = ReadNativeGlowShape(
             FindChildByName(iconPanel, L"BackgroundElement"), iconPanel, shape);
+    }
     if (!found) {
         shape.x = padding.Left;
         shape.y = padding.Top;
@@ -2891,51 +2899,98 @@ void PaintNativeContour(Controls::Grid host,
             return;
         shape.corners = CornerRadius{4, 4, 4, 4};
     }
-    // Flush with the native plate (0.12.1), so it reads as the button's own
-    // plate lit up. Until 0.12.1 Frame / Full sat at Size % (92) inside it.
-    double w = shape.w, h = shape.h;
-    if (!SafeGlowBounds(shape.x, shape.y, w, h))
+    if (!SafeGlowBounds(shape.x, shape.y, shape.w, shape.h))
         return;
-    Controls::Border border = FindChildByName(host, L"WhRecentFocusContour")
-                                  .try_as<Controls::Border>();
-    if (!border) {
-        border = Controls::Border();
-        border.Name(L"WhRecentFocusContour");
-        border.IsHitTestVisible(false);
-        auto children = host.Children();
-        children.InsertAt(children.Size(), border);
-    }
-    double dx = shape.x + shape.w * 0.5 - centerX;
-    double dy = shape.y + shape.h * 0.5 - centerY;
-    if (!SafeGlowMetric(dx) || !SafeGlowMetric(dy))
-        return;
-    border.HorizontalAlignment(HorizontalAlignment::Center);
-    border.VerticalAlignment(VerticalAlignment::Center);
-    border.Width(w);
-    border.Height(h);
-    border.Margin({dx, dy, -dx, -dy});
-    border.CornerRadius({InsetGlowRadius(shape.corners.TopLeft, 0, w, h),
-                         InsetGlowRadius(shape.corners.TopRight, 0, w, h),
-                         InsetGlowRadius(shape.corners.BottomRight, 0, w, h),
-                         InsetGlowRadius(shape.corners.BottomLeft, 0, w, h)});
+
     // Plate with accent: accent border (accent thickness) and half the fill,
     // as the preview "with accent" styles. Until 0.12.1 Frame was a 230-alpha
     // stroke of the side bar's thickness with no fill (read as a focus ring),
     // and Full 60 % of Fill opacity (paler than Windows' own plates).
     const bool accent = style == GlowStyle::PlateAccent;
-    double stroke =
-        accent ? (std::min)(accentThickness, (std::min)(w, h) * 0.5) : 0;
-    border.BorderThickness({stroke, stroke, stroke, stroke});
     auto strokeColor = color;
     strokeColor.A = 255;
-    border.BorderBrush(Media::SolidColorBrush{strokeColor});
-    color.A = static_cast<uint8_t>(
+    auto fillColor = color;
+    fillColor.A = static_cast<uint8_t>(
         (std::clamp)(fillOpacity, 0, 100) * 2.55 * (accent ? 0.5 : 1.0) + 0.5);
-    border.Background(Media::SolidColorBrush{color});
-    border.Opacity((std::clamp)(opacity, 0.0, 1.0));
-    border.Visibility(Visibility::Visible);
-}
+    const double rankOpacity = (std::clamp)(opacity, 0.0, 1.0);
 
+    // Our Border over a native shape: same size and corners, centred on it
+    // through balanced margins relative to the panel content centre. Created
+    // at `index` in the host (nullopt = on top). nullptr: bad geometry.
+    auto paint = [&](PCWSTR name, NativeGlowShape const& s,
+                     std::optional<uint32_t> index) -> Controls::Border {
+        double w = s.w, h = s.h;
+        double dx = s.x + w * 0.5 - centerX;
+        double dy = s.y + h * 0.5 - centerY;
+        if (!SafeGlowBounds(s.x, s.y, w, h) || !SafeGlowMetric(dx) ||
+            !SafeGlowMetric(dy))
+            return nullptr;
+        Controls::Border b =
+            FindChildByName(host, name).try_as<Controls::Border>();
+        if (!b) {
+            b = Controls::Border();
+            b.Name(name);
+            b.IsHitTestVisible(false);
+            auto children = host.Children();
+            children.InsertAt(index ? (std::min)(*index, children.Size())
+                                    : children.Size(),
+                              b);
+        }
+        b.HorizontalAlignment(HorizontalAlignment::Center);
+        b.VerticalAlignment(VerticalAlignment::Center);
+        b.Width(w);
+        b.Height(h);
+        b.Margin({dx, dy, -dx, -dy});
+        b.CornerRadius({InsetGlowRadius(s.corners.TopLeft, 0, w, h),
+                        InsetGlowRadius(s.corners.TopRight, 0, w, h),
+                        InsetGlowRadius(s.corners.BottomRight, 0, w, h),
+                        InsetGlowRadius(s.corners.BottomLeft, 0, w, h)});
+        double stroke =
+            accent ? (std::min)(accentThickness, (std::min)(w, h) * 0.5) : 0;
+        b.BorderThickness({stroke, stroke, stroke, stroke});
+        b.BorderBrush(Media::SolidColorBrush{strokeColor});
+        b.Background(Media::SolidColorBrush{fillColor});
+        b.Opacity(rankOpacity);
+        b.ClearValue(UIElement::ClipProperty());
+        b.Visibility(Visibility::Visible);
+        return b;
+    };
+
+    // Flush with the native plate (0.12.1), so it reads as the button's own
+    // plate lit up. Until 0.12.1 Frame / Full sat at Size % (92) inside it.
+    if (!paint(kGlowContourName, shape, std::nullopt))
+        return;
+
+    // Multi-window button (0.12.1): Windows narrows BackgroundElement by a
+    // right margin of 4 and draws MultiWindowElement (Border, Width 16, right-
+    // aligned, above the background) so a sliver sticks out: "(O))". Our
+    // plate copies only the background, which left a faint native ")" next to
+    // a tinted "(O)". Copy the sliver as well, under our plate, clipped to the
+    // part right of the background so the tint does not double where they
+    // overlap. UWPSpy dump: tests/uwspy/captures/multiwin-20261119-212700.
+    bool stacked = false;
+    NativeGlowShape stack;
+    if (fromBackground &&
+        ReadNativeGlowShape(FindChildByName(iconPanel, L"MultiWindowElement"),
+                            iconPanel, stack)) {
+        const double clipX = shape.x + shape.w - stack.x;
+        if (clipX > 0.0 && clipX < stack.w - 0.5) {
+            if (auto b = paint(kGlowStackName, stack, 0u)) {
+                Media::RectangleGeometry clip;
+                clip.Rect({static_cast<float>(clipX), 0.f,
+                           static_cast<float>(stack.w - clipX),
+                           static_cast<float>(stack.h)});
+                b.Clip(clip);
+                stacked = true;
+            }
+        }
+    }
+    if (!stacked) {
+        if (auto b = FindChildByName(host, kGlowStackName)) {
+            b.Visibility(Visibility::Collapsed);
+        }
+    }
+}
 PCWSTR GlowStyleName(GlowStyle s) {
     return EnumToName(kGlowStyleNames, s);
 }
