@@ -110,6 +110,25 @@ use with idle stretches:
   "Mod tasks in progress" and queues the re-enable, which is the safer
   failure.
 
+## Related mod: taskbar-active-window-highlight
+
+[taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
+by EphremTil17 was merged while this update was in progress. Credit where
+it is due: reading button windows and preview cards through the public
+WindowsUdk `ITaskGroup` / `ITaskItem` / `ITaskItemThumbnail` interfaces
+follows that mod, and replaced this mod's private taskbar.dll lookups. The
+in-mod README says so.
+
+The two still make sense as separate mods. That one marks the window that
+is active right now, from Explorer's own active-item state, and is much
+lighter. This one keeps a history: apps and windows that held focus for a
+minimum time, ranked per virtual desktop with decay, on the taskbar icons
+and inside multi-window flyouts. Someone who only wants the active window
+marked in previews is better served by that mod, and this mod's README
+points there. With the defaults they do not mark the same thing twice:
+single-window previews are off here (`previews.singleWindow`), and the
+Outline style exists for users who want the same look for rank 1.
+
 ## Testing
 
 Live on Windows 11 26100-era builds through 0.11.2-0.11.50: combined and
