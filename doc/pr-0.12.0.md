@@ -116,8 +116,10 @@ use with idle stretches:
 by EphremTil17 was merged while this update was in progress. Credit where
 it is due: reading button windows and preview cards through the public
 WindowsUdk `ITaskGroup` / `ITaskItem` / `ITaskItemThumbnail` interfaces
-follows that mod, and replaced this mod's private taskbar.dll lookups. The
-in-mod README says so.
+follows that mod, and replaced this mod's private taskbar.dll lookups. So
+does drawing the preview plate / outline as an own `Border` instead of
+tinting the card's native one, which keeps it visible on hover. The in-mod
+README credits it.
 
 The two still make sense as separate mods. That one marks the window that
 is active right now, from Explorer's own active-item state, and is much
