@@ -140,10 +140,15 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         HideThumbOverlayChildren(host);
 
         if (paintStyle == PreviewStyle::TitleBg ||
-            paintStyle == PreviewStyle::TitleOutline) {
+            paintStyle == PreviewStyle::TitleOutline ||
+            paintStyle == PreviewStyle::TitlePlateOutline) {
             // Title outline (experimental): the titleBg strip with an accent
             // border and half the tint, like Outline does for the card.
-            const bool outline = paintStyle == PreviewStyle::TitleOutline;
+            // Title plate outline (experimental): the same, but flush with
+            // the card (see below).
+            const bool outline = paintStyle != PreviewStyle::TitleBg;
+            const bool cardEdges =
+                paintStyle == PreviewStyle::TitlePlateOutline;
             const double stroke =
                 outline ? settings->previewOutlineThickness : 0.0;
             double top = 4.0;
@@ -152,7 +157,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             bool laidOut = GetTitleBottomRelative(title, host, cardH, titleTop,
                                                   titleBottom);
             if (laidOut) {
-                // The border is drawn inside the strip: grow by its width so
+                // An outline is drawn inside the strip: grow by its width so
                 // the gap around the title stays the same.
                 top = (std::max)(2.0, titleTop - 3.0 - stroke);
                 stripH = (std::max)(20.0, titleBottom - top + 4.0 + stroke);
@@ -163,7 +168,52 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             auto chip =
                 FindChildByName(host, kThumbTitleBgName).try_as<Controls::Border>();
             if (chip) {
+                const double pad = 8.0;
+                double x = pad;
+                double w = (std::max)(24.0, cardW - 2.0 * pad);
+                // Brace-init {4} only fills TopLeft (C++ struct). All four.
+                CornerRadius radius{4, 4, 4, 4};
+                bool flush = false;
+                if (cardEdges && laidOut) {
+                    // Title plate outline: the top of the card plate — flush
+                    // with the card's BackgroundBorder (edges and corner
+                    // radius) — ending under the title, with the same gap
+                    // below the title as above it (at most 8px + border).
+                    try {
+                        if (auto bb = FindThumbnailBackgroundBorder(thumbView)) {
+                            const double bw = bb.ActualWidth();
+                            auto origin =
+                                bb.TransformToVisual(host).TransformPoint(
+                                    winrt::Windows::Foundation::Point{0.f,
+                                                                      0.f});
+                            const double gap =
+                                (std::min)(titleTop - origin.Y, 8.0 + stroke);
+                            if (bw > 1.0 && gap >= 0.0) {
+                                x = origin.X;
+                                w = bw;
+                                top = origin.Y;
+                                stripH = (std::max)(20.0,
+                                                    titleBottom + gap - top);
+                                if (auto b = bb.try_as<Controls::Border>()) {
+                                    radius = b.CornerRadius();
+                                }
+                                flush = true;
+                            }
+                        }
+                    } catch (...) {
+                    }
+                }
+                if (!flush) {
+                    const double bottom = top + stripH;
+                    top = (std::max)(6.0, top);
+                    if (outline) {
+                        // Keep the bottom edge where it was, or the outline
+                        // crowds the thumbnail when the top is pushed down.
+                        stripH = (std::max)(20.0, bottom - top);
+                    }
+                }
                 const int chipA = static_cast<int>(
+                    // Outline: half the tint so the border reads (as Outline).
                     (outline ? fillOpacitySetting / 2 : fillOpacitySetting) *
                         2.55 * t +
                     0.5);
@@ -175,19 +225,9 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                     chip.BorderThickness(
                         Thickness{stroke, stroke, stroke, stroke});
                 }
-                // Brace-init {4} only fills TopLeft (C++ struct). All four.
-                chip.CornerRadius(CornerRadius{4, 4, 4, 4});
+                chip.CornerRadius(radius);
                 chip.Opacity(1.0);
-                const double pad = 8.0;
-                const double bottom = top + stripH;
-                top = (std::max)(6.0, top);
-                if (outline) {
-                    // Keep the bottom edge where it was, or the outline
-                    // crowds the thumbnail when the top is pushed down.
-                    stripH = (std::max)(20.0, bottom - top);
-                }
-                PlaceOverlayChild(chip, pad, top,
-                                  (std::max)(24.0, cardW - 2.0 * pad), stripH);
+                PlaceOverlayChild(chip, x, top, w, stripH);
             }
         } else {  // TitleBar — underline just under the title glyphs
             // Small gap under baseline — enough to avoid strikethrough, not

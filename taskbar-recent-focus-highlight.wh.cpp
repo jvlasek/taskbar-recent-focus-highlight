@@ -55,7 +55,7 @@ while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
 plate for rank 1, title tint for ranks 2+); also an outline, an outline
-around the title (experimental), a thin bar under the title, or none for
+around the title (two experimental variants), a thin bar under the title, or none for
 ranks 2+.
 
 If you only want the active window highlighted in previews,
@@ -237,7 +237,9 @@ to clear highlights.
         Active Window Highlight). Title background = soft wash behind the
         title. Title bar = thin line under the title (thickness follows
         Icons → Thickness). Title outline (experimental) = the title wash
-        with an accent border, like Outline but only around the title.
+        with an accent border, like Outline but only around the title. Title
+        plate outline (experimental) = Outline cut short under the title
+        (same card edges and corners).
         Plate and Outline keep the card's own rounded corners and stay
         visible on hover.
       $options:
@@ -245,6 +247,7 @@ to clear highlights.
       - outline: Plate with accent outline
       - titleBg: Title background tint
       - titleOutline: Title with accent outline (experimental)
+      - titlePlateOutline: Title plate with accent outline (experimental)
       - titleBar: Bar under window title
     - restStyle: titleBg
       $name: Ranks 2+ style
@@ -254,6 +257,7 @@ to clear highlights.
       $options:
       - titleBg: Title background tint
       - titleOutline: Title with accent outline (experimental)
+      - titlePlateOutline: Title plate with accent outline (experimental)
       - titleBar: Bar under window title
       - plate: Whole preview plate
       - outline: Plate with accent outline
@@ -261,7 +265,8 @@ to clear highlights.
     - outlineThickness: 2
       $name: Outline thickness
       $description: >-
-        Border width in pixels for the Outline and Title outline styles (1–8).
+        Border width in pixels for the Outline and both Title outline styles
+        (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
       $description: Strength for the most recent window in the flyout (0–100)
@@ -409,6 +414,7 @@ enum class PreviewStyle {
     TitleBar,   // thin bar under the title, above the thumbnail image
     Outline,    // plate plus an accent border (card overlay)
     TitleOutline,  // title strip with an accent border (experimental)
+    TitlePlateOutline,  // same, flush with the card edges (experimental)
     None,       // not marked (ranks 2+ only)
 };
 
@@ -437,6 +443,7 @@ constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
     {L"plate", PreviewStyle::Plate},       {L"outline", PreviewStyle::Outline},
     {L"titleBg", PreviewStyle::TitleBg},   {L"titleBar", PreviewStyle::TitleBar},
     {L"titleOutline", PreviewStyle::TitleOutline},
+    {L"titlePlateOutline", PreviewStyle::TitlePlateOutline},
     {L"none", PreviewStyle::None},
 };
 constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {
@@ -5632,10 +5639,15 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         HideThumbOverlayChildren(host);
 
         if (paintStyle == PreviewStyle::TitleBg ||
-            paintStyle == PreviewStyle::TitleOutline) {
+            paintStyle == PreviewStyle::TitleOutline ||
+            paintStyle == PreviewStyle::TitlePlateOutline) {
             // Title outline (experimental): the titleBg strip with an accent
             // border and half the tint, like Outline does for the card.
-            const bool outline = paintStyle == PreviewStyle::TitleOutline;
+            // Title plate outline (experimental): the same, but flush with
+            // the card (see below).
+            const bool outline = paintStyle != PreviewStyle::TitleBg;
+            const bool cardEdges =
+                paintStyle == PreviewStyle::TitlePlateOutline;
             const double stroke =
                 outline ? settings->previewOutlineThickness : 0.0;
             double top = 4.0;
@@ -5644,7 +5656,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             bool laidOut = GetTitleBottomRelative(title, host, cardH, titleTop,
                                                   titleBottom);
             if (laidOut) {
-                // The border is drawn inside the strip: grow by its width so
+                // An outline is drawn inside the strip: grow by its width so
                 // the gap around the title stays the same.
                 top = (std::max)(2.0, titleTop - 3.0 - stroke);
                 stripH = (std::max)(20.0, titleBottom - top + 4.0 + stroke);
@@ -5655,7 +5667,52 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             auto chip =
                 FindChildByName(host, kThumbTitleBgName).try_as<Controls::Border>();
             if (chip) {
+                const double pad = 8.0;
+                double x = pad;
+                double w = (std::max)(24.0, cardW - 2.0 * pad);
+                // Brace-init {4} only fills TopLeft (C++ struct). All four.
+                CornerRadius radius{4, 4, 4, 4};
+                bool flush = false;
+                if (cardEdges && laidOut) {
+                    // Title plate outline: the top of the card plate — flush
+                    // with the card's BackgroundBorder (edges and corner
+                    // radius) — ending under the title, with the same gap
+                    // below the title as above it (at most 8px + border).
+                    try {
+                        if (auto bb = FindThumbnailBackgroundBorder(thumbView)) {
+                            const double bw = bb.ActualWidth();
+                            auto origin =
+                                bb.TransformToVisual(host).TransformPoint(
+                                    winrt::Windows::Foundation::Point{0.f,
+                                                                      0.f});
+                            const double gap =
+                                (std::min)(titleTop - origin.Y, 8.0 + stroke);
+                            if (bw > 1.0 && gap >= 0.0) {
+                                x = origin.X;
+                                w = bw;
+                                top = origin.Y;
+                                stripH = (std::max)(20.0,
+                                                    titleBottom + gap - top);
+                                if (auto b = bb.try_as<Controls::Border>()) {
+                                    radius = b.CornerRadius();
+                                }
+                                flush = true;
+                            }
+                        }
+                    } catch (...) {
+                    }
+                }
+                if (!flush) {
+                    const double bottom = top + stripH;
+                    top = (std::max)(6.0, top);
+                    if (outline) {
+                        // Keep the bottom edge where it was, or the outline
+                        // crowds the thumbnail when the top is pushed down.
+                        stripH = (std::max)(20.0, bottom - top);
+                    }
+                }
                 const int chipA = static_cast<int>(
+                    // Outline: half the tint so the border reads (as Outline).
                     (outline ? fillOpacitySetting / 2 : fillOpacitySetting) *
                         2.55 * t +
                     0.5);
@@ -5667,19 +5724,9 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                     chip.BorderThickness(
                         Thickness{stroke, stroke, stroke, stroke});
                 }
-                // Brace-init {4} only fills TopLeft (C++ struct). All four.
-                chip.CornerRadius(CornerRadius{4, 4, 4, 4});
+                chip.CornerRadius(radius);
                 chip.Opacity(1.0);
-                const double pad = 8.0;
-                const double bottom = top + stripH;
-                top = (std::max)(6.0, top);
-                if (outline) {
-                    // Keep the bottom edge where it was, or the outline
-                    // crowds the thumbnail when the top is pushed down.
-                    stripH = (std::max)(20.0, bottom - top);
-                }
-                PlaceOverlayChild(chip, pad, top,
-                                  (std::max)(24.0, cardW - 2.0 * pad), stripH);
+                PlaceOverlayChild(chip, x, top, w, stripH);
             }
         } else {  // TitleBar — underline just under the title glyphs
             // Small gap under baseline — enough to avoid strikethrough, not
