@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.12.0
+// @version         0.12.1
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -54,8 +54,9 @@ other apps more recently. Single-window flyouts are left alone unless
 while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
-plate for rank 1, title tint for ranks 2+); also an outline, a thin bar under
-the title, or none for ranks 2+.
+plate for rank 1, title tint for ranks 2+); also an outline, an outline
+around the title (experimental), a thin bar under the title, or none for
+ranks 2+.
 
 If you only want the active window highlighted in previews,
 [taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
@@ -235,12 +236,15 @@ to clear highlights.
         Outline = tinted card with an accent border (the look of Taskbar
         Active Window Highlight). Title background = soft wash behind the
         title. Title bar = thin line under the title (thickness follows
-        Icons → Thickness). Plate and Outline keep the card's own rounded
-        corners and stay visible on hover.
+        Icons → Thickness). Title outline (experimental) = the title wash
+        with an accent border, like Outline but only around the title.
+        Plate and Outline keep the card's own rounded corners and stay
+        visible on hover.
       $options:
       - plate: Whole preview plate
       - outline: Plate with accent outline
       - titleBg: Title background tint
+      - titleOutline: Title with accent outline (experimental)
       - titleBar: Bar under window title
     - restStyle: titleBg
       $name: Ranks 2+ style
@@ -249,13 +253,15 @@ to clear highlights.
         rank 1 is shown.
       $options:
       - titleBg: Title background tint
+      - titleOutline: Title with accent outline (experimental)
       - titleBar: Bar under window title
       - plate: Whole preview plate
       - outline: Plate with accent outline
       - none: Not marked
     - outlineThickness: 2
       $name: Outline thickness
-      $description: Border width in pixels for the Outline style (1–8).
+      $description: >-
+        Border width in pixels for the Outline and Title outline styles (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
       $description: Strength for the most recent window in the flyout (0–100)

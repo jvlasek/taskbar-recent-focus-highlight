@@ -92,6 +92,7 @@ Rules:
 |----------------|----------------|
 | `titleBar` | Thin rect just under title baseline (~2px gap); 8px side inset |
 | `titleBg` | Soft wash; 4px corners (`CornerRadius{4,4,4,4}` — `{4}` is TopLeft only), 8px inset |
+| `titleOutline` | 0.12.1, experimental (branch `exp/title-outline`): the same `WhRecentFocusThumbTitleBg` Border with accent `BorderBrush` (alpha 255 × rank) and `previews.outlineThickness`; fill = half of Tint opacity like `outline`. The strip grows by the border width (border is drawn inside); its bottom edge stays put when the 6px top clamp applies. `HideThumbOverlayChildren` clears BorderBrush/BorderThickness, else a switch to `titleBg` keeps the border. No new XAML |
 | `plate` | 0.11.16+: own `Border` `WhRecentFocusThumbCard` inserted right after `BackgroundBorder` in its panel; Width/Height/Margin/alignment/CornerRadius bound to it; fill only. Survives the card's hover state (which rewrites `BackgroundBorder.Background`). Fallback without a BackgroundBorder: overlay-host rectangle. Native-brush restore code removed in 0.11.38 |
 | `outline` | Same overlay with accent `BorderBrush` and `previews.outlineThickness`; fill = half of Tint opacity (0.11.38; was `previews.outlineFillOpacity`, default 20) — a full tint hid the border |
 | overlay host z-order | 0.11.17+: directly above `BackgroundBorder` (below title/thumbnail), so the title wash no longer dims the text; front only if no BackgroundBorder child |

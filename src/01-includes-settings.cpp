@@ -112,6 +112,7 @@ enum class PreviewStyle {
     Plate,      // tint whole preview card (hover-like plate)
     TitleBar,   // thin bar under the title, above the thumbnail image
     Outline,    // plate plus an accent border (card overlay)
+    TitleOutline,  // title strip with an accent border (experimental)
     None,       // not marked (ranks 2+ only)
 };
 
@@ -139,6 +140,7 @@ constexpr EnumName<PromoteMode> kPromoteModeNames[] = {
 constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
     {L"plate", PreviewStyle::Plate},       {L"outline", PreviewStyle::Outline},
     {L"titleBg", PreviewStyle::TitleBg},   {L"titleBar", PreviewStyle::TitleBar},
+    {L"titleOutline", PreviewStyle::TitleOutline},
     {L"none", PreviewStyle::None},
 };
 constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {

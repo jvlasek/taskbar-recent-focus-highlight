@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.12.0
+// @version         0.12.1
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -54,8 +54,9 @@ other apps more recently. Single-window flyouts are left alone unless
 while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
-plate for rank 1, title tint for ranks 2+); also an outline, a thin bar under
-the title, or none for ranks 2+.
+plate for rank 1, title tint for ranks 2+); also an outline, an outline
+around the title (experimental), a thin bar under the title, or none for
+ranks 2+.
 
 If you only want the active window highlighted in previews,
 [taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
@@ -235,12 +236,15 @@ to clear highlights.
         Outline = tinted card with an accent border (the look of Taskbar
         Active Window Highlight). Title background = soft wash behind the
         title. Title bar = thin line under the title (thickness follows
-        Icons → Thickness). Plate and Outline keep the card's own rounded
-        corners and stay visible on hover.
+        Icons → Thickness). Title outline (experimental) = the title wash
+        with an accent border, like Outline but only around the title.
+        Plate and Outline keep the card's own rounded corners and stay
+        visible on hover.
       $options:
       - plate: Whole preview plate
       - outline: Plate with accent outline
       - titleBg: Title background tint
+      - titleOutline: Title with accent outline (experimental)
       - titleBar: Bar under window title
     - restStyle: titleBg
       $name: Ranks 2+ style
@@ -249,13 +253,15 @@ to clear highlights.
         rank 1 is shown.
       $options:
       - titleBg: Title background tint
+      - titleOutline: Title with accent outline (experimental)
       - titleBar: Bar under window title
       - plate: Whole preview plate
       - outline: Plate with accent outline
       - none: Not marked
     - outlineThickness: 2
       $name: Outline thickness
-      $description: Border width in pixels for the Outline style (1–8).
+      $description: >-
+        Border width in pixels for the Outline and Title outline styles (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
       $description: Strength for the most recent window in the flyout (0–100)
@@ -402,6 +408,7 @@ enum class PreviewStyle {
     Plate,      // tint whole preview card (hover-like plate)
     TitleBar,   // thin bar under the title, above the thumbnail image
     Outline,    // plate plus an accent border (card overlay)
+    TitleOutline,  // title strip with an accent border (experimental)
     None,       // not marked (ranks 2+ only)
 };
 
@@ -429,6 +436,7 @@ constexpr EnumName<PromoteMode> kPromoteModeNames[] = {
 constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
     {L"plate", PreviewStyle::Plate},       {L"outline", PreviewStyle::Outline},
     {L"titleBg", PreviewStyle::TitleBg},   {L"titleBar", PreviewStyle::TitleBar},
+    {L"titleOutline", PreviewStyle::TitleOutline},
     {L"none", PreviewStyle::None},
 };
 constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {
@@ -5308,6 +5316,9 @@ void HideThumbOverlayChildren(Controls::Grid host) {
                 }
                 if (auto b = el.try_as<Controls::Border>()) {
                     b.Background(nullptr);
+                    // Title outline: else a switch to titleBg keeps it.
+                    b.BorderBrush(nullptr);
+                    b.BorderThickness(Thickness{0, 0, 0, 0});
                 }
                 el.ClearValue(FrameworkElement::WidthProperty());
                 el.ClearValue(FrameworkElement::HeightProperty());
@@ -5620,15 +5631,23 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         Controls::Grid host = EnsureThumbOverlayHost(panel);
         HideThumbOverlayChildren(host);
 
-        if (paintStyle == PreviewStyle::TitleBg) {
+        if (paintStyle == PreviewStyle::TitleBg ||
+            paintStyle == PreviewStyle::TitleOutline) {
+            // Title outline (experimental): the titleBg strip with an accent
+            // border and half the tint, like Outline does for the card.
+            const bool outline = paintStyle == PreviewStyle::TitleOutline;
+            const double stroke =
+                outline ? settings->previewOutlineThickness : 0.0;
             double top = 4.0;
             double stripH = 28.0;
             double titleTop = 0, titleBottom = 0;
             bool laidOut = GetTitleBottomRelative(title, host, cardH, titleTop,
                                                   titleBottom);
             if (laidOut) {
-                top = (std::max)(2.0, titleTop - 3.0);
-                stripH = (std::max)(20.0, titleBottom - top + 4.0);
+                // The border is drawn inside the strip: grow by its width so
+                // the gap around the title stays the same.
+                top = (std::max)(2.0, titleTop - 3.0 - stroke);
+                stripH = (std::max)(20.0, titleBottom - top + 4.0 + stroke);
             } else {
                 // Layout not ready — default strip + one deferred remeasure.
                 SchedulePreviewFlyoutRefresh(thumbView);
@@ -5637,13 +5656,28 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 FindChildByName(host, kThumbTitleBgName).try_as<Controls::Border>();
             if (chip) {
                 const int chipA = static_cast<int>(
-                    fillOpacitySetting * 2.55 * t + 0.5);
+                    (outline ? fillOpacitySetting / 2 : fillOpacitySetting) *
+                        2.55 * t +
+                    0.5);
                 chip.Background(Media::SolidColorBrush{withAlpha(base, chipA)});
+                if (outline) {
+                    const int strokeA = static_cast<int>(255 * t + 0.5);
+                    chip.BorderBrush(
+                        Media::SolidColorBrush{withAlpha(base, strokeA)});
+                    chip.BorderThickness(
+                        Thickness{stroke, stroke, stroke, stroke});
+                }
                 // Brace-init {4} only fills TopLeft (C++ struct). All four.
                 chip.CornerRadius(CornerRadius{4, 4, 4, 4});
                 chip.Opacity(1.0);
                 const double pad = 8.0;
+                const double bottom = top + stripH;
                 top = (std::max)(6.0, top);
+                if (outline) {
+                    // Keep the bottom edge where it was, or the outline
+                    // crowds the thumbnail when the top is pushed down.
+                    stripH = (std::max)(20.0, bottom - top);
+                }
                 PlaceOverlayChild(chip, pad, top,
                                   (std::max)(24.0, cardW - 2.0 * pad), stripH);
             }

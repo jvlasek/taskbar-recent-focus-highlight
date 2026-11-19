@@ -139,15 +139,23 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         Controls::Grid host = EnsureThumbOverlayHost(panel);
         HideThumbOverlayChildren(host);
 
-        if (paintStyle == PreviewStyle::TitleBg) {
+        if (paintStyle == PreviewStyle::TitleBg ||
+            paintStyle == PreviewStyle::TitleOutline) {
+            // Title outline (experimental): the titleBg strip with an accent
+            // border and half the tint, like Outline does for the card.
+            const bool outline = paintStyle == PreviewStyle::TitleOutline;
+            const double stroke =
+                outline ? settings->previewOutlineThickness : 0.0;
             double top = 4.0;
             double stripH = 28.0;
             double titleTop = 0, titleBottom = 0;
             bool laidOut = GetTitleBottomRelative(title, host, cardH, titleTop,
                                                   titleBottom);
             if (laidOut) {
-                top = (std::max)(2.0, titleTop - 3.0);
-                stripH = (std::max)(20.0, titleBottom - top + 4.0);
+                // The border is drawn inside the strip: grow by its width so
+                // the gap around the title stays the same.
+                top = (std::max)(2.0, titleTop - 3.0 - stroke);
+                stripH = (std::max)(20.0, titleBottom - top + 4.0 + stroke);
             } else {
                 // Layout not ready — default strip + one deferred remeasure.
                 SchedulePreviewFlyoutRefresh(thumbView);
@@ -156,13 +164,28 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 FindChildByName(host, kThumbTitleBgName).try_as<Controls::Border>();
             if (chip) {
                 const int chipA = static_cast<int>(
-                    fillOpacitySetting * 2.55 * t + 0.5);
+                    (outline ? fillOpacitySetting / 2 : fillOpacitySetting) *
+                        2.55 * t +
+                    0.5);
                 chip.Background(Media::SolidColorBrush{withAlpha(base, chipA)});
+                if (outline) {
+                    const int strokeA = static_cast<int>(255 * t + 0.5);
+                    chip.BorderBrush(
+                        Media::SolidColorBrush{withAlpha(base, strokeA)});
+                    chip.BorderThickness(
+                        Thickness{stroke, stroke, stroke, stroke});
+                }
                 // Brace-init {4} only fills TopLeft (C++ struct). All four.
                 chip.CornerRadius(CornerRadius{4, 4, 4, 4});
                 chip.Opacity(1.0);
                 const double pad = 8.0;
+                const double bottom = top + stripH;
                 top = (std::max)(6.0, top);
+                if (outline) {
+                    // Keep the bottom edge where it was, or the outline
+                    // crowds the thumbnail when the top is pushed down.
+                    stripH = (std::max)(20.0, bottom - top);
+                }
                 PlaceOverlayChild(chip, pad, top,
                                   (std::max)(24.0, cardW - 2.0 * pad), stripH);
             }
