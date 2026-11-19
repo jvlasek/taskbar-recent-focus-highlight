@@ -125,7 +125,9 @@ void EnsureGlowHostZOrder(Controls::Panel panel,
             bool above = name == L"OverlayIcon" ||
                          name == L"MultiWindowElement" ||
                          name == L"ProgressIndicator";
-            if ((style == GlowStyle::LeftBar || style == GlowStyle::Full) &&
+            if ((style == GlowStyle::LeftBar || style == GlowStyle::SideBar ||
+                 style == GlowStyle::Full || style == GlowStyle::Plate ||
+                 style == GlowStyle::PlateAccent) &&
                 (name == L"Icon" || name == L"DefaultIcon"))
                 above = true;
             if (running && !RunningIndicatorLooksLikeHoverPlate(fe, panelFe))
@@ -368,8 +370,14 @@ void PaintNativeContour(Controls::Grid host,
             return;
         shape.corners = CornerRadius{4, 4, 4, 4};
     }
+    // Plate / Plate with accent (experimental): flush with the native plate,
+    // so they read as the button's own plate lit up (Size is ignored).
+    const bool flush =
+        style == GlowStyle::Plate || style == GlowStyle::PlateAccent;
     double inset =
-        (std::max)(1.0, (std::min)(shape.w, shape.h) * (1.0 - sizeFrac) * 0.5);
+        flush ? 0.0
+              : (std::max)(1.0, (std::min)(shape.w, shape.h) *
+                                    (1.0 - sizeFrac) * 0.5);
     double w = shape.w - 2 * inset, h = shape.h - 2 * inset;
     if (!SafeGlowBounds(shape.x + inset, shape.y + inset, w, h))
         return;
@@ -395,15 +403,25 @@ void PaintNativeContour(Controls::Grid host,
                          InsetGlowRadius(shape.corners.TopRight, 0, w, h),
                          InsetGlowRadius(shape.corners.BottomRight, 0, w, h),
                          InsetGlowRadius(shape.corners.BottomLeft, 0, w, h)});
-    bool frame = style == GlowStyle::Frame;
-    double stroke = frame ? (std::min)(thickness, (std::min)(w, h) * 0.5) : 0;
+    const bool frame = style == GlowStyle::Frame;
+    const bool accent = style == GlowStyle::PlateAccent;
+    // `thickness` is the caller's: glowThickness for Frame, the accent
+    // thickness for PlateAccent.
+    double stroke = (frame || accent)
+                        ? (std::min)(thickness, (std::min)(w, h) * 0.5)
+                        : 0;
     border.BorderThickness({stroke, stroke, stroke, stroke});
     auto strokeColor = color;
-    strokeColor.A = 230;
+    strokeColor.A = accent ? 255 : 230;
     border.BorderBrush(Media::SolidColorBrush{strokeColor});
-    color.A = frame ? 0
-                    : static_cast<uint8_t>(
-                          (std::clamp)(fillOpacity, 0, 100) * 2.55 * 0.6 + 0.5);
+    // Fill: Frame none; Full 60 % of Fill opacity; Plate all of it;
+    // PlateAccent half (as the preview accent styles).
+    const double fillScale = frame                        ? 0.0
+                             : style == GlowStyle::Full   ? 0.6
+                             : accent                     ? 0.5
+                                                          : 1.0;
+    color.A = static_cast<uint8_t>(
+        (std::clamp)(fillOpacity, 0, 100) * 2.55 * fillScale + 0.5);
     border.Background(Media::SolidColorBrush{color});
     border.Opacity((std::clamp)(opacity, 0.0, 1.0));
     border.Visibility(Visibility::Visible);

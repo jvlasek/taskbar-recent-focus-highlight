@@ -16,7 +16,8 @@ General keys stay top-level; icon/preview keys are dotted.
 | General | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
 | General | `decayMinutes` | app decay |
 | General | `excludedPrograms[i]` | uppercase set |
-| Taskbar icons | `icons.glowStyle` | `LeftBar` (side bar) / `Frame` / `Full`; legacy `bottomBar` falls back to Side |
+| Taskbar icons | `icons.glowStyle` | `LeftBar` (side bar) / `Frame` / `Full`; experimental (0.12.1) `sideBar` / `plate` / `plateAccent`; legacy `bottomBar` falls back to Side |
+| Taskbar icons | `icons.glowAccentThickness` | `plateAccent` border, 1–8 px (experimental, 0.12.1) |
 | Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | color mode + hex |
 | Taskbar icons | `icons.glowIntensityRank1..3` | `glowIntensity[3]` |
 | Taskbar icons | `icons.glowThickness` / `icons.glowSize` | metrics |

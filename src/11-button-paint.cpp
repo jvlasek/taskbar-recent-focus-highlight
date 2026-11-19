@@ -39,7 +39,8 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         const int boxHi = static_cast<int>(keyH + 0.5);
         {
             auto painted = GetCachedPaintState(button);
-            if (settings->glowStyle == GlowStyle::LeftBar &&
+            if ((settings->glowStyle == GlowStyle::LeftBar ||
+                 settings->glowStyle == GlowStyle::SideBar) &&
                 painted.rank == rankOneBased &&
                 painted.settingsGen == settings->generation &&
                 painted.accent ==
@@ -94,10 +95,16 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             return;
         }
 
-        if (style == GlowStyle::Frame || style == GlowStyle::Full) {
-            PaintNativeContour(host, iconPanel, style, base, thickness, sizeFrac,
-                               t, fillOpacitySetting);
-        } else if (style == GlowStyle::LeftBar) {
+        if (style == GlowStyle::Frame || style == GlowStyle::Full ||
+            style == GlowStyle::Plate || style == GlowStyle::PlateAccent) {
+            const double contourThickness =
+                style == GlowStyle::PlateAccent
+                    ? static_cast<double>(settings->glowAccentThickness)
+                    : thickness;
+            PaintNativeContour(host, iconPanel, style, base, contourThickness,
+                               sizeFrac, t, fillOpacitySetting);
+        } else if (style == GlowStyle::LeftBar ||
+                   style == GlowStyle::SideBar) {
             // Side bar: left of the icon on a bottom/top taskbar, under the
             // icon on a left/right taskbar — never the native-pill edge.
             const double barT = thickness + 1.0;
@@ -106,7 +113,11 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             const int fillBase =
                 static_cast<int>(fillOpacitySetting * 2.55 + 0.5);
 
-            for (int i = 0; i < layers; ++i) {
+            // SideBar (experimental): no halo. The halo is a second, 2px
+            // larger rectangle at low alpha; XAML cannot blur it, so it shows
+            // as a hard-edged rim under magnification.
+            const int barLayers = style == GlowStyle::SideBar ? 1 : layers;
+            for (int i = 0; i < barLayers; ++i) {
                 auto rect = FindChildByName(host, kGlowLayerNames[i])
                                 .try_as<Shapes::Rectangle>();
                 if (!rect) {

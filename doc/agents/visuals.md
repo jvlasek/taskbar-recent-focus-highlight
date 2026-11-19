@@ -67,6 +67,19 @@ Edge was removed in .45: native running/progress indicators already occupy
 that space. Legacy bottomBar settings fall back to Side. Full fill has a 60% ceiling
 before rank opacity; Layers apply only to Side; Roundness remains for previews.
 
+Experimental (0.12.1, branch `exp/title-outline`), for a side-by-side test:
+- `sideBar`: Side bar without the halo (layer 1 = 2px larger rectangle at
+  0.35 × fill alpha × 0.45 opacity; XAML cannot blur it, so magnified it is a
+  hard-edged rim).
+- `plate`: same contour Border, **flush** (inset 0, Size ignored), full Fill
+  opacity, no stroke. Full sat at 92 % with 60 % fill — almost exactly where
+  Windows draws its hover/active and attention plates, and paler than both.
+- `plateAccent`: flush, half fill, accent border (`icons.glowAccentThickness`,
+  default 2, alpha 255). An outline is the one thing no Windows button state
+  draws (attention = red plate + red pill), so it stays recognisable.
+- Both plates sit below the glyph (z-order as Full). Open: a ranked app that
+  also flashes — our plate is drawn over Windows' attention tint.
+
 Geometry must be finite, positive and bounded before XAML assignment or integer
 conversion. No division by native width/height. Failed native reads fall back
 or skip. Frame/Full bypass the old paint-cache early return so native

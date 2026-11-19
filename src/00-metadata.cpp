@@ -160,11 +160,17 @@ to clear highlights.
         How ranked apps look on the taskbar. Bars rotate with the taskbar edge
         (bottom / left / top / right). Side bar = beside the icon (left on a
         bottom or top taskbar, under the icon on a left or right taskbar).
-        Frame/Full follow the native background contour.
+        Frame/Full follow the native background contour. Experimental: Side
+        bar without halo; Plate = the native plate lit up (flush, full Fill
+        opacity); Plate with accent = the same at half fill with an accent
+        border (Accent thickness).
       $options:
       - leftBar: Side bar (left on bottom/top, under icon on left/right)
       - frame: Frame (hollow rounded rectangle)
       - full: Full (filled rounded rectangle)
+      - sideBar: Side bar without halo (experimental)
+      - plate: Plate (experimental)
+      - plateAccent: Plate with accent (experimental)
     - glowColor: accent
       $name: Glow color
       $description: Base color for icon highlights (and previews)
@@ -203,6 +209,10 @@ to clear highlights.
       $description: >-
         0–100. Soft fill strength for Full; solid bar opacity for Side. Frame uses
         stroke only. (Thumbnail tints use Previews → Tint opacity.)
+    - glowAccentThickness: 2
+      $name: Accent thickness (px)
+      $description: >-
+        Border width for Plate with accent (1–8, experimental).
   $name: Taskbar icons
 - previews:
     - highlightEnabled: true
