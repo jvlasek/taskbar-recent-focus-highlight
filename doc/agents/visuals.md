@@ -79,8 +79,11 @@ Opacity, once.
   above the glyph: read as a keyboard-focus ring. An outline is the one thing
   no Windows button state draws (attention = red plate + red pill), so Plate
   with accent stays recognisable as ours.
-- Open: a ranked app that also flashes — our plate is drawn over Windows'
-  attention tint.
+- Ranked + requesting attention (decided 2026-11-19, keep): our plate covers
+  Windows' red background plate, but Windows' red pill and the red-filled
+  `MultiWindowElement` sliver (attention uses the stacked look even with one
+  window) are drawn above it: "recent (ours) + wants attention (Windows')".
+  Not chosen: dropping our fill while the button requests attention.
 - Multi-window buttons (UWPSpy dump `tests/uwspy/captures/multiwin-20261119-212700`,
   not committed): IconPanel children = unnamed Border, `BackgroundElement`
   (Border; VSM `NormalMultiWindowMargin` gives it a right margin of 4, so
