@@ -15,7 +15,7 @@ int main() {
                 std::vector<GlowOrderChild> input;
                 for (int id : order) {
                     // background, glyph, badge, running indicator, progress, other
-                    bool above=id==2 || id==4 || (id==3 && !plate) || (id==1 && (style==GlowStyle::LeftBar || style==GlowStyle::Full));
+                    bool above=id==2 || id==4 || (id==3 && !plate) || id==1 /* all styles sit behind the glyph since 0.12.1 */;
                     input.push_back({above});
                 }
                 auto target=GlowHostInsertionIndex(input);

@@ -66,7 +66,7 @@ Short timeline:
   confirmed as focus on wake); `OnVirtualDesktopSwitched(reason)` logs
   `Desktop switch (<reason>)`.
 - 0.12.0: windhawk-mods submission; in-mod README / settings wording for
-  ranks 4+ and "highlight" (not "boost"). PR text: `doc/pr-0.12.0.md`.
+  ranks 4+ and "highlight" (not "boost"). PR text: `doc/pr-0.12.1.md` (was `pr-0.12.0.md`).
 
 ## Review lessons about removed mechanisms
 

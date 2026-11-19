@@ -1,4 +1,4 @@
-# Taskbar Recent Focus Highlight 0.12.0
+# Taskbar Recent Focus Highlight 0.12.1
 
 Update of the published 0.11.1. Development repository with tests, perf
 results and notes: https://github.com/jvlasek/taskbar-recent-focus-highlight
@@ -20,8 +20,10 @@ results and notes: https://github.com/jvlasek/taskbar-recent-focus-highlight
   element's property (`Icon.RenderTransform`, also used by dock-animation
   mods), and it needed about 200 lines to save and restore it. The mod now
   writes no property of any native element.
+- **The side bar's halo** (a second, slightly larger translucent rectangle;
+  XAML cannot blur it, so it showed as a hard-edged rim when magnified).
 - Symbol count: 26 (Taskbar.View.dll + taskbar.dll) -> 12 (Taskbar.View.dll
-  only). Lines: 8294 -> 8185, with the new features below included.
+  only). Lines: 8294 -> 8307, with the new features below included.
 
 ## Identity rule
 
@@ -42,6 +44,31 @@ User-visible consequences:
   buttons of one exe (Total Commander and its Lister, UWP apps sharing a
   host).
 
+## Look
+
+Icons (setting `icons.glowStyle`, ids unchanged):
+
+- **Side bar** (`leftBar`, default): as before, without the halo.
+- **Plate** (`full`, was "Full"): the button's own plate tinted, flush with
+  `BackgroundElement` and at the full Fill opacity. Full sat at 92 % inside
+  it at 60 % of the fill, almost where Windows draws its hover and
+  attention plates, and paler than both.
+- **Plate with accent** (`frame`, was "Frame"): the same plate at half the
+  tint with an accent border (new `icons.glowAccentThickness`). Frame was an
+  outline of the side bar's thickness above the glyph and read as a
+  keyboard-focus ring.
+- On a multi-window button both plates also tint Windows' stacked sliver
+  (`MultiWindowElement`), so the stack reads `(O))` in the highlight colour.
+  A ranked app that requests attention keeps Windows' red pill and red
+  sliver on top of our plate.
+
+Thumbnail previews (`previews.topStyle` / `restStyle`, ids unchanged):
+Whole plate, Whole plate with accent (was "Outline"), **Title** (`titleBg`,
+was "Title background": now a plate over the title row, 4 px in from the
+card with the card's corners and even gaps, instead of a strip 8 px in with
+tighter corners), **Title with accent** (new, `titleOutline`), Bar under
+title, Not marked (ranks 2+).
+
 ## Settings
 
 - **Transition:** 0.11.1 had one preview style, `previews.style`. It is
@@ -54,10 +81,14 @@ User-visible consequences:
 - **Removed, no transition needed:** `icons.glowRoundness` (fixed 28 %),
   `icons.glowLayers` (fixed 2), `icons.sizeBoostRank1..3` (feature removed),
   `requireTaskbarButton` (see above).
-- **New:** preview styles per rank (`topStyle` / `restStyle`, new Outline
-  style, `None` for ranks 2+), `previews.outlineThickness`,
-  `previews.singleWindow` (off by default). Ranks 4+ fade from the rank 3
-  intensity instead of repeating it.
+- **New:** preview styles per rank (`topStyle` / `restStyle`, Whole plate
+  with accent and Title with accent styles, `None` for ranks 2+),
+  `previews.outlineThickness` (shown as "Accent thickness"),
+  `icons.glowAccentThickness`, `previews.singleWindow` (off by default).
+  Ranks 4+ fade from the rank 3 intensity instead of repeating it.
+- **Renamed in the UI only** (stored ids unchanged, so no transition): the
+  icon and preview styles above; Thickness / Size are now "Side bar
+  thickness / length", since they only apply to the side bar.
 
 ## Private surface that remains
 
@@ -73,7 +104,8 @@ Every item fails closed (no highlight rather than a guessed one):
 - The `Window: 0x<hwnd>` AutomationId of uncombined (Never Combine) buttons,
   cross-checked against the button's own task item.
 - XAML element names (`IconPanel`, `Icon`, `RunningIndicator`,
-  `BackgroundElement`, `BackgroundBorder`, `IconsRepeater`, title text).
+  `BackgroundElement`, `MultiWindowElement`, `BackgroundBorder`,
+  `IconsRepeater`, title text).
 - Public only: `RegisterShellHookWindow` (best effort), the
   `CurrentVirtualDesktop` registry value with a change notification, and
   `IVirtualDesktopManager`.
@@ -133,10 +165,13 @@ Outline style exists for users who want the same look for rank 1.
 
 ## Testing
 
-Live on Windows 11 26100-era builds through 0.11.2-0.11.50: combined and
+Live on Windows 11 26100-era builds through 0.11.2-0.12.1: combined and
 Never Combine taskbars, multiple virtual desktops (including empty ones and
 switches by clicking another desktop's flashing button), sleep / lock,
 taskbar moved to the left and back, mod disable / enable, settings
-transition from a 0.11.1 profile. Script tests in the development
+transition from a 0.11.1 profile. The 0.12.1 styles were picked side by
+side against the old ones on the live taskbar, including multi-window
+buttons (layout from a UWPSpy dump) and a ranked app requesting attention.
+Script tests in the development
 repository cover identity, exclude list, rank derivation, notification
 filtering, min-focus deadlines and the perf build.

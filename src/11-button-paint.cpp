@@ -46,7 +46,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                     g_cachedAccent.load(std::memory_order_relaxed) &&
                 painted.edge == edge && painted.boxW == boxWi &&
                 painted.boxH == boxHi && ButtonHasOurChrome(button)) {
-                EnsureGlowHostZOrder(panel, existingHost, settings->glowStyle);
+                EnsureGlowHostZOrder(panel, existingHost);
                 return;
             }
         }
@@ -63,7 +63,6 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             return c;
         };
 
-        const int layers = kGlowMaxLayers;  // main bar + soft outer glow
         const double thickness = static_cast<double>(
             (std::max)(1, (std::min)(16, settings->glowThickness)));
         const double sizeFrac =
@@ -84,7 +83,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         const BarSide barSide = SideBarForTaskbarEdge(edge);
 
         // Position only our host; native children keep their relative order.
-        EnsureGlowHostZOrder(panel, host, style);
+        EnsureGlowHostZOrder(panel, host);
 
         HideAllGlowLayers(host);
 
@@ -94,29 +93,22 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             return;
         }
 
-        if (style == GlowStyle::Frame || style == GlowStyle::Full) {
-            PaintNativeContour(host, iconPanel, style, base, thickness, sizeFrac,
-                               t, fillOpacitySetting);
-        } else if (style == GlowStyle::LeftBar) {
+        if (style == GlowStyle::Plate || style == GlowStyle::PlateAccent) {
+            PaintNativeContour(host, iconPanel, style, base,
+                               settings->glowAccentThickness, t,
+                               fillOpacitySetting);
+        } else {
             // Side bar: left of the icon on a bottom/top taskbar, under the
             // icon on a left/right taskbar — never the native-pill edge.
             const double barT = thickness + 1.0;
             const double barLen =
                 BarLengthForSide(boxW, boxH, barSide, sizeFrac);
-            const int fillBase =
+            const int fillA =
                 static_cast<int>(fillOpacitySetting * 2.55 + 0.5);
-
-            for (int i = 0; i < layers; ++i) {
-                auto rect = FindChildByName(host, kGlowLayerNames[i])
-                                .try_as<Shapes::Rectangle>();
-                if (!rect) {
-                    continue;
-                }
-                const int fillA =
-                    i == 0 ? fillBase : static_cast<int>(fillBase * 0.35);
-                const double opacity = i == 0 ? t : (0.45 * t);
+            if (auto rect = FindChildByName(host, kGlowBarName)
+                                .try_as<Shapes::Rectangle>()) {
                 StyleGlowBarOnSide(rect, withAlpha(base, fillA), barT, barLen,
-                                   barSide, i, opacity);
+                                   barSide, t);
             }
         }
 

@@ -77,10 +77,12 @@ enum class GlowColorMode {
     Custom,
 };
 
+// 0.12.1: Frame / Full became Plate with accent / Plate (flush with the
+// native plate); the setting ids `frame` / `full` are kept.
 enum class GlowStyle {
-    Frame,      // hollow rounded rectangle
-    Full,       // filled rounded rectangle
-    LeftBar,    // side bar: left on horizontal taskbar, bottom on vertical
+    PlateAccent,  // id `frame`: native plate, half fill, accent border
+    Plate,        // id `full`: native plate, full Fill opacity
+    LeftBar,      // side bar: left on horizontal taskbar, bottom on vertical
 };
 
 // Physical screen edge the taskbar is on (Win11 24H2/25H2 can use all four).
@@ -108,10 +110,11 @@ enum class PromoteMode {
 
 // Thumbnail flyout highlight (independent of icon GlowStyle).
 enum class PreviewStyle {
-    TitleBg,    // tint behind the window title text
+    TitleBg,    // tinted plate over the title row
     Plate,      // tint whole preview card (hover-like plate)
     TitleBar,   // thin bar under the title, above the thumbnail image
     Outline,    // plate plus an accent border (card overlay)
+    TitleOutline,  // title plate plus an accent border (0.12.1)
     None,       // not marked (ranks 2+ only)
 };
 
@@ -128,8 +131,8 @@ constexpr EnumName<GlowColorMode> kGlowColorNames[] = {
 };
 constexpr EnumName<GlowStyle> kGlowStyleNames[] = {
     {L"leftBar", GlowStyle::LeftBar},
-    {L"frame", GlowStyle::Frame},
-    {L"full", GlowStyle::Full},
+    {L"frame", GlowStyle::PlateAccent},
+    {L"full", GlowStyle::Plate},
 };
 constexpr EnumName<PromoteMode> kPromoteModeNames[] = {
     {L"immediateTracked", PromoteMode::ImmediateTracked},
@@ -139,6 +142,7 @@ constexpr EnumName<PromoteMode> kPromoteModeNames[] = {
 constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
     {L"plate", PreviewStyle::Plate},       {L"outline", PreviewStyle::Outline},
     {L"titleBg", PreviewStyle::TitleBg},   {L"titleBar", PreviewStyle::TitleBar},
+    {L"titleOutline", PreviewStyle::TitleOutline},
     {L"none", PreviewStyle::None},
 };
 constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {
@@ -182,9 +186,10 @@ struct Settings {
     uint32_t customGlowPacked = 0xFF00C853;  // parsed once in LoadSettings
     int glowIntensity[3] = {100, 70, 45};
     GlowStyle glowStyle = GlowStyle::LeftBar;
-    int glowThickness = 3;      // px
-    int glowSize = 92;          // % of icon panel (clamped to fit)
-    int glowFillOpacity = 40;   // % for Full / left / bottom icon styles
+    int glowThickness = 3;      // px, side bar
+    int glowSize = 92;          // % side bar length (clamped to fit)
+    int glowFillOpacity = 40;   // % side bar / plate (half for PlateAccent)
+    int glowAccentThickness = 2;  // px, PlateAccent border
     int previewFillOpacity = 40;  // % for thumbnail plate / titleBg only
     int decayMinutes = 30;
     bool previewHighlightEnabled = true;

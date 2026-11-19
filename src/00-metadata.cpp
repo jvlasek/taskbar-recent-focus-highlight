@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.12.0
+// @version         0.12.1
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -54,8 +54,8 @@ other apps more recently. Single-window flyouts are left alone unless
 while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
-plate for rank 1, title tint for ranks 2+); also an outline, a thin bar under
-the title, or none for ranks 2+.
+plate for rank 1, title plate for ranks 2+); either can also have an accent
+border, or be a thin bar under the title; ranks 2+ can be left unmarked.
 
 If you only want the active window highlighted in previews,
 [taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
@@ -160,11 +160,13 @@ to clear highlights.
         How ranked apps look on the taskbar. Bars rotate with the taskbar edge
         (bottom / left / top / right). Side bar = beside the icon (left on a
         bottom or top taskbar, under the icon on a left or right taskbar).
-        Frame/Full follow the native background contour.
+        Plate = the button's own plate tinted (Fill opacity). Plate with
+        accent = the same at half the tint with an accent border (Accent
+        thickness).
       $options:
-      - leftBar: Side bar (left on bottom/top, under icon on left/right)
-      - frame: Frame (hollow rounded rectangle)
-      - full: Full (filled rounded rectangle)
+      - leftBar: Side bar
+      - full: Plate
+      - frame: Plate with accent
     - glowColor: accent
       $name: Glow color
       $description: Base color for icon highlights (and previews)
@@ -190,19 +192,19 @@ to clear highlights.
         Overlay opacity for the 3rd most recent app (0–100). Ranks 4+ fade
         further from this value.
     - glowThickness: 3
-      $name: Thickness (px)
-      $description: >-
-        Frame stroke or side-bar thickness (1–16). Full has no stroke.
+      $name: Side bar thickness (px)
+      $description: Side bar thickness (1–16).
     - glowSize: 92
-      $name: Size (%)
-      $description: >-
-        Frame/Full: inset within native background (≤100, minimum 1px inset).
-        Side bar: bar length.
+      $name: Side bar length (%)
+      $description: Side bar length (40–100).
     - glowFillOpacity: 40
       $name: Fill opacity
       $description: >-
-        0–100. Soft fill strength for Full; solid bar opacity for Side. Frame uses
-        stroke only. (Thumbnail tints use Previews → Tint opacity.)
+        0–100. Side bar and Plate strength; half of it for Plate with accent.
+        (Thumbnail tints use Previews → Tint opacity.)
+    - glowAccentThickness: 2
+      $name: Accent thickness (px)
+      $description: Border width for Plate with accent (1–8).
   $name: Taskbar icons
 - previews:
     - highlightEnabled: true
@@ -231,31 +233,35 @@ to clear highlights.
     - topStyle: plate
       $name: Rank 1 style
       $description: >-
-        How to mark the most recent window. Plate = tint the whole card.
-        Outline = tinted card with an accent border (the look of Taskbar
-        Active Window Highlight). Title background = soft wash behind the
-        title. Title bar = thin line under the title (thickness follows
-        Icons → Thickness). Plate and Outline keep the card's own rounded
-        corners and stay visible on hover.
+        How to mark the most recent window. Whole plate = tint the whole
+        card. Whole plate with accent = tinted card with an accent border (the
+        look of Taskbar Active Window Highlight). Title = a tinted plate over
+        the title row. Title with accent = the same with an accent border.
+        Bar under title = thin line under the title (thickness follows Icons →
+        Thickness). The plates follow the card's rounded corners and stay
+        visible on hover.
       $options:
-      - plate: Whole preview plate
-      - outline: Plate with accent outline
-      - titleBg: Title background tint
-      - titleBar: Bar under window title
+      - plate: Whole plate
+      - outline: Whole plate with accent
+      - titleBg: Title
+      - titleOutline: Title with accent
+      - titleBar: Bar under title
     - restStyle: titleBg
       $name: Ranks 2+ style
       $description: >-
         How to mark the other ranked windows (2nd, 3rd …). Not marked = only
         rank 1 is shown.
       $options:
-      - titleBg: Title background tint
-      - titleBar: Bar under window title
-      - plate: Whole preview plate
-      - outline: Plate with accent outline
+      - titleBg: Title
+      - titleOutline: Title with accent
+      - titleBar: Bar under title
+      - plate: Whole plate
+      - outline: Whole plate with accent
       - none: Not marked
     - outlineThickness: 2
-      $name: Outline thickness
-      $description: Border width in pixels for the Outline style (1–8).
+      $name: Accent thickness
+      $description: >-
+        Border width in pixels for the "with accent" styles (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
       $description: Strength for the most recent window in the flyout (0–100)
@@ -270,9 +276,10 @@ to clear highlights.
     - fillOpacity: 40
       $name: Tint opacity
       $description: >-
-        0–100. Strength of title-background wash and whole-preview plate. Title bar
-        line uses full accent and ignores this. Independent of Icons → Fill opacity.
-        Per-rank intensity still scales the result.
+        0–100. Strength of the Whole plate and Title tint (half of it for the
+        "with accent" styles). Bar under title uses the full accent and
+        ignores this. Independent of Icons → Fill opacity. Per-rank intensity
+        still scales the result.
     - minFocusSeconds: 1
       $name: Minimum focus (seconds)
       $description: >-

@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.12.0
+// @version         0.12.1
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -54,8 +54,8 @@ other apps more recently. Single-window flyouts are left alone unless
 while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
-plate for rank 1, title tint for ranks 2+); also an outline, a thin bar under
-the title, or none for ranks 2+.
+plate for rank 1, title plate for ranks 2+); either can also have an accent
+border, or be a thin bar under the title; ranks 2+ can be left unmarked.
 
 If you only want the active window highlighted in previews,
 [taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
@@ -160,11 +160,13 @@ to clear highlights.
         How ranked apps look on the taskbar. Bars rotate with the taskbar edge
         (bottom / left / top / right). Side bar = beside the icon (left on a
         bottom or top taskbar, under the icon on a left or right taskbar).
-        Frame/Full follow the native background contour.
+        Plate = the button's own plate tinted (Fill opacity). Plate with
+        accent = the same at half the tint with an accent border (Accent
+        thickness).
       $options:
-      - leftBar: Side bar (left on bottom/top, under icon on left/right)
-      - frame: Frame (hollow rounded rectangle)
-      - full: Full (filled rounded rectangle)
+      - leftBar: Side bar
+      - full: Plate
+      - frame: Plate with accent
     - glowColor: accent
       $name: Glow color
       $description: Base color for icon highlights (and previews)
@@ -190,19 +192,19 @@ to clear highlights.
         Overlay opacity for the 3rd most recent app (0–100). Ranks 4+ fade
         further from this value.
     - glowThickness: 3
-      $name: Thickness (px)
-      $description: >-
-        Frame stroke or side-bar thickness (1–16). Full has no stroke.
+      $name: Side bar thickness (px)
+      $description: Side bar thickness (1–16).
     - glowSize: 92
-      $name: Size (%)
-      $description: >-
-        Frame/Full: inset within native background (≤100, minimum 1px inset).
-        Side bar: bar length.
+      $name: Side bar length (%)
+      $description: Side bar length (40–100).
     - glowFillOpacity: 40
       $name: Fill opacity
       $description: >-
-        0–100. Soft fill strength for Full; solid bar opacity for Side. Frame uses
-        stroke only. (Thumbnail tints use Previews → Tint opacity.)
+        0–100. Side bar and Plate strength; half of it for Plate with accent.
+        (Thumbnail tints use Previews → Tint opacity.)
+    - glowAccentThickness: 2
+      $name: Accent thickness (px)
+      $description: Border width for Plate with accent (1–8).
   $name: Taskbar icons
 - previews:
     - highlightEnabled: true
@@ -231,31 +233,35 @@ to clear highlights.
     - topStyle: plate
       $name: Rank 1 style
       $description: >-
-        How to mark the most recent window. Plate = tint the whole card.
-        Outline = tinted card with an accent border (the look of Taskbar
-        Active Window Highlight). Title background = soft wash behind the
-        title. Title bar = thin line under the title (thickness follows
-        Icons → Thickness). Plate and Outline keep the card's own rounded
-        corners and stay visible on hover.
+        How to mark the most recent window. Whole plate = tint the whole
+        card. Whole plate with accent = tinted card with an accent border (the
+        look of Taskbar Active Window Highlight). Title = a tinted plate over
+        the title row. Title with accent = the same with an accent border.
+        Bar under title = thin line under the title (thickness follows Icons →
+        Thickness). The plates follow the card's rounded corners and stay
+        visible on hover.
       $options:
-      - plate: Whole preview plate
-      - outline: Plate with accent outline
-      - titleBg: Title background tint
-      - titleBar: Bar under window title
+      - plate: Whole plate
+      - outline: Whole plate with accent
+      - titleBg: Title
+      - titleOutline: Title with accent
+      - titleBar: Bar under title
     - restStyle: titleBg
       $name: Ranks 2+ style
       $description: >-
         How to mark the other ranked windows (2nd, 3rd …). Not marked = only
         rank 1 is shown.
       $options:
-      - titleBg: Title background tint
-      - titleBar: Bar under window title
-      - plate: Whole preview plate
-      - outline: Plate with accent outline
+      - titleBg: Title
+      - titleOutline: Title with accent
+      - titleBar: Bar under title
+      - plate: Whole plate
+      - outline: Whole plate with accent
       - none: Not marked
     - outlineThickness: 2
-      $name: Outline thickness
-      $description: Border width in pixels for the Outline style (1–8).
+      $name: Accent thickness
+      $description: >-
+        Border width in pixels for the "with accent" styles (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
       $description: Strength for the most recent window in the flyout (0–100)
@@ -270,9 +276,10 @@ to clear highlights.
     - fillOpacity: 40
       $name: Tint opacity
       $description: >-
-        0–100. Strength of title-background wash and whole-preview plate. Title bar
-        line uses full accent and ignores this. Independent of Icons → Fill opacity.
-        Per-rank intensity still scales the result.
+        0–100. Strength of the Whole plate and Title tint (half of it for the
+        "with accent" styles). Bar under title uses the full accent and
+        ignores this. Independent of Icons → Fill opacity. Per-rank intensity
+        still scales the result.
     - minFocusSeconds: 1
       $name: Minimum focus (seconds)
       $description: >-
@@ -367,10 +374,12 @@ enum class GlowColorMode {
     Custom,
 };
 
+// 0.12.1: Frame / Full became Plate with accent / Plate (flush with the
+// native plate); the setting ids `frame` / `full` are kept.
 enum class GlowStyle {
-    Frame,      // hollow rounded rectangle
-    Full,       // filled rounded rectangle
-    LeftBar,    // side bar: left on horizontal taskbar, bottom on vertical
+    PlateAccent,  // id `frame`: native plate, half fill, accent border
+    Plate,        // id `full`: native plate, full Fill opacity
+    LeftBar,      // side bar: left on horizontal taskbar, bottom on vertical
 };
 
 // Physical screen edge the taskbar is on (Win11 24H2/25H2 can use all four).
@@ -398,10 +407,11 @@ enum class PromoteMode {
 
 // Thumbnail flyout highlight (independent of icon GlowStyle).
 enum class PreviewStyle {
-    TitleBg,    // tint behind the window title text
+    TitleBg,    // tinted plate over the title row
     Plate,      // tint whole preview card (hover-like plate)
     TitleBar,   // thin bar under the title, above the thumbnail image
     Outline,    // plate plus an accent border (card overlay)
+    TitleOutline,  // title plate plus an accent border (0.12.1)
     None,       // not marked (ranks 2+ only)
 };
 
@@ -418,8 +428,8 @@ constexpr EnumName<GlowColorMode> kGlowColorNames[] = {
 };
 constexpr EnumName<GlowStyle> kGlowStyleNames[] = {
     {L"leftBar", GlowStyle::LeftBar},
-    {L"frame", GlowStyle::Frame},
-    {L"full", GlowStyle::Full},
+    {L"frame", GlowStyle::PlateAccent},
+    {L"full", GlowStyle::Plate},
 };
 constexpr EnumName<PromoteMode> kPromoteModeNames[] = {
     {L"immediateTracked", PromoteMode::ImmediateTracked},
@@ -429,6 +439,7 @@ constexpr EnumName<PromoteMode> kPromoteModeNames[] = {
 constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
     {L"plate", PreviewStyle::Plate},       {L"outline", PreviewStyle::Outline},
     {L"titleBg", PreviewStyle::TitleBg},   {L"titleBar", PreviewStyle::TitleBar},
+    {L"titleOutline", PreviewStyle::TitleOutline},
     {L"none", PreviewStyle::None},
 };
 constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {
@@ -472,9 +483,10 @@ struct Settings {
     uint32_t customGlowPacked = 0xFF00C853;  // parsed once in LoadSettings
     int glowIntensity[3] = {100, 70, 45};
     GlowStyle glowStyle = GlowStyle::LeftBar;
-    int glowThickness = 3;      // px
-    int glowSize = 92;          // % of icon panel (clamped to fit)
-    int glowFillOpacity = 40;   // % for Full / left / bottom icon styles
+    int glowThickness = 3;      // px, side bar
+    int glowSize = 92;          // % side bar length (clamped to fit)
+    int glowFillOpacity = 40;   // % side bar / plate (half for PlateAccent)
+    int glowAccentThickness = 2;  // px, PlateAccent border
     int previewFillOpacity = 40;  // % for thumbnail plate / titleBg only
     int decayMinutes = 30;
     bool previewHighlightEnabled = true;
@@ -996,11 +1008,13 @@ constexpr ULONGLONG kTransientRetryPollMs = 200;
 // storyboards own that and constantly wipe our styles). The mod writes no
 // property of a native element (the icon size boost went in 0.11.38).
 constexpr PCWSTR kGlowElementName = L"WhRecentFocusGlow";
-constexpr PCWSTR kGlowLayerNames[] = {
-    L"WhRecentFocusGlowL0",
-    L"WhRecentFocusGlowL1",
-};
-constexpr int kGlowMaxLayers = 2;
+// The side bar. Until 0.12.1 a second, 2px larger rectangle at low alpha
+// (L1) acted as a halo; XAML cannot blur it, so it showed as a hard rim.
+constexpr PCWSTR kGlowBarName = L"WhRecentFocusGlowBar";
+// Plate / Plate with accent: our copy of BackgroundElement, and of the
+// MultiWindowElement sliver on a multi-window button (0.12.1).
+constexpr PCWSTR kGlowContourName = L"WhRecentFocusContour";
+constexpr PCWSTR kGlowStackName = L"WhRecentFocusContourStack";
 
 // Intensity for a 0-based rank: the three configured values, then each
 // further rank fades by a quarter (floor 10 %, never above rank 3) so ranks
@@ -2626,9 +2640,7 @@ uint32_t GlowHostInsertionIndex(const std::vector<GlowOrderChild>& children) {
 // Preserve the established style layering without changing native properties.
 // Explicit InsertAt is required even at the end: Append omits XAML deferred
 // index notifications while RemoveAt sends them.
-void EnsureGlowHostZOrder(Controls::Panel panel,
-                          UIElement host,
-                          GlowStyle style) {
+void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host) {
     if (!panel || !host)
         return;
     try {
@@ -2647,8 +2659,9 @@ void EnsureGlowHostZOrder(Controls::Panel panel,
             bool above = name == L"OverlayIcon" ||
                          name == L"MultiWindowElement" ||
                          name == L"ProgressIndicator";
-            if ((style == GlowStyle::LeftBar || style == GlowStyle::Full) &&
-                (name == L"Icon" || name == L"DefaultIcon"))
+            // Every style sits behind the glyph (0.12.1: the frame, now
+            // Plate with accent, used to be drawn above it).
+            if (name == L"Icon" || name == L"DefaultIcon")
                 above = true;
             if (running && !RunningIndicatorLooksLikeHoverPlate(fe, panelFe))
                 above = true;
@@ -2716,13 +2729,13 @@ void ClearButtonHighlight(FrameworkElement button) {
     }
 }
 
-// Ensure glow host grid exists (L0–L1 rectangles). Returns host or nullptr.
+// Ensure glow host grid exists (side bar rectangle). Returns host or nullptr.
 Controls::Grid EnsureGlowHost(Controls::Panel panel,
                               FrameworkElement iconPanel) {
     Controls::Grid host = nullptr;
     if (auto existing = FindChildByName(iconPanel, kGlowElementName)) {
         host = existing.try_as<Controls::Grid>();
-        if (host && !FindChildByName(host, kGlowLayerNames[0])
+        if (host && !FindChildByName(host, kGlowBarName)
                          .try_as<Shapes::Rectangle>()) {
             RemoveNamedChild(panel, kGlowElementName);
             host = nullptr;
@@ -2741,10 +2754,7 @@ Controls::Grid EnsureGlowHost(Controls::Panel panel,
                 IsHitTestVisible="False"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch">
-                <Rectangle Name="WhRecentFocusGlowL0"
-                           IsHitTestVisible="False"
-                           Fill="Transparent"/>
-                <Rectangle Name="WhRecentFocusGlowL1"
+                <Rectangle Name="WhRecentFocusGlowBar"
                            IsHitTestVisible="False"
                            Fill="Transparent"/>
             </Grid>
@@ -2766,17 +2776,15 @@ void HideAllGlowLayers(Controls::Grid host) {
     if (!host) {
         return;
     }
-    if (auto contour = FindChildByName(host, L"WhRecentFocusContour")) {
-        contour.Visibility(Visibility::Collapsed);
-    }
-    for (int i = 0; i < kGlowMaxLayers; ++i) {
-        if (auto r =
-                FindChildByName(host, kGlowLayerNames[i]).try_as<Shapes::Rectangle>()) {
-            r.Visibility(Visibility::Collapsed);
-            r.Stroke(nullptr);
-            r.Fill(Media::SolidColorBrush{
-                winrt::Windows::UI::Color{0, 0, 0, 0}});
+    for (auto name : {kGlowContourName, kGlowStackName}) {
+        if (auto el = FindChildByName(host, name)) {
+            el.Visibility(Visibility::Collapsed);
         }
+    }
+    if (auto r = FindChildByName(host, kGlowBarName).try_as<Shapes::Rectangle>()) {
+        r.Visibility(Visibility::Collapsed);
+        r.Stroke(nullptr);
+        r.Fill(Media::SolidColorBrush{winrt::Windows::UI::Color{0, 0, 0, 0}});
     }
 }
 
@@ -2845,8 +2853,7 @@ void PaintNativeContour(Controls::Grid host,
                         FrameworkElement iconPanel,
                         GlowStyle style,
                         winrt::Windows::UI::Color color,
-                        double thickness,
-                        double sizeFrac,
+                        double accentThickness,
                         double opacity,
                         int fillOpacity) {
     // The host may not have been arranged yet. Use the native panel's content
@@ -2878,9 +2885,11 @@ void PaintNativeContour(Controls::Grid host,
     bool found = false;
     if (plate)
         found = ReadNativeGlowShape(indicator, iconPanel, shape);
-    if (!found)
-        found = ReadNativeGlowShape(
+    bool fromBackground = false;
+    if (!found) {
+        found = fromBackground = ReadNativeGlowShape(
             FindChildByName(iconPanel, L"BackgroundElement"), iconPanel, shape);
+    }
     if (!found) {
         shape.x = padding.Left;
         shape.y = padding.Top;
@@ -2890,47 +2899,98 @@ void PaintNativeContour(Controls::Grid host,
             return;
         shape.corners = CornerRadius{4, 4, 4, 4};
     }
-    double inset =
-        (std::max)(1.0, (std::min)(shape.w, shape.h) * (1.0 - sizeFrac) * 0.5);
-    double w = shape.w - 2 * inset, h = shape.h - 2 * inset;
-    if (!SafeGlowBounds(shape.x + inset, shape.y + inset, w, h))
+    if (!SafeGlowBounds(shape.x, shape.y, shape.w, shape.h))
         return;
-    Controls::Border border = FindChildByName(host, L"WhRecentFocusContour")
-                                  .try_as<Controls::Border>();
-    if (!border) {
-        border = Controls::Border();
-        border.Name(L"WhRecentFocusContour");
-        border.IsHitTestVisible(false);
-        auto children = host.Children();
-        children.InsertAt(children.Size(), border);
-    }
-    double dx = shape.x + shape.w * 0.5 - centerX;
-    double dy = shape.y + shape.h * 0.5 - centerY;
-    if (!SafeGlowMetric(dx) || !SafeGlowMetric(dy))
-        return;
-    border.HorizontalAlignment(HorizontalAlignment::Center);
-    border.VerticalAlignment(VerticalAlignment::Center);
-    border.Width(w);
-    border.Height(h);
-    border.Margin({dx, dy, -dx, -dy});
-    border.CornerRadius({InsetGlowRadius(shape.corners.TopLeft, 0, w, h),
-                         InsetGlowRadius(shape.corners.TopRight, 0, w, h),
-                         InsetGlowRadius(shape.corners.BottomRight, 0, w, h),
-                         InsetGlowRadius(shape.corners.BottomLeft, 0, w, h)});
-    bool frame = style == GlowStyle::Frame;
-    double stroke = frame ? (std::min)(thickness, (std::min)(w, h) * 0.5) : 0;
-    border.BorderThickness({stroke, stroke, stroke, stroke});
-    auto strokeColor = color;
-    strokeColor.A = 230;
-    border.BorderBrush(Media::SolidColorBrush{strokeColor});
-    color.A = frame ? 0
-                    : static_cast<uint8_t>(
-                          (std::clamp)(fillOpacity, 0, 100) * 2.55 * 0.6 + 0.5);
-    border.Background(Media::SolidColorBrush{color});
-    border.Opacity((std::clamp)(opacity, 0.0, 1.0));
-    border.Visibility(Visibility::Visible);
-}
 
+    // Plate with accent: accent border (accent thickness) and half the fill,
+    // as the preview "with accent" styles. Until 0.12.1 Frame was a 230-alpha
+    // stroke of the side bar's thickness with no fill (read as a focus ring),
+    // and Full 60 % of Fill opacity (paler than Windows' own plates).
+    const bool accent = style == GlowStyle::PlateAccent;
+    auto strokeColor = color;
+    strokeColor.A = 255;
+    auto fillColor = color;
+    fillColor.A = static_cast<uint8_t>(
+        (std::clamp)(fillOpacity, 0, 100) * 2.55 * (accent ? 0.5 : 1.0) + 0.5);
+    const double rankOpacity = (std::clamp)(opacity, 0.0, 1.0);
+
+    // Our Border over a native shape: same size and corners, centred on it
+    // through balanced margins relative to the panel content centre. Created
+    // at `index` in the host (nullopt = on top). nullptr: bad geometry.
+    auto paint = [&](PCWSTR name, NativeGlowShape const& s,
+                     std::optional<uint32_t> index) -> Controls::Border {
+        double w = s.w, h = s.h;
+        double dx = s.x + w * 0.5 - centerX;
+        double dy = s.y + h * 0.5 - centerY;
+        if (!SafeGlowBounds(s.x, s.y, w, h) || !SafeGlowMetric(dx) ||
+            !SafeGlowMetric(dy))
+            return nullptr;
+        Controls::Border b =
+            FindChildByName(host, name).try_as<Controls::Border>();
+        if (!b) {
+            b = Controls::Border();
+            b.Name(name);
+            b.IsHitTestVisible(false);
+            auto children = host.Children();
+            children.InsertAt(index ? (std::min)(*index, children.Size())
+                                    : children.Size(),
+                              b);
+        }
+        b.HorizontalAlignment(HorizontalAlignment::Center);
+        b.VerticalAlignment(VerticalAlignment::Center);
+        b.Width(w);
+        b.Height(h);
+        b.Margin({dx, dy, -dx, -dy});
+        b.CornerRadius({InsetGlowRadius(s.corners.TopLeft, 0, w, h),
+                        InsetGlowRadius(s.corners.TopRight, 0, w, h),
+                        InsetGlowRadius(s.corners.BottomRight, 0, w, h),
+                        InsetGlowRadius(s.corners.BottomLeft, 0, w, h)});
+        double stroke =
+            accent ? (std::min)(accentThickness, (std::min)(w, h) * 0.5) : 0;
+        b.BorderThickness({stroke, stroke, stroke, stroke});
+        b.BorderBrush(Media::SolidColorBrush{strokeColor});
+        b.Background(Media::SolidColorBrush{fillColor});
+        b.Opacity(rankOpacity);
+        b.ClearValue(UIElement::ClipProperty());
+        b.Visibility(Visibility::Visible);
+        return b;
+    };
+
+    // Flush with the native plate (0.12.1), so it reads as the button's own
+    // plate lit up. Until 0.12.1 Frame / Full sat at Size % (92) inside it.
+    if (!paint(kGlowContourName, shape, std::nullopt))
+        return;
+
+    // Multi-window button (0.12.1): Windows narrows BackgroundElement by a
+    // right margin of 4 and draws MultiWindowElement (Border, Width 16, right-
+    // aligned, above the background) so a sliver sticks out: "(O))". Our
+    // plate copies only the background, which left a faint native ")" next to
+    // a tinted "(O)". Copy the sliver as well, under our plate, clipped to the
+    // part right of the background so the tint does not double where they
+    // overlap. UWPSpy dump: tests/uwspy/captures/multiwin-20261119-212700.
+    bool stacked = false;
+    NativeGlowShape stack;
+    if (fromBackground &&
+        ReadNativeGlowShape(FindChildByName(iconPanel, L"MultiWindowElement"),
+                            iconPanel, stack)) {
+        const double clipX = shape.x + shape.w - stack.x;
+        if (clipX > 0.0 && clipX < stack.w - 0.5) {
+            if (auto b = paint(kGlowStackName, stack, 0u)) {
+                Media::RectangleGeometry clip;
+                clip.Rect({static_cast<float>(clipX), 0.f,
+                           static_cast<float>(stack.w - clipX),
+                           static_cast<float>(stack.h)});
+                b.Clip(clip);
+                stacked = true;
+            }
+        }
+    }
+    if (!stacked) {
+        if (auto b = FindChildByName(host, kGlowStackName)) {
+            b.Visibility(Visibility::Collapsed);
+        }
+    }
+}
 PCWSTR GlowStyleName(GlowStyle s) {
     return EnumToName(kGlowStyleNames, s);
 }
@@ -3183,13 +3243,11 @@ void StyleGlowBarOnSide(Shapes::Rectangle rect,
                         double thickness,
                         double length,
                         BarSide side,
-                        int layer,
                         double opacity) {
-    const double t = thickness + static_cast<double>(layer) * 2.0;
-    const double len = length + static_cast<double>(layer) * 2.0;
-    const double edgePad = (side == BarSide::Bottom || side == BarSide::Top)
-                               ? (2.0 + static_cast<double>(layer))
-                               : (1.0 + static_cast<double>(layer));
+    const double t = thickness;
+    const double len = length;
+    const double edgePad =
+        (side == BarSide::Bottom || side == BarSide::Top) ? 2.0 : 1.0;
 
     rect.Stroke(nullptr);
     rect.StrokeThickness(0);
@@ -3262,7 +3320,7 @@ void RepositionGlowAfterRelayout(FrameworkElement iconPanel) {
     }
     try {
         if (auto host = FindChildByName(iconPanel, kGlowElementName)) {
-            EnsureGlowHostZOrder(panel, host, SettingsSnap()->glowStyle);
+            EnsureGlowHostZOrder(panel, host);
         }
     } catch (...) {
     }
@@ -3540,7 +3598,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                     g_cachedAccent.load(std::memory_order_relaxed) &&
                 painted.edge == edge && painted.boxW == boxWi &&
                 painted.boxH == boxHi && ButtonHasOurChrome(button)) {
-                EnsureGlowHostZOrder(panel, existingHost, settings->glowStyle);
+                EnsureGlowHostZOrder(panel, existingHost);
                 return;
             }
         }
@@ -3557,7 +3615,6 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             return c;
         };
 
-        const int layers = kGlowMaxLayers;  // main bar + soft outer glow
         const double thickness = static_cast<double>(
             (std::max)(1, (std::min)(16, settings->glowThickness)));
         const double sizeFrac =
@@ -3578,7 +3635,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         const BarSide barSide = SideBarForTaskbarEdge(edge);
 
         // Position only our host; native children keep their relative order.
-        EnsureGlowHostZOrder(panel, host, style);
+        EnsureGlowHostZOrder(panel, host);
 
         HideAllGlowLayers(host);
 
@@ -3588,29 +3645,22 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
             return;
         }
 
-        if (style == GlowStyle::Frame || style == GlowStyle::Full) {
-            PaintNativeContour(host, iconPanel, style, base, thickness, sizeFrac,
-                               t, fillOpacitySetting);
-        } else if (style == GlowStyle::LeftBar) {
+        if (style == GlowStyle::Plate || style == GlowStyle::PlateAccent) {
+            PaintNativeContour(host, iconPanel, style, base,
+                               settings->glowAccentThickness, t,
+                               fillOpacitySetting);
+        } else {
             // Side bar: left of the icon on a bottom/top taskbar, under the
             // icon on a left/right taskbar — never the native-pill edge.
             const double barT = thickness + 1.0;
             const double barLen =
                 BarLengthForSide(boxW, boxH, barSide, sizeFrac);
-            const int fillBase =
+            const int fillA =
                 static_cast<int>(fillOpacitySetting * 2.55 + 0.5);
-
-            for (int i = 0; i < layers; ++i) {
-                auto rect = FindChildByName(host, kGlowLayerNames[i])
-                                .try_as<Shapes::Rectangle>();
-                if (!rect) {
-                    continue;
-                }
-                const int fillA =
-                    i == 0 ? fillBase : static_cast<int>(fillBase * 0.35);
-                const double opacity = i == 0 ? t : (0.45 * t);
+            if (auto rect = FindChildByName(host, kGlowBarName)
+                                .try_as<Shapes::Rectangle>()) {
                 StyleGlowBarOnSide(rect, withAlpha(base, fillA), barT, barLen,
-                                   barSide, i, opacity);
+                                   barSide, t);
             }
         }
 
@@ -5308,6 +5358,9 @@ void HideThumbOverlayChildren(Controls::Grid host) {
                 }
                 if (auto b = el.try_as<Controls::Border>()) {
                     b.Background(nullptr);
+                    // Title outline: else a switch to titleBg keeps it.
+                    b.BorderBrush(nullptr);
+                    b.BorderThickness(Thickness{0, 0, 0, 0});
                 }
                 el.ClearValue(FrameworkElement::WidthProperty());
                 el.ClearValue(FrameworkElement::HeightProperty());
@@ -5620,15 +5673,29 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         Controls::Grid host = EnsureThumbOverlayHost(panel);
         HideThumbOverlayChildren(host);
 
-        if (paintStyle == PreviewStyle::TitleBg) {
+        if (paintStyle == PreviewStyle::TitleBg ||
+            paintStyle == PreviewStyle::TitleOutline) {
+            // Title / title with accent (0.12.1): a plate over the title row,
+            // 4px in from the card's BackgroundBorder (left, top, right) with
+            // the card's corner radius, ending under the title with the gap
+            // above the title mirrored below it. Before 0.12.1 the title tint
+            // sat 8px in from the panel with 4px corners and uneven gaps
+            // (thin tint left of the icon). The accent variant adds an
+            // accent border and halves the tint, as Outline does for the card.
+            const bool outline = paintStyle == PreviewStyle::TitleOutline;
+            const double stroke =
+                outline ? settings->previewOutlineThickness : 0.0;
+            constexpr double kEdgeInset = 4.0;
             double top = 4.0;
             double stripH = 28.0;
             double titleTop = 0, titleBottom = 0;
             bool laidOut = GetTitleBottomRelative(title, host, cardH, titleTop,
                                                   titleBottom);
             if (laidOut) {
-                top = (std::max)(2.0, titleTop - 3.0);
-                stripH = (std::max)(20.0, titleBottom - top + 4.0);
+                // Fallback strip (no BackgroundBorder). An outline is drawn
+                // inside: grow by its width so the gap around the title stays.
+                top = (std::max)(2.0, titleTop - 3.0 - stroke);
+                stripH = (std::max)(20.0, titleBottom - top + 4.0 + stroke);
             } else {
                 // Layout not ready — default strip + one deferred remeasure.
                 SchedulePreviewFlyoutRefresh(thumbView);
@@ -5636,16 +5703,67 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             auto chip =
                 FindChildByName(host, kThumbTitleBgName).try_as<Controls::Border>();
             if (chip) {
-                const int chipA = static_cast<int>(
-                    fillOpacitySetting * 2.55 * t + 0.5);
-                chip.Background(Media::SolidColorBrush{withAlpha(base, chipA)});
-                // Brace-init {4} only fills TopLeft (C++ struct). All four.
-                chip.CornerRadius(CornerRadius{4, 4, 4, 4});
-                chip.Opacity(1.0);
                 const double pad = 8.0;
-                top = (std::max)(6.0, top);
-                PlaceOverlayChild(chip, pad, top,
-                                  (std::max)(24.0, cardW - 2.0 * pad), stripH);
+                double x = pad;
+                double w = (std::max)(24.0, cardW - 2.0 * pad);
+                // Brace-init {4} only fills TopLeft (C++ struct). All four.
+                CornerRadius radius{4, 4, 4, 4};
+                bool fromCard = false;
+                if (laidOut) {
+                    try {
+                        if (auto bb = FindThumbnailBackgroundBorder(thumbView)) {
+                            const double bw = bb.ActualWidth();
+                            auto origin =
+                                bb.TransformToVisual(host).TransformPoint(
+                                    winrt::Windows::Foundation::Point{0.f,
+                                                                      0.f});
+                            const double edgeTop = origin.Y + kEdgeInset;
+                            // Gap below the title = gap above it, at most
+                            // 4px + border.
+                            const double gap = (std::min)(
+                                titleTop - edgeTop, 8.0 - kEdgeInset + stroke);
+                            if (bw > 2.0 * kEdgeInset + 24.0 && gap >= 0.0) {
+                                x = origin.X + kEdgeInset;
+                                w = bw - 2.0 * kEdgeInset;
+                                top = edgeTop;
+                                stripH = (std::max)(20.0,
+                                                    titleBottom + gap - top);
+                                // The card's own radius: radius - inset
+                                // (concentric) looked too sharp.
+                                if (auto b = bb.try_as<Controls::Border>()) {
+                                    radius = b.CornerRadius();
+                                }
+                                fromCard = true;
+                            }
+                        }
+                    } catch (...) {
+                    }
+                }
+                if (!fromCard) {
+                    const double bottom = top + stripH;
+                    top = (std::max)(6.0, top);
+                    if (outline) {
+                        // Keep the bottom edge where it was, or the outline
+                        // crowds the thumbnail when the top is pushed down.
+                        stripH = (std::max)(20.0, bottom - top);
+                    }
+                }
+                const int chipA = static_cast<int>(
+                    // Accent: half the tint so the border reads (as Outline).
+                    (outline ? fillOpacitySetting / 2 : fillOpacitySetting) *
+                        2.55 * t +
+                    0.5);
+                chip.Background(Media::SolidColorBrush{withAlpha(base, chipA)});
+                if (outline) {
+                    const int strokeA = static_cast<int>(255 * t + 0.5);
+                    chip.BorderBrush(
+                        Media::SolidColorBrush{withAlpha(base, strokeA)});
+                    chip.BorderThickness(
+                        Thickness{stroke, stroke, stroke, stroke});
+                }
+                chip.CornerRadius(radius);
+                chip.Opacity(1.0);
+                PlaceOverlayChild(chip, x, top, w, stripH);
             }
         } else {  // TitleBar — underline just under the title glyphs
             // Small gap under baseline — enough to avoid strikethrough, not
@@ -7833,7 +7951,8 @@ bool LegacyPreviewStyle(PreviewStyle& out) {
     auto legacy = WindhawkUtils::StringSetting::make(L"previews.style");
     PreviewStyle v = PreviewStyle::None;
     if (!NameToEnum(kPreviewStyleNames, legacy.get(), v) ||
-        v == PreviewStyle::Outline || v == PreviewStyle::None) {
+        v == PreviewStyle::Outline || v == PreviewStyle::TitleOutline ||
+        v == PreviewStyle::None) {
         return false;
     }
     out = v;
@@ -7915,6 +8034,8 @@ void LoadSettings(bool userSavedSettings) {
     s.glowThickness = ClampedIntSetting(L"icons.glowThickness", 1, 16);
     s.glowSize = ClampedIntSetting(L"icons.glowSize", 40, 100);
     s.glowFillOpacity = ClampedIntSetting(L"icons.glowFillOpacity", 0, 100);
+    s.glowAccentThickness =
+        ClampedIntSetting(L"icons.glowAccentThickness", 1, 8);
 
     s.previewHighlightEnabled =
         Wh_GetIntSetting(L"previews.highlightEnabled") != 0;

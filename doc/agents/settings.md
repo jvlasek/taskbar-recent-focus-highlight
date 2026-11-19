@@ -16,16 +16,17 @@ General keys stay top-level; icon/preview keys are dotted.
 | General | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
 | General | `decayMinutes` | app decay |
 | General | `excludedPrograms[i]` | uppercase set |
-| Taskbar icons | `icons.glowStyle` | `LeftBar` (side bar) / `Frame` / `Full`; legacy `bottomBar` falls back to Side |
+| Taskbar icons | `icons.glowStyle` | `leftBar` (Side bar) / `full` (Plate) / `frame` (Plate with accent) — UI names and look changed in 0.12.1, ids kept; legacy `bottomBar` falls back to Side |
+| Taskbar icons | `icons.glowAccentThickness` | Plate with accent border, 1–8 px (0.12.1) |
 | Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | color mode + hex |
 | Taskbar icons | `icons.glowIntensityRank1..3` | `glowIntensity[3]` |
-| Taskbar icons | `icons.glowThickness` / `icons.glowSize` | metrics |
-| Taskbar icons | `icons.glowFillOpacity` | Full / side fill strength (Edge removed) |
+| Taskbar icons | `icons.glowThickness` / `icons.glowSize` | side bar thickness / length (UI renamed in 0.12.1; until then also Frame stroke / plate inset) |
+| Taskbar icons | `icons.glowFillOpacity` | Side bar / Plate strength; half for Plate with accent |
 | Thumbnail previews | `previews.highlightEnabled` | preview master |
 | Thumbnail previews | `previews.highlightCount` | per-flyout top N |
 | Thumbnail previews | `previews.singleWindow` | single-window flyouts ranked too (rank 1 while recent; default off) |
-| Thumbnail previews | `previews.topStyle` / `previews.restStyle` | `plate` / `outline` / `titleBg` / `titleBar` (+ `none` for ranks 2+); legacy `previews.style` mapped by `ApplyLegacyPreviewStyle` |
-| Thumbnail previews | `previews.outlineThickness` | Outline style (fill = half of `previews.fillOpacity`) |
+| Thumbnail previews | `previews.topStyle` / `previews.restStyle` | `plate` / `outline` / `titleBg` / `titleOutline` (0.12.1) / `titleBar` (+ `none` for ranks 2+); UI names since 0.12.1: Whole plate / Whole plate with accent / Title / Title with accent / Bar under title; legacy `previews.style` mapped by `ApplyLegacyPreviewStyle` |
+| Thumbnail previews | `previews.outlineThickness` (UI "Accent thickness" since 0.12.1) | `outline` + `titleOutline` border (fill = half of `previews.fillOpacity`) |
 | Thumbnail previews | `previews.intensityRank1..3` | `previewIntensity[3]` |
 | Thumbnail previews | `previews.fillOpacity` | plate + titleBg wash (not title bar line) |
 | Thumbnail previews | `previews.minFocusSeconds` | window confirm |

@@ -104,9 +104,7 @@ uint32_t GlowHostInsertionIndex(const std::vector<GlowOrderChild>& children) {
 // Preserve the established style layering without changing native properties.
 // Explicit InsertAt is required even at the end: Append omits XAML deferred
 // index notifications while RemoveAt sends them.
-void EnsureGlowHostZOrder(Controls::Panel panel,
-                          UIElement host,
-                          GlowStyle style) {
+void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host) {
     if (!panel || !host)
         return;
     try {
@@ -125,8 +123,9 @@ void EnsureGlowHostZOrder(Controls::Panel panel,
             bool above = name == L"OverlayIcon" ||
                          name == L"MultiWindowElement" ||
                          name == L"ProgressIndicator";
-            if ((style == GlowStyle::LeftBar || style == GlowStyle::Full) &&
-                (name == L"Icon" || name == L"DefaultIcon"))
+            // Every style sits behind the glyph (0.12.1: the frame, now
+            // Plate with accent, used to be drawn above it).
+            if (name == L"Icon" || name == L"DefaultIcon")
                 above = true;
             if (running && !RunningIndicatorLooksLikeHoverPlate(fe, panelFe))
                 above = true;
@@ -194,13 +193,13 @@ void ClearButtonHighlight(FrameworkElement button) {
     }
 }
 
-// Ensure glow host grid exists (L0–L1 rectangles). Returns host or nullptr.
+// Ensure glow host grid exists (side bar rectangle). Returns host or nullptr.
 Controls::Grid EnsureGlowHost(Controls::Panel panel,
                               FrameworkElement iconPanel) {
     Controls::Grid host = nullptr;
     if (auto existing = FindChildByName(iconPanel, kGlowElementName)) {
         host = existing.try_as<Controls::Grid>();
-        if (host && !FindChildByName(host, kGlowLayerNames[0])
+        if (host && !FindChildByName(host, kGlowBarName)
                          .try_as<Shapes::Rectangle>()) {
             RemoveNamedChild(panel, kGlowElementName);
             host = nullptr;
@@ -219,10 +218,7 @@ Controls::Grid EnsureGlowHost(Controls::Panel panel,
                 IsHitTestVisible="False"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch">
-                <Rectangle Name="WhRecentFocusGlowL0"
-                           IsHitTestVisible="False"
-                           Fill="Transparent"/>
-                <Rectangle Name="WhRecentFocusGlowL1"
+                <Rectangle Name="WhRecentFocusGlowBar"
                            IsHitTestVisible="False"
                            Fill="Transparent"/>
             </Grid>
@@ -244,17 +240,15 @@ void HideAllGlowLayers(Controls::Grid host) {
     if (!host) {
         return;
     }
-    if (auto contour = FindChildByName(host, L"WhRecentFocusContour")) {
-        contour.Visibility(Visibility::Collapsed);
-    }
-    for (int i = 0; i < kGlowMaxLayers; ++i) {
-        if (auto r =
-                FindChildByName(host, kGlowLayerNames[i]).try_as<Shapes::Rectangle>()) {
-            r.Visibility(Visibility::Collapsed);
-            r.Stroke(nullptr);
-            r.Fill(Media::SolidColorBrush{
-                winrt::Windows::UI::Color{0, 0, 0, 0}});
+    for (auto name : {kGlowContourName, kGlowStackName}) {
+        if (auto el = FindChildByName(host, name)) {
+            el.Visibility(Visibility::Collapsed);
         }
+    }
+    if (auto r = FindChildByName(host, kGlowBarName).try_as<Shapes::Rectangle>()) {
+        r.Visibility(Visibility::Collapsed);
+        r.Stroke(nullptr);
+        r.Fill(Media::SolidColorBrush{winrt::Windows::UI::Color{0, 0, 0, 0}});
     }
 }
 
@@ -323,8 +317,7 @@ void PaintNativeContour(Controls::Grid host,
                         FrameworkElement iconPanel,
                         GlowStyle style,
                         winrt::Windows::UI::Color color,
-                        double thickness,
-                        double sizeFrac,
+                        double accentThickness,
                         double opacity,
                         int fillOpacity) {
     // The host may not have been arranged yet. Use the native panel's content
@@ -356,9 +349,11 @@ void PaintNativeContour(Controls::Grid host,
     bool found = false;
     if (plate)
         found = ReadNativeGlowShape(indicator, iconPanel, shape);
-    if (!found)
-        found = ReadNativeGlowShape(
+    bool fromBackground = false;
+    if (!found) {
+        found = fromBackground = ReadNativeGlowShape(
             FindChildByName(iconPanel, L"BackgroundElement"), iconPanel, shape);
+    }
     if (!found) {
         shape.x = padding.Left;
         shape.y = padding.Top;
@@ -368,44 +363,95 @@ void PaintNativeContour(Controls::Grid host,
             return;
         shape.corners = CornerRadius{4, 4, 4, 4};
     }
-    double inset =
-        (std::max)(1.0, (std::min)(shape.w, shape.h) * (1.0 - sizeFrac) * 0.5);
-    double w = shape.w - 2 * inset, h = shape.h - 2 * inset;
-    if (!SafeGlowBounds(shape.x + inset, shape.y + inset, w, h))
+    if (!SafeGlowBounds(shape.x, shape.y, shape.w, shape.h))
         return;
-    Controls::Border border = FindChildByName(host, L"WhRecentFocusContour")
-                                  .try_as<Controls::Border>();
-    if (!border) {
-        border = Controls::Border();
-        border.Name(L"WhRecentFocusContour");
-        border.IsHitTestVisible(false);
-        auto children = host.Children();
-        children.InsertAt(children.Size(), border);
-    }
-    double dx = shape.x + shape.w * 0.5 - centerX;
-    double dy = shape.y + shape.h * 0.5 - centerY;
-    if (!SafeGlowMetric(dx) || !SafeGlowMetric(dy))
-        return;
-    border.HorizontalAlignment(HorizontalAlignment::Center);
-    border.VerticalAlignment(VerticalAlignment::Center);
-    border.Width(w);
-    border.Height(h);
-    border.Margin({dx, dy, -dx, -dy});
-    border.CornerRadius({InsetGlowRadius(shape.corners.TopLeft, 0, w, h),
-                         InsetGlowRadius(shape.corners.TopRight, 0, w, h),
-                         InsetGlowRadius(shape.corners.BottomRight, 0, w, h),
-                         InsetGlowRadius(shape.corners.BottomLeft, 0, w, h)});
-    bool frame = style == GlowStyle::Frame;
-    double stroke = frame ? (std::min)(thickness, (std::min)(w, h) * 0.5) : 0;
-    border.BorderThickness({stroke, stroke, stroke, stroke});
-    auto strokeColor = color;
-    strokeColor.A = 230;
-    border.BorderBrush(Media::SolidColorBrush{strokeColor});
-    color.A = frame ? 0
-                    : static_cast<uint8_t>(
-                          (std::clamp)(fillOpacity, 0, 100) * 2.55 * 0.6 + 0.5);
-    border.Background(Media::SolidColorBrush{color});
-    border.Opacity((std::clamp)(opacity, 0.0, 1.0));
-    border.Visibility(Visibility::Visible);
-}
 
+    // Plate with accent: accent border (accent thickness) and half the fill,
+    // as the preview "with accent" styles. Until 0.12.1 Frame was a 230-alpha
+    // stroke of the side bar's thickness with no fill (read as a focus ring),
+    // and Full 60 % of Fill opacity (paler than Windows' own plates).
+    const bool accent = style == GlowStyle::PlateAccent;
+    auto strokeColor = color;
+    strokeColor.A = 255;
+    auto fillColor = color;
+    fillColor.A = static_cast<uint8_t>(
+        (std::clamp)(fillOpacity, 0, 100) * 2.55 * (accent ? 0.5 : 1.0) + 0.5);
+    const double rankOpacity = (std::clamp)(opacity, 0.0, 1.0);
+
+    // Our Border over a native shape: same size and corners, centred on it
+    // through balanced margins relative to the panel content centre. Created
+    // at `index` in the host (nullopt = on top). nullptr: bad geometry.
+    auto paint = [&](PCWSTR name, NativeGlowShape const& s,
+                     std::optional<uint32_t> index) -> Controls::Border {
+        double w = s.w, h = s.h;
+        double dx = s.x + w * 0.5 - centerX;
+        double dy = s.y + h * 0.5 - centerY;
+        if (!SafeGlowBounds(s.x, s.y, w, h) || !SafeGlowMetric(dx) ||
+            !SafeGlowMetric(dy))
+            return nullptr;
+        Controls::Border b =
+            FindChildByName(host, name).try_as<Controls::Border>();
+        if (!b) {
+            b = Controls::Border();
+            b.Name(name);
+            b.IsHitTestVisible(false);
+            auto children = host.Children();
+            children.InsertAt(index ? (std::min)(*index, children.Size())
+                                    : children.Size(),
+                              b);
+        }
+        b.HorizontalAlignment(HorizontalAlignment::Center);
+        b.VerticalAlignment(VerticalAlignment::Center);
+        b.Width(w);
+        b.Height(h);
+        b.Margin({dx, dy, -dx, -dy});
+        b.CornerRadius({InsetGlowRadius(s.corners.TopLeft, 0, w, h),
+                        InsetGlowRadius(s.corners.TopRight, 0, w, h),
+                        InsetGlowRadius(s.corners.BottomRight, 0, w, h),
+                        InsetGlowRadius(s.corners.BottomLeft, 0, w, h)});
+        double stroke =
+            accent ? (std::min)(accentThickness, (std::min)(w, h) * 0.5) : 0;
+        b.BorderThickness({stroke, stroke, stroke, stroke});
+        b.BorderBrush(Media::SolidColorBrush{strokeColor});
+        b.Background(Media::SolidColorBrush{fillColor});
+        b.Opacity(rankOpacity);
+        b.ClearValue(UIElement::ClipProperty());
+        b.Visibility(Visibility::Visible);
+        return b;
+    };
+
+    // Flush with the native plate (0.12.1), so it reads as the button's own
+    // plate lit up. Until 0.12.1 Frame / Full sat at Size % (92) inside it.
+    if (!paint(kGlowContourName, shape, std::nullopt))
+        return;
+
+    // Multi-window button (0.12.1): Windows narrows BackgroundElement by a
+    // right margin of 4 and draws MultiWindowElement (Border, Width 16, right-
+    // aligned, above the background) so a sliver sticks out: "(O))". Our
+    // plate copies only the background, which left a faint native ")" next to
+    // a tinted "(O)". Copy the sliver as well, under our plate, clipped to the
+    // part right of the background so the tint does not double where they
+    // overlap. UWPSpy dump: tests/uwspy/captures/multiwin-20261119-212700.
+    bool stacked = false;
+    NativeGlowShape stack;
+    if (fromBackground &&
+        ReadNativeGlowShape(FindChildByName(iconPanel, L"MultiWindowElement"),
+                            iconPanel, stack)) {
+        const double clipX = shape.x + shape.w - stack.x;
+        if (clipX > 0.0 && clipX < stack.w - 0.5) {
+            if (auto b = paint(kGlowStackName, stack, 0u)) {
+                Media::RectangleGeometry clip;
+                clip.Rect({static_cast<float>(clipX), 0.f,
+                           static_cast<float>(stack.w - clipX),
+                           static_cast<float>(stack.h)});
+                b.Clip(clip);
+                stacked = true;
+            }
+        }
+    }
+    if (!stacked) {
+        if (auto b = FindChildByName(host, kGlowStackName)) {
+            b.Visibility(Visibility::Collapsed);
+        }
+    }
+}

@@ -21,7 +21,8 @@ bool LegacyPreviewStyle(PreviewStyle& out) {
     auto legacy = WindhawkUtils::StringSetting::make(L"previews.style");
     PreviewStyle v = PreviewStyle::None;
     if (!NameToEnum(kPreviewStyleNames, legacy.get(), v) ||
-        v == PreviewStyle::Outline || v == PreviewStyle::None) {
+        v == PreviewStyle::Outline || v == PreviewStyle::TitleOutline ||
+        v == PreviewStyle::None) {
         return false;
     }
     out = v;
@@ -103,6 +104,8 @@ void LoadSettings(bool userSavedSettings) {
     s.glowThickness = ClampedIntSetting(L"icons.glowThickness", 1, 16);
     s.glowSize = ClampedIntSetting(L"icons.glowSize", 40, 100);
     s.glowFillOpacity = ClampedIntSetting(L"icons.glowFillOpacity", 0, 100);
+    s.glowAccentThickness =
+        ClampedIntSetting(L"icons.glowAccentThickness", 1, 8);
 
     s.previewHighlightEnabled =
         Wh_GetIntSetting(L"previews.highlightEnabled") != 0;

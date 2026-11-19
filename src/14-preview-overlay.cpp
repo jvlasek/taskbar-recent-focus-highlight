@@ -279,6 +279,9 @@ void HideThumbOverlayChildren(Controls::Grid host) {
                 }
                 if (auto b = el.try_as<Controls::Border>()) {
                     b.Background(nullptr);
+                    // Title outline: else a switch to titleBg keeps it.
+                    b.BorderBrush(nullptr);
+                    b.BorderThickness(Thickness{0, 0, 0, 0});
                 }
                 el.ClearValue(FrameworkElement::WidthProperty());
                 el.ClearValue(FrameworkElement::HeightProperty());
