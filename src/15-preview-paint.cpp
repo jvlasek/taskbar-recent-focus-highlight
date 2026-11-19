@@ -186,8 +186,9 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 bool fromCard = false;
                 if (cardEdges && laidOut) {
                     // From the card's BackgroundBorder: `edgeInset` in from
-                    // its left, top and right edges, corners following the
-                    // card's (its radius minus the inset), ending under the
+                    // its left, top and right edges, with the card's own
+                    // corner radius (radius minus the inset, the concentric
+                    // value, looked too sharp at a 4px inset), ending under the
                     // title with the gap above the title mirrored below it
                     // (at most 8px - inset + border). Inset 0 = the top of
                     // the card plate.
@@ -208,14 +209,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                                 stripH = (std::max)(20.0,
                                                     titleBottom + gap - top);
                                 if (auto b = bb.try_as<Controls::Border>()) {
-                                    auto r = b.CornerRadius();
-                                    auto less = [&](double v) {
-                                        return (std::max)(0.0, v - edgeInset);
-                                    };
-                                    radius = CornerRadius{
-                                        less(r.TopLeft), less(r.TopRight),
-                                        less(r.BottomRight),
-                                        less(r.BottomLeft)};
+                                    radius = b.CornerRadius();
                                 }
                                 fromCard = true;
                             }
