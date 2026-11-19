@@ -77,14 +77,12 @@ enum class GlowColorMode {
     Custom,
 };
 
+// 0.12.1: Frame / Full became Plate with accent / Plate (flush with the
+// native plate); the setting ids `frame` / `full` are kept.
 enum class GlowStyle {
-    Frame,      // hollow rounded rectangle
-    Full,       // filled rounded rectangle
-    LeftBar,    // side bar: left on horizontal taskbar, bottom on vertical
-    // Experimental (0.12.1, branch exp/title-outline):
-    SideBar,     // LeftBar without the halo rectangle
-    Plate,       // flush with the native plate, full Fill opacity
-    PlateAccent, // Plate at half fill plus an accent border
+    PlateAccent,  // id `frame`: native plate, half fill, accent border
+    Plate,        // id `full`: native plate, full Fill opacity
+    LeftBar,      // side bar: left on horizontal taskbar, bottom on vertical
 };
 
 // Physical screen edge the taskbar is on (Win11 24H2/25H2 can use all four).
@@ -133,11 +131,8 @@ constexpr EnumName<GlowColorMode> kGlowColorNames[] = {
 };
 constexpr EnumName<GlowStyle> kGlowStyleNames[] = {
     {L"leftBar", GlowStyle::LeftBar},
-    {L"frame", GlowStyle::Frame},
-    {L"full", GlowStyle::Full},
-    {L"sideBar", GlowStyle::SideBar},
-    {L"plate", GlowStyle::Plate},
-    {L"plateAccent", GlowStyle::PlateAccent},
+    {L"frame", GlowStyle::PlateAccent},
+    {L"full", GlowStyle::Plate},
 };
 constexpr EnumName<PromoteMode> kPromoteModeNames[] = {
     {L"immediateTracked", PromoteMode::ImmediateTracked},
@@ -191,10 +186,10 @@ struct Settings {
     uint32_t customGlowPacked = 0xFF00C853;  // parsed once in LoadSettings
     int glowIntensity[3] = {100, 70, 45};
     GlowStyle glowStyle = GlowStyle::LeftBar;
-    int glowThickness = 3;      // px
-    int glowSize = 92;          // % of icon panel (clamped to fit)
-    int glowFillOpacity = 40;   // % for Full / left / bottom icon styles
-    int glowAccentThickness = 2;  // px, PlateAccent border (experimental)
+    int glowThickness = 3;      // px, side bar
+    int glowSize = 92;          // % side bar length (clamped to fit)
+    int glowFillOpacity = 40;   // % side bar / plate (half for PlateAccent)
+    int glowAccentThickness = 2;  // px, PlateAccent border
     int previewFillOpacity = 40;  // % for thumbnail plate / titleBg only
     int decayMinutes = 30;
     bool previewHighlightEnabled = true;

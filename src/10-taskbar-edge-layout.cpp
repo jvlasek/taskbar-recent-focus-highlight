@@ -250,13 +250,11 @@ void StyleGlowBarOnSide(Shapes::Rectangle rect,
                         double thickness,
                         double length,
                         BarSide side,
-                        int layer,
                         double opacity) {
-    const double t = thickness + static_cast<double>(layer) * 2.0;
-    const double len = length + static_cast<double>(layer) * 2.0;
-    const double edgePad = (side == BarSide::Bottom || side == BarSide::Top)
-                               ? (2.0 + static_cast<double>(layer))
-                               : (1.0 + static_cast<double>(layer));
+    const double t = thickness;
+    const double len = length;
+    const double edgePad =
+        (side == BarSide::Bottom || side == BarSide::Top) ? 2.0 : 1.0;
 
     rect.Stroke(nullptr);
     rect.StrokeThickness(0);
@@ -329,7 +327,7 @@ void RepositionGlowAfterRelayout(FrameworkElement iconPanel) {
     }
     try {
         if (auto host = FindChildByName(iconPanel, kGlowElementName)) {
-            EnsureGlowHostZOrder(panel, host, SettingsSnap()->glowStyle);
+            EnsureGlowHostZOrder(panel, host);
         }
     } catch (...) {
     }

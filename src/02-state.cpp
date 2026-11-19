@@ -452,11 +452,9 @@ constexpr ULONGLONG kTransientRetryPollMs = 200;
 // storyboards own that and constantly wipe our styles). The mod writes no
 // property of a native element (the icon size boost went in 0.11.38).
 constexpr PCWSTR kGlowElementName = L"WhRecentFocusGlow";
-constexpr PCWSTR kGlowLayerNames[] = {
-    L"WhRecentFocusGlowL0",
-    L"WhRecentFocusGlowL1",
-};
-constexpr int kGlowMaxLayers = 2;
+// The side bar. Until 0.12.1 a second, 2px larger rectangle at low alpha
+// (L1) acted as a halo; XAML cannot blur it, so it showed as a hard rim.
+constexpr PCWSTR kGlowBarName = L"WhRecentFocusGlowBar";
 
 // Intensity for a 0-based rank: the three configured values, then each
 // further rank fades by a quarter (floor 10 %, never above rank 3) so ranks

@@ -160,17 +160,13 @@ to clear highlights.
         How ranked apps look on the taskbar. Bars rotate with the taskbar edge
         (bottom / left / top / right). Side bar = beside the icon (left on a
         bottom or top taskbar, under the icon on a left or right taskbar).
-        Frame/Full follow the native background contour. Experimental: Side
-        bar without halo; Plate = the native plate lit up (flush, full Fill
-        opacity); Plate with accent = the same at half fill with an accent
-        border (Accent thickness).
+        Plate = the button's own plate tinted (Fill opacity). Plate with
+        accent = the same at half the tint with an accent border (Accent
+        thickness).
       $options:
-      - leftBar: Side bar (left on bottom/top, under icon on left/right)
-      - frame: Frame (hollow rounded rectangle)
-      - full: Full (filled rounded rectangle)
-      - sideBar: Side bar without halo (experimental)
-      - plate: Plate (experimental)
-      - plateAccent: Plate with accent (experimental)
+      - leftBar: Side bar
+      - full: Plate
+      - frame: Plate with accent
     - glowColor: accent
       $name: Glow color
       $description: Base color for icon highlights (and previews)
@@ -196,23 +192,19 @@ to clear highlights.
         Overlay opacity for the 3rd most recent app (0–100). Ranks 4+ fade
         further from this value.
     - glowThickness: 3
-      $name: Thickness (px)
-      $description: >-
-        Frame stroke or side-bar thickness (1–16). Full has no stroke.
+      $name: Side bar thickness (px)
+      $description: Side bar thickness (1–16).
     - glowSize: 92
-      $name: Size (%)
-      $description: >-
-        Frame/Full: inset within native background (≤100, minimum 1px inset).
-        Side bar: bar length.
+      $name: Side bar length (%)
+      $description: Side bar length (40–100).
     - glowFillOpacity: 40
       $name: Fill opacity
       $description: >-
-        0–100. Soft fill strength for Full; solid bar opacity for Side. Frame uses
-        stroke only. (Thumbnail tints use Previews → Tint opacity.)
+        0–100. Side bar and Plate strength; half of it for Plate with accent.
+        (Thumbnail tints use Previews → Tint opacity.)
     - glowAccentThickness: 2
       $name: Accent thickness (px)
-      $description: >-
-        Border width for Plate with accent (1–8, experimental).
+      $description: Border width for Plate with accent (1–8).
   $name: Taskbar icons
 - previews:
     - highlightEnabled: true

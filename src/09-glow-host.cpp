@@ -104,9 +104,7 @@ uint32_t GlowHostInsertionIndex(const std::vector<GlowOrderChild>& children) {
 // Preserve the established style layering without changing native properties.
 // Explicit InsertAt is required even at the end: Append omits XAML deferred
 // index notifications while RemoveAt sends them.
-void EnsureGlowHostZOrder(Controls::Panel panel,
-                          UIElement host,
-                          GlowStyle style) {
+void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host) {
     if (!panel || !host)
         return;
     try {
@@ -125,10 +123,9 @@ void EnsureGlowHostZOrder(Controls::Panel panel,
             bool above = name == L"OverlayIcon" ||
                          name == L"MultiWindowElement" ||
                          name == L"ProgressIndicator";
-            if ((style == GlowStyle::LeftBar || style == GlowStyle::SideBar ||
-                 style == GlowStyle::Full || style == GlowStyle::Plate ||
-                 style == GlowStyle::PlateAccent) &&
-                (name == L"Icon" || name == L"DefaultIcon"))
+            // Every style sits behind the glyph (0.12.1: the frame, now
+            // Plate with accent, used to be drawn above it).
+            if (name == L"Icon" || name == L"DefaultIcon")
                 above = true;
             if (running && !RunningIndicatorLooksLikeHoverPlate(fe, panelFe))
                 above = true;
@@ -196,13 +193,13 @@ void ClearButtonHighlight(FrameworkElement button) {
     }
 }
 
-// Ensure glow host grid exists (L0–L1 rectangles). Returns host or nullptr.
+// Ensure glow host grid exists (side bar rectangle). Returns host or nullptr.
 Controls::Grid EnsureGlowHost(Controls::Panel panel,
                               FrameworkElement iconPanel) {
     Controls::Grid host = nullptr;
     if (auto existing = FindChildByName(iconPanel, kGlowElementName)) {
         host = existing.try_as<Controls::Grid>();
-        if (host && !FindChildByName(host, kGlowLayerNames[0])
+        if (host && !FindChildByName(host, kGlowBarName)
                          .try_as<Shapes::Rectangle>()) {
             RemoveNamedChild(panel, kGlowElementName);
             host = nullptr;
@@ -221,10 +218,7 @@ Controls::Grid EnsureGlowHost(Controls::Panel panel,
                 IsHitTestVisible="False"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch">
-                <Rectangle Name="WhRecentFocusGlowL0"
-                           IsHitTestVisible="False"
-                           Fill="Transparent"/>
-                <Rectangle Name="WhRecentFocusGlowL1"
+                <Rectangle Name="WhRecentFocusGlowBar"
                            IsHitTestVisible="False"
                            Fill="Transparent"/>
             </Grid>
@@ -249,14 +243,10 @@ void HideAllGlowLayers(Controls::Grid host) {
     if (auto contour = FindChildByName(host, L"WhRecentFocusContour")) {
         contour.Visibility(Visibility::Collapsed);
     }
-    for (int i = 0; i < kGlowMaxLayers; ++i) {
-        if (auto r =
-                FindChildByName(host, kGlowLayerNames[i]).try_as<Shapes::Rectangle>()) {
-            r.Visibility(Visibility::Collapsed);
-            r.Stroke(nullptr);
-            r.Fill(Media::SolidColorBrush{
-                winrt::Windows::UI::Color{0, 0, 0, 0}});
-        }
+    if (auto r = FindChildByName(host, kGlowBarName).try_as<Shapes::Rectangle>()) {
+        r.Visibility(Visibility::Collapsed);
+        r.Stroke(nullptr);
+        r.Fill(Media::SolidColorBrush{winrt::Windows::UI::Color{0, 0, 0, 0}});
     }
 }
 
@@ -325,8 +315,7 @@ void PaintNativeContour(Controls::Grid host,
                         FrameworkElement iconPanel,
                         GlowStyle style,
                         winrt::Windows::UI::Color color,
-                        double thickness,
-                        double sizeFrac,
+                        double accentThickness,
                         double opacity,
                         int fillOpacity) {
     // The host may not have been arranged yet. Use the native panel's content
@@ -370,16 +359,10 @@ void PaintNativeContour(Controls::Grid host,
             return;
         shape.corners = CornerRadius{4, 4, 4, 4};
     }
-    // Plate / Plate with accent (experimental): flush with the native plate,
-    // so they read as the button's own plate lit up (Size is ignored).
-    const bool flush =
-        style == GlowStyle::Plate || style == GlowStyle::PlateAccent;
-    double inset =
-        flush ? 0.0
-              : (std::max)(1.0, (std::min)(shape.w, shape.h) *
-                                    (1.0 - sizeFrac) * 0.5);
-    double w = shape.w - 2 * inset, h = shape.h - 2 * inset;
-    if (!SafeGlowBounds(shape.x + inset, shape.y + inset, w, h))
+    // Flush with the native plate (0.12.1), so it reads as the button's own
+    // plate lit up. Until 0.12.1 Frame / Full sat at Size % (92) inside it.
+    double w = shape.w, h = shape.h;
+    if (!SafeGlowBounds(shape.x, shape.y, w, h))
         return;
     Controls::Border border = FindChildByName(host, L"WhRecentFocusContour")
                                   .try_as<Controls::Border>();
@@ -403,25 +386,19 @@ void PaintNativeContour(Controls::Grid host,
                          InsetGlowRadius(shape.corners.TopRight, 0, w, h),
                          InsetGlowRadius(shape.corners.BottomRight, 0, w, h),
                          InsetGlowRadius(shape.corners.BottomLeft, 0, w, h)});
-    const bool frame = style == GlowStyle::Frame;
+    // Plate with accent: accent border (accent thickness) and half the fill,
+    // as the preview "with accent" styles. Until 0.12.1 Frame was a 230-alpha
+    // stroke of the side bar's thickness with no fill (read as a focus ring),
+    // and Full 60 % of Fill opacity (paler than Windows' own plates).
     const bool accent = style == GlowStyle::PlateAccent;
-    // `thickness` is the caller's: glowThickness for Frame, the accent
-    // thickness for PlateAccent.
-    double stroke = (frame || accent)
-                        ? (std::min)(thickness, (std::min)(w, h) * 0.5)
-                        : 0;
+    double stroke =
+        accent ? (std::min)(accentThickness, (std::min)(w, h) * 0.5) : 0;
     border.BorderThickness({stroke, stroke, stroke, stroke});
     auto strokeColor = color;
-    strokeColor.A = accent ? 255 : 230;
+    strokeColor.A = 255;
     border.BorderBrush(Media::SolidColorBrush{strokeColor});
-    // Fill: Frame none; Full 60 % of Fill opacity; Plate all of it;
-    // PlateAccent half (as the preview accent styles).
-    const double fillScale = frame                        ? 0.0
-                             : style == GlowStyle::Full   ? 0.6
-                             : accent                     ? 0.5
-                                                          : 1.0;
     color.A = static_cast<uint8_t>(
-        (std::clamp)(fillOpacity, 0, 100) * 2.55 * fillScale + 0.5);
+        (std::clamp)(fillOpacity, 0, 100) * 2.55 * (accent ? 0.5 : 1.0) + 0.5);
     border.Background(Media::SolidColorBrush{color});
     border.Opacity((std::clamp)(opacity, 0.0, 1.0));
     border.Visibility(Visibility::Visible);

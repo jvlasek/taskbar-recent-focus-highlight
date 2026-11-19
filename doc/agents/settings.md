@@ -16,12 +16,12 @@ General keys stay top-level; icon/preview keys are dotted.
 | General | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
 | General | `decayMinutes` | app decay |
 | General | `excludedPrograms[i]` | uppercase set |
-| Taskbar icons | `icons.glowStyle` | `LeftBar` (side bar) / `Frame` / `Full`; experimental (0.12.1) `sideBar` / `plate` / `plateAccent`; legacy `bottomBar` falls back to Side |
-| Taskbar icons | `icons.glowAccentThickness` | `plateAccent` border, 1–8 px (experimental, 0.12.1) |
+| Taskbar icons | `icons.glowStyle` | `leftBar` (Side bar) / `full` (Plate) / `frame` (Plate with accent) — UI names and look changed in 0.12.1, ids kept; legacy `bottomBar` falls back to Side |
+| Taskbar icons | `icons.glowAccentThickness` | Plate with accent border, 1–8 px (0.12.1) |
 | Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | color mode + hex |
 | Taskbar icons | `icons.glowIntensityRank1..3` | `glowIntensity[3]` |
-| Taskbar icons | `icons.glowThickness` / `icons.glowSize` | metrics |
-| Taskbar icons | `icons.glowFillOpacity` | Full / side fill strength (Edge removed) |
+| Taskbar icons | `icons.glowThickness` / `icons.glowSize` | side bar thickness / length (UI renamed in 0.12.1; until then also Frame stroke / plate inset) |
+| Taskbar icons | `icons.glowFillOpacity` | Side bar / Plate strength; half for Plate with accent |
 | Thumbnail previews | `previews.highlightEnabled` | preview master |
 | Thumbnail previews | `previews.highlightCount` | per-flyout top N |
 | Thumbnail previews | `previews.singleWindow` | single-window flyouts ranked too (rank 1 while recent; default off) |
