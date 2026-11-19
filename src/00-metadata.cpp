@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Visually highlight the most recently focused running apps on the taskbar
-// @version         0.11.50
+// @version         0.12.0
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -38,7 +38,8 @@ buttons on the current desktop get a highlight:
   taskbar, under the icon on a left/right taskbar)
 - **Frame** / **Full** — a rounded rectangle around or behind the icon
 
-Rank 1 is strongest; ranks 2 and 3 (and 4+) use the intensities you set.
+Rank 1 is strongest; ranks 2 and 3 use the intensities you set, and ranks
+4+ fade further from rank 3.
 Pinned icons that are not running on this desktop are never highlighted.
 A new app is added only after the minimum focus time. Re-focus of an app
 already in the list follows “When to skip min-focus” (default: it becomes
@@ -109,7 +110,7 @@ to clear highlights.
 /*
 - highlightCount: 3
   $name: Number of highlighted apps
-  $description: How many recent apps to boost on the taskbar (1–6 recommended)
+  $description: How many recent apps to highlight on the taskbar (1–6 recommended)
 - minFocusSeconds: 8
   $name: Minimum focus time (seconds)
   $description: >-
@@ -264,8 +265,8 @@ to clear highlights.
     - intensityRank3: 45
       $name: Intensity rank 3
       $description: >-
-        Strength for the 3rd most recent window in the flyout (0–100); also used
-        for ranks 4+
+        Strength for the 3rd most recent window in the flyout (0–100). Ranks
+        4+ fade further from this value.
     - fillOpacity: 40
       $name: Tint opacity
       $description: >-
