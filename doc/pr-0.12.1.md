@@ -161,7 +161,8 @@ and inside multi-window flyouts. Someone who only wants the active window
 marked in previews is better served by that mod, and this mod's README
 points there. With the defaults they do not mark the same thing twice:
 single-window previews are off here (`previews.singleWindow`), and the
-Outline style exists for users who want the same look for rank 1.
+Whole plate with accent style exists for users who want the same look for
+rank 1.
 
 ## Testing
 
