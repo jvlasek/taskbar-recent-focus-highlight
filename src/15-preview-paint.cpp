@@ -142,17 +142,22 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         if (paintStyle == PreviewStyle::TitleBg ||
             paintStyle == PreviewStyle::TitleOutline ||
             paintStyle == PreviewStyle::TitlePlateOutline ||
-            paintStyle == PreviewStyle::TitleInsetOutline) {
+            paintStyle == PreviewStyle::TitleInsetOutline ||
+            paintStyle == PreviewStyle::TitleInsetBg) {
             // Title outline (experimental): the titleBg strip with an accent
             // border and half the tint, like Outline does for the card.
             // Title plate outline / title inset outline (experimental): the
             // same, but placed from the card's edges (see below), 0 or 4px
-            // in from them.
-            const bool outline = paintStyle != PreviewStyle::TitleBg;
+            // in from them. Title inset tint (experimental): titleBg in the
+            // title inset outline's shape, no border.
+            const bool outline = paintStyle != PreviewStyle::TitleBg &&
+                                 paintStyle != PreviewStyle::TitleInsetBg;
             const double edgeInset =
-                paintStyle == PreviewStyle::TitlePlateOutline   ? 0.0
-                : paintStyle == PreviewStyle::TitleInsetOutline ? 4.0
-                                                                : -1.0;
+                paintStyle == PreviewStyle::TitlePlateOutline ? 0.0
+                : paintStyle == PreviewStyle::TitleInsetOutline ||
+                        paintStyle == PreviewStyle::TitleInsetBg
+                    ? 4.0
+                    : -1.0;
             const bool cardEdges = edgeInset >= 0.0;
             const double stroke =
                 outline ? settings->previewOutlineThickness : 0.0;

@@ -240,13 +240,15 @@ to clear highlights.
         with an accent border, like Outline but only around the title. Title
         plate outline (experimental) = Outline cut short under the title
         (same card edges and corners). Inset title plate outline
-        (experimental) = the same, 4 px in from the card edges.
+        (experimental) = the same, 4 px in from the card edges. Inset title
+        plate tint (experimental) = Title background in that inset shape.
         Plate and Outline keep the card's own rounded corners and stay
         visible on hover.
       $options:
       - plate: Whole preview plate
       - outline: Plate with accent outline
       - titleBg: Title background tint
+      - titleInsetBg: Inset title plate tint (experimental)
       - titleOutline: Title with accent outline (experimental)
       - titlePlateOutline: Title plate with accent outline (experimental)
       - titleInsetOutline: Inset title plate with accent outline (experimental)
@@ -258,6 +260,7 @@ to clear highlights.
         rank 1 is shown.
       $options:
       - titleBg: Title background tint
+      - titleInsetBg: Inset title plate tint (experimental)
       - titleOutline: Title with accent outline (experimental)
       - titlePlateOutline: Title plate with accent outline (experimental)
       - titleInsetOutline: Inset title plate with accent outline (experimental)
@@ -419,6 +422,7 @@ enum class PreviewStyle {
     TitleOutline,  // title strip with an accent border (experimental)
     TitlePlateOutline,  // same, flush with the card edges (experimental)
     TitleInsetOutline,  // same, 4px in from the card edges (experimental)
+    TitleInsetBg,  // TitleBg in the TitleInsetOutline shape (experimental)
     None,       // not marked (ranks 2+ only)
 };
 
@@ -449,6 +453,7 @@ constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
     {L"titleOutline", PreviewStyle::TitleOutline},
     {L"titlePlateOutline", PreviewStyle::TitlePlateOutline},
     {L"titleInsetOutline", PreviewStyle::TitleInsetOutline},
+    {L"titleInsetBg", PreviewStyle::TitleInsetBg},
     {L"none", PreviewStyle::None},
 };
 constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {
@@ -5646,17 +5651,22 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         if (paintStyle == PreviewStyle::TitleBg ||
             paintStyle == PreviewStyle::TitleOutline ||
             paintStyle == PreviewStyle::TitlePlateOutline ||
-            paintStyle == PreviewStyle::TitleInsetOutline) {
+            paintStyle == PreviewStyle::TitleInsetOutline ||
+            paintStyle == PreviewStyle::TitleInsetBg) {
             // Title outline (experimental): the titleBg strip with an accent
             // border and half the tint, like Outline does for the card.
             // Title plate outline / title inset outline (experimental): the
             // same, but placed from the card's edges (see below), 0 or 4px
-            // in from them.
-            const bool outline = paintStyle != PreviewStyle::TitleBg;
+            // in from them. Title inset tint (experimental): titleBg in the
+            // title inset outline's shape, no border.
+            const bool outline = paintStyle != PreviewStyle::TitleBg &&
+                                 paintStyle != PreviewStyle::TitleInsetBg;
             const double edgeInset =
-                paintStyle == PreviewStyle::TitlePlateOutline   ? 0.0
-                : paintStyle == PreviewStyle::TitleInsetOutline ? 4.0
-                                                                : -1.0;
+                paintStyle == PreviewStyle::TitlePlateOutline ? 0.0
+                : paintStyle == PreviewStyle::TitleInsetOutline ||
+                        paintStyle == PreviewStyle::TitleInsetBg
+                    ? 4.0
+                    : -1.0;
             const bool cardEdges = edgeInset >= 0.0;
             const double stroke =
                 outline ? settings->previewOutlineThickness : 0.0;

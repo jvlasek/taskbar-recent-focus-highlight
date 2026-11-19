@@ -240,13 +240,15 @@ to clear highlights.
         with an accent border, like Outline but only around the title. Title
         plate outline (experimental) = Outline cut short under the title
         (same card edges and corners). Inset title plate outline
-        (experimental) = the same, 4 px in from the card edges.
+        (experimental) = the same, 4 px in from the card edges. Inset title
+        plate tint (experimental) = Title background in that inset shape.
         Plate and Outline keep the card's own rounded corners and stay
         visible on hover.
       $options:
       - plate: Whole preview plate
       - outline: Plate with accent outline
       - titleBg: Title background tint
+      - titleInsetBg: Inset title plate tint (experimental)
       - titleOutline: Title with accent outline (experimental)
       - titlePlateOutline: Title plate with accent outline (experimental)
       - titleInsetOutline: Inset title plate with accent outline (experimental)
@@ -258,6 +260,7 @@ to clear highlights.
         rank 1 is shown.
       $options:
       - titleBg: Title background tint
+      - titleInsetBg: Inset title plate tint (experimental)
       - titleOutline: Title with accent outline (experimental)
       - titlePlateOutline: Title plate with accent outline (experimental)
       - titleInsetOutline: Inset title plate with accent outline (experimental)
