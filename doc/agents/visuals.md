@@ -20,11 +20,8 @@ card painting is in `previews.md`; which button gets which rank is in
 | Never | `ClearValue` BackgroundElement; clip null ancestors | Pale hover leftovers |
 | Preview layout | Span rows + Margin (not RenderTransform) | Title-row expansion; transform clipped the right cap |
 | Preview titleBar | ~2px under baseline | Not hugging image; not strikethrough |
-| Preview titleBg | Tint-opacity ceiling × linear rank intensity; 4px rounded rect, 6px inset both sides | Readable; 100 vs 5 must differ |
-| Preview titleOutline | titleBg strip + accent border (stroke alpha × rank, fill half the tint) | Experimental (0.12.1): outline only around the title |
-| Preview titlePlateOutline | As titleOutline, but the top of the card plate (BackgroundBorder edges + corners) down to just under the title | Experimental (0.12.1): looks like Outline, cut short under the title |
-| Preview titleInsetOutline | As titlePlateOutline, 4px in from the card edges; corners = the card's radius (concentric radius − 4 looked too sharp) | Experimental (0.12.1): between the inset strip and the flush plate |
-| Preview titleInsetBg | titleBg fill in the titleInsetOutline shape (4px from the card, card corner radius, even gaps) | Experimental (0.12.1): candidate shape for titleBg itself |
+| Preview titleBg ("Title") | Tint-opacity ceiling × linear rank intensity; plate over the title row 4px in from the card, card corner radius, gap below the title = gap above (0.12.1) | Readable; 100 vs 5 must differ. The old 8px strip with 4px corners looked off next to a whole plate |
+| Preview titleOutline ("Title with accent") | titleBg geometry + accent border (stroke alpha × rank, fill half the tint) | Next to a whole plate it reads as a smaller tag |
 | Preview plate | Own `Border` `WhRecentFocusThumbCard` right above `BackgroundBorder`, geometry bound to it; fill = `previewFillOpacity` × rank (see `previews.md`) | Survives the card's hover state; the native brush is not touched |
 | Preview ranks | Per-flyout top N, `previewIntensity[3]` | Same ladder idea as icons |
 | RunningIndicator | Never set Fill/Width/Height or native ZIndex | Frame/side hosts go below a thin pill; a full-cell Styler plate is not an above-host anchor |

@@ -24,8 +24,8 @@ General keys stay top-level; icon/preview keys are dotted.
 | Thumbnail previews | `previews.highlightEnabled` | preview master |
 | Thumbnail previews | `previews.highlightCount` | per-flyout top N |
 | Thumbnail previews | `previews.singleWindow` | single-window flyouts ranked too (rank 1 while recent; default off) |
-| Thumbnail previews | `previews.topStyle` / `previews.restStyle` | `plate` / `outline` / `titleBg` / `titleInsetBg` / `titleOutline` / `titlePlateOutline` / `titleInsetOutline` (0.12.1, experimental) / `titleBar` (+ `none` for ranks 2+); legacy `previews.style` mapped by `ApplyLegacyPreviewStyle` |
-| Thumbnail previews | `previews.outlineThickness` | Outline style (fill = half of `previews.fillOpacity`) |
+| Thumbnail previews | `previews.topStyle` / `previews.restStyle` | `plate` / `outline` / `titleBg` / `titleOutline` (0.12.1) / `titleBar` (+ `none` for ranks 2+); UI names since 0.12.1: Whole plate / Whole plate with accent / Title / Title with accent / Bar under title; legacy `previews.style` mapped by `ApplyLegacyPreviewStyle` |
+| Thumbnail previews | `previews.outlineThickness` (UI "Accent thickness" since 0.12.1) | `outline` + `titleOutline` border (fill = half of `previews.fillOpacity`) |
 | Thumbnail previews | `previews.intensityRank1..3` | `previewIntensity[3]` |
 | Thumbnail previews | `previews.fillOpacity` | plate + titleBg wash (not title bar line) |
 | Thumbnail previews | `previews.minFocusSeconds` | window confirm |

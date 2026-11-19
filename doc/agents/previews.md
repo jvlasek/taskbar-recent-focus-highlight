@@ -90,21 +90,21 @@ Rules:
 
 | `previewStyle` | Implementation |
 |----------------|----------------|
-| `titleBar` | Thin rect just under title baseline (~2px gap); 8px side inset |
-| `titleBg` | Soft wash; 4px corners (`CornerRadius{4,4,4,4}` — `{4}` is TopLeft only), 8px inset |
-| `titleOutline` | 0.12.1, experimental (branch `exp/title-outline`): the same `WhRecentFocusThumbTitleBg` Border with accent `BorderBrush` (alpha 255 × rank) and `previews.outlineThickness`; fill = half of Tint opacity like `outline`. Inset like titleBg; the strip grows by the border width (border is drawn inside) and keeps its bottom edge when the 6px top clamp applies. `HideThumbOverlayChildren` clears BorderBrush/BorderThickness, else a switch to `titleBg` keeps the border. No new XAML |
-| `titlePlateOutline` | 0.12.1, experimental: as `titleOutline`, but geometry = the top of the card plate: x/y/width and CornerRadius from the card's `BackgroundBorder` (via `TransformToVisual(host)`), bottom = title bottom + the gap above the title (max 8px + border). Before layout / without a BackgroundBorder: the inset `titleOutline` strip. |
-| `titleInsetOutline` | 0.12.1, experimental: as `titlePlateOutline`, 4px in from the BackgroundBorder's left/top/right, corner radius = the card's own (card radius − 4, concentric, looked too sharp), bottom gap mirrors the top one (max 4px + border). Same `edgeInset` code path (0 = plate, 4 = inset) |
-| `titleInsetBg` | 0.12.1, experimental: `titleBg` fill (full Tint opacity, no border) in the `titleInsetOutline` shape. Test whether titleBg's own shape (8px from the panel, 4px corners, ~6px top vs ~1px bottom gap, thin tint left of the icon) is what looked off; if so, titleBg itself should take this shape |
-| `plate` | 0.11.16+: own `Border` `WhRecentFocusThumbCard` inserted right after `BackgroundBorder` in its panel; Width/Height/Margin/alignment/CornerRadius bound to it; fill only. Survives the card's hover state (which rewrites `BackgroundBorder.Background`). Fallback without a BackgroundBorder: overlay-host rectangle. Native-brush restore code removed in 0.11.38 |
-| `outline` | Same overlay with accent `BorderBrush` and `previews.outlineThickness`; fill = half of Tint opacity (0.11.38; was `previews.outlineFillOpacity`, default 20) — a full tint hid the border |
+| `titleBar` (UI "Bar under title") | Thin rect just under title baseline (~2px gap); 8px side inset |
+| `titleBg` (UI "Title") | 0.12.1: Border `WhRecentFocusThumbTitleBg` 4px in from the card's `BackgroundBorder` (left/top/right, via `TransformToVisual(host)`), with its CornerRadius (radius − 4, concentric, looked too sharp); bottom = title bottom + the gap above the title (max 4px + border). Before 0.12.1: 8px in from the panel, 4px corners (`CornerRadius{4,4,4,4}` — `{4}` is TopLeft only), ~6px top vs ~1px bottom gap, thin tint left of the icon; that strip is still the fallback before layout / without a BackgroundBorder |
+| `titleOutline` (UI "Title with accent") | 0.12.1: same geometry + accent `BorderBrush` (alpha 255 × rank) and `previews.outlineThickness`; fill = half of Tint opacity like `outline`. In the fallback strip the border grows the strip (drawn inside) and keeps its bottom edge under the 6px top clamp. `HideThumbOverlayChildren` clears BorderBrush/BorderThickness, else a switch to `titleBg` keeps the border. No new XAML. Tried and dropped on branch `exp/title-outline`: the 8px strip with a border (a focused text box on a single-window flyout) and a flush 0px variant (too big next to a whole plate) |
+| `plate` (UI "Whole plate") | 0.11.16+: own `Border` `WhRecentFocusThumbCard` inserted right after `BackgroundBorder` in its panel; Width/Height/Margin/alignment/CornerRadius bound to it; fill only. Survives the card's hover state (which rewrites `BackgroundBorder.Background`). Fallback without a BackgroundBorder: overlay-host rectangle. Native-brush restore code removed in 0.11.38 |
+| `outline` (UI "Whole plate with accent") | Same overlay with accent `BorderBrush` and `previews.outlineThickness`; fill = half of Tint opacity (0.11.38; was `previews.outlineFillOpacity`, default 20) — a full tint hid the border |
 | overlay host z-order | 0.11.17+: directly above `BackgroundBorder` (below title/thumbnail), so the title wash no longer dims the text; front only if no BackgroundBorder child |
 | `none` | Ranks 2+ only: not marked |
 
 Styles are chosen per rank: `previews.topStyle` (rank 1, default `plate`) and
-`previews.restStyle` (ranks 2+, default `titleBg`). The old `previews.style`
-(incl. `plateTitle` "hybrid") is no longer read; its defaults equal the old
-hybrid.
+`previews.restStyle` (ranks 2+, default `titleBg`). The UI names changed in
+0.12.1; the ids did not, so no transition. The 0.11.1 `previews.style` is
+still honoured by `ApplyLegacyPreviewStyle` (see `settings.md`): `plate`,
+`titleBg`, `titleBar` apply to all ranks; `plateTitle` ("hybrid") equals the
+defaults; `outline` / `titleOutline` / `none` never existed there and are
+ignored.
 
 Clear (unload / unranked) removes the named overlays. A ranked repaint keeps
 `WhRecentFocusThumbGlow` and only hides its children and the card overlay, so

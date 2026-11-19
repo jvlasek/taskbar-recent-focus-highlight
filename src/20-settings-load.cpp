@@ -21,7 +21,8 @@ bool LegacyPreviewStyle(PreviewStyle& out) {
     auto legacy = WindhawkUtils::StringSetting::make(L"previews.style");
     PreviewStyle v = PreviewStyle::None;
     if (!NameToEnum(kPreviewStyleNames, legacy.get(), v) ||
-        v == PreviewStyle::Outline || v == PreviewStyle::None) {
+        v == PreviewStyle::Outline || v == PreviewStyle::TitleOutline ||
+        v == PreviewStyle::None) {
         return false;
     }
     out = v;

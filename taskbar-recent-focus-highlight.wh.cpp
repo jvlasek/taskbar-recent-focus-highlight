@@ -54,9 +54,8 @@ other apps more recently. Single-window flyouts are left alone unless
 while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
-plate for rank 1, title tint for ranks 2+); also an outline, an outline
-around the title (three experimental variants), a thin bar under the title, or none for
-ranks 2+.
+plate for rank 1, title plate for ranks 2+); either can also have an accent
+border, or be a thin bar under the title; ranks 2+ can be left unmarked.
 
 If you only want the active window highlighted in previews,
 [taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
@@ -232,47 +231,35 @@ to clear highlights.
     - topStyle: plate
       $name: Rank 1 style
       $description: >-
-        How to mark the most recent window. Plate = tint the whole card.
-        Outline = tinted card with an accent border (the look of Taskbar
-        Active Window Highlight). Title background = soft wash behind the
-        title. Title bar = thin line under the title (thickness follows
-        Icons → Thickness). Title outline (experimental) = the title wash
-        with an accent border, like Outline but only around the title. Title
-        plate outline (experimental) = Outline cut short under the title
-        (same card edges and corners). Inset title plate outline
-        (experimental) = the same, 4 px in from the card edges. Inset title
-        plate tint (experimental) = Title background in that inset shape.
-        Plate and Outline keep the card's own rounded corners and stay
+        How to mark the most recent window. Whole plate = tint the whole
+        card. Whole plate with accent = tinted card with an accent border (the
+        look of Taskbar Active Window Highlight). Title = a tinted plate over
+        the title row. Title with accent = the same with an accent border.
+        Bar under title = thin line under the title (thickness follows Icons →
+        Thickness). The plates follow the card's rounded corners and stay
         visible on hover.
       $options:
-      - plate: Whole preview plate
-      - outline: Plate with accent outline
-      - titleBg: Title background tint
-      - titleInsetBg: Inset title plate tint (experimental)
-      - titleOutline: Title with accent outline (experimental)
-      - titlePlateOutline: Title plate with accent outline (experimental)
-      - titleInsetOutline: Inset title plate with accent outline (experimental)
-      - titleBar: Bar under window title
+      - plate: Whole plate
+      - outline: Whole plate with accent
+      - titleBg: Title
+      - titleOutline: Title with accent
+      - titleBar: Bar under title
     - restStyle: titleBg
       $name: Ranks 2+ style
       $description: >-
         How to mark the other ranked windows (2nd, 3rd …). Not marked = only
         rank 1 is shown.
       $options:
-      - titleBg: Title background tint
-      - titleInsetBg: Inset title plate tint (experimental)
-      - titleOutline: Title with accent outline (experimental)
-      - titlePlateOutline: Title plate with accent outline (experimental)
-      - titleInsetOutline: Inset title plate with accent outline (experimental)
-      - titleBar: Bar under window title
-      - plate: Whole preview plate
-      - outline: Plate with accent outline
+      - titleBg: Title
+      - titleOutline: Title with accent
+      - titleBar: Bar under title
+      - plate: Whole plate
+      - outline: Whole plate with accent
       - none: Not marked
     - outlineThickness: 2
-      $name: Outline thickness
+      $name: Accent thickness
       $description: >-
-        Border width in pixels for the Outline and the Title outline styles
-        (1–8).
+        Border width in pixels for the "with accent" styles (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
       $description: Strength for the most recent window in the flyout (0–100)
@@ -287,9 +274,10 @@ to clear highlights.
     - fillOpacity: 40
       $name: Tint opacity
       $description: >-
-        0–100. Strength of title-background wash and whole-preview plate. Title bar
-        line uses full accent and ignores this. Independent of Icons → Fill opacity.
-        Per-rank intensity still scales the result.
+        0–100. Strength of the Whole plate and Title tint (half of it for the
+        "with accent" styles). Bar under title uses the full accent and
+        ignores this. Independent of Icons → Fill opacity. Per-rank intensity
+        still scales the result.
     - minFocusSeconds: 1
       $name: Minimum focus (seconds)
       $description: >-
@@ -415,14 +403,11 @@ enum class PromoteMode {
 
 // Thumbnail flyout highlight (independent of icon GlowStyle).
 enum class PreviewStyle {
-    TitleBg,    // tint behind the window title text
+    TitleBg,    // tinted plate over the title row
     Plate,      // tint whole preview card (hover-like plate)
     TitleBar,   // thin bar under the title, above the thumbnail image
     Outline,    // plate plus an accent border (card overlay)
-    TitleOutline,  // title strip with an accent border (experimental)
-    TitlePlateOutline,  // same, flush with the card edges (experimental)
-    TitleInsetOutline,  // same, 4px in from the card edges (experimental)
-    TitleInsetBg,  // TitleBg in the TitleInsetOutline shape (experimental)
+    TitleOutline,  // title plate plus an accent border (0.12.1)
     None,       // not marked (ranks 2+ only)
 };
 
@@ -451,9 +436,6 @@ constexpr EnumName<PreviewStyle> kPreviewStyleNames[] = {
     {L"plate", PreviewStyle::Plate},       {L"outline", PreviewStyle::Outline},
     {L"titleBg", PreviewStyle::TitleBg},   {L"titleBar", PreviewStyle::TitleBar},
     {L"titleOutline", PreviewStyle::TitleOutline},
-    {L"titlePlateOutline", PreviewStyle::TitlePlateOutline},
-    {L"titleInsetOutline", PreviewStyle::TitleInsetOutline},
-    {L"titleInsetBg", PreviewStyle::TitleInsetBg},
     {L"none", PreviewStyle::None},
 };
 constexpr EnumName<TaskbarEdge> kTaskbarEdgeNames[] = {
@@ -5649,35 +5631,26 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         HideThumbOverlayChildren(host);
 
         if (paintStyle == PreviewStyle::TitleBg ||
-            paintStyle == PreviewStyle::TitleOutline ||
-            paintStyle == PreviewStyle::TitlePlateOutline ||
-            paintStyle == PreviewStyle::TitleInsetOutline ||
-            paintStyle == PreviewStyle::TitleInsetBg) {
-            // Title outline (experimental): the titleBg strip with an accent
-            // border and half the tint, like Outline does for the card.
-            // Title plate outline / title inset outline (experimental): the
-            // same, but placed from the card's edges (see below), 0 or 4px
-            // in from them. Title inset tint (experimental): titleBg in the
-            // title inset outline's shape, no border.
-            const bool outline = paintStyle != PreviewStyle::TitleBg &&
-                                 paintStyle != PreviewStyle::TitleInsetBg;
-            const double edgeInset =
-                paintStyle == PreviewStyle::TitlePlateOutline ? 0.0
-                : paintStyle == PreviewStyle::TitleInsetOutline ||
-                        paintStyle == PreviewStyle::TitleInsetBg
-                    ? 4.0
-                    : -1.0;
-            const bool cardEdges = edgeInset >= 0.0;
+            paintStyle == PreviewStyle::TitleOutline) {
+            // Title / title with accent (0.12.1): a plate over the title row,
+            // 4px in from the card's BackgroundBorder (left, top, right) with
+            // the card's corner radius, ending under the title with the gap
+            // above the title mirrored below it. Before 0.12.1 the title tint
+            // sat 8px in from the panel with 4px corners and uneven gaps
+            // (thin tint left of the icon). The accent variant adds an
+            // accent border and halves the tint, as Outline does for the card.
+            const bool outline = paintStyle == PreviewStyle::TitleOutline;
             const double stroke =
                 outline ? settings->previewOutlineThickness : 0.0;
+            constexpr double kEdgeInset = 4.0;
             double top = 4.0;
             double stripH = 28.0;
             double titleTop = 0, titleBottom = 0;
             bool laidOut = GetTitleBottomRelative(title, host, cardH, titleTop,
                                                   titleBottom);
             if (laidOut) {
-                // An outline is drawn inside the strip: grow by its width so
-                // the gap around the title stays the same.
+                // Fallback strip (no BackgroundBorder). An outline is drawn
+                // inside: grow by its width so the gap around the title stays.
                 top = (std::max)(2.0, titleTop - 3.0 - stroke);
                 stripH = (std::max)(20.0, titleBottom - top + 4.0 + stroke);
             } else {
@@ -5693,14 +5666,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 // Brace-init {4} only fills TopLeft (C++ struct). All four.
                 CornerRadius radius{4, 4, 4, 4};
                 bool fromCard = false;
-                if (cardEdges && laidOut) {
-                    // From the card's BackgroundBorder: `edgeInset` in from
-                    // its left, top and right edges, with the card's own
-                    // corner radius (radius minus the inset, the concentric
-                    // value, looked too sharp at a 4px inset), ending under the
-                    // title with the gap above the title mirrored below it
-                    // (at most 8px - inset + border). Inset 0 = the top of
-                    // the card plate.
+                if (laidOut) {
                     try {
                         if (auto bb = FindThumbnailBackgroundBorder(thumbView)) {
                             const double bw = bb.ActualWidth();
@@ -5708,15 +5674,19 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                                 bb.TransformToVisual(host).TransformPoint(
                                     winrt::Windows::Foundation::Point{0.f,
                                                                       0.f});
-                            const double edgeTop = origin.Y + edgeInset;
+                            const double edgeTop = origin.Y + kEdgeInset;
+                            // Gap below the title = gap above it, at most
+                            // 4px + border.
                             const double gap = (std::min)(
-                                titleTop - edgeTop, 8.0 - edgeInset + stroke);
-                            if (bw > 2.0 * edgeInset + 24.0 && gap >= 0.0) {
-                                x = origin.X + edgeInset;
-                                w = bw - 2.0 * edgeInset;
+                                titleTop - edgeTop, 8.0 - kEdgeInset + stroke);
+                            if (bw > 2.0 * kEdgeInset + 24.0 && gap >= 0.0) {
+                                x = origin.X + kEdgeInset;
+                                w = bw - 2.0 * kEdgeInset;
                                 top = edgeTop;
                                 stripH = (std::max)(20.0,
                                                     titleBottom + gap - top);
+                                // The card's own radius: radius - inset
+                                // (concentric) looked too sharp.
                                 if (auto b = bb.try_as<Controls::Border>()) {
                                     radius = b.CornerRadius();
                                 }
@@ -5736,7 +5706,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                     }
                 }
                 const int chipA = static_cast<int>(
-                    // Outline: half the tint so the border reads (as Outline).
+                    // Accent: half the tint so the border reads (as Outline).
                     (outline ? fillOpacitySetting / 2 : fillOpacitySetting) *
                         2.55 * t +
                     0.5);
@@ -7938,7 +7908,8 @@ bool LegacyPreviewStyle(PreviewStyle& out) {
     auto legacy = WindhawkUtils::StringSetting::make(L"previews.style");
     PreviewStyle v = PreviewStyle::None;
     if (!NameToEnum(kPreviewStyleNames, legacy.get(), v) ||
-        v == PreviewStyle::Outline || v == PreviewStyle::None) {
+        v == PreviewStyle::Outline || v == PreviewStyle::TitleOutline ||
+        v == PreviewStyle::None) {
         return false;
     }
     out = v;

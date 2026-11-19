@@ -140,35 +140,26 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         HideThumbOverlayChildren(host);
 
         if (paintStyle == PreviewStyle::TitleBg ||
-            paintStyle == PreviewStyle::TitleOutline ||
-            paintStyle == PreviewStyle::TitlePlateOutline ||
-            paintStyle == PreviewStyle::TitleInsetOutline ||
-            paintStyle == PreviewStyle::TitleInsetBg) {
-            // Title outline (experimental): the titleBg strip with an accent
-            // border and half the tint, like Outline does for the card.
-            // Title plate outline / title inset outline (experimental): the
-            // same, but placed from the card's edges (see below), 0 or 4px
-            // in from them. Title inset tint (experimental): titleBg in the
-            // title inset outline's shape, no border.
-            const bool outline = paintStyle != PreviewStyle::TitleBg &&
-                                 paintStyle != PreviewStyle::TitleInsetBg;
-            const double edgeInset =
-                paintStyle == PreviewStyle::TitlePlateOutline ? 0.0
-                : paintStyle == PreviewStyle::TitleInsetOutline ||
-                        paintStyle == PreviewStyle::TitleInsetBg
-                    ? 4.0
-                    : -1.0;
-            const bool cardEdges = edgeInset >= 0.0;
+            paintStyle == PreviewStyle::TitleOutline) {
+            // Title / title with accent (0.12.1): a plate over the title row,
+            // 4px in from the card's BackgroundBorder (left, top, right) with
+            // the card's corner radius, ending under the title with the gap
+            // above the title mirrored below it. Before 0.12.1 the title tint
+            // sat 8px in from the panel with 4px corners and uneven gaps
+            // (thin tint left of the icon). The accent variant adds an
+            // accent border and halves the tint, as Outline does for the card.
+            const bool outline = paintStyle == PreviewStyle::TitleOutline;
             const double stroke =
                 outline ? settings->previewOutlineThickness : 0.0;
+            constexpr double kEdgeInset = 4.0;
             double top = 4.0;
             double stripH = 28.0;
             double titleTop = 0, titleBottom = 0;
             bool laidOut = GetTitleBottomRelative(title, host, cardH, titleTop,
                                                   titleBottom);
             if (laidOut) {
-                // An outline is drawn inside the strip: grow by its width so
-                // the gap around the title stays the same.
+                // Fallback strip (no BackgroundBorder). An outline is drawn
+                // inside: grow by its width so the gap around the title stays.
                 top = (std::max)(2.0, titleTop - 3.0 - stroke);
                 stripH = (std::max)(20.0, titleBottom - top + 4.0 + stroke);
             } else {
@@ -184,14 +175,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 // Brace-init {4} only fills TopLeft (C++ struct). All four.
                 CornerRadius radius{4, 4, 4, 4};
                 bool fromCard = false;
-                if (cardEdges && laidOut) {
-                    // From the card's BackgroundBorder: `edgeInset` in from
-                    // its left, top and right edges, with the card's own
-                    // corner radius (radius minus the inset, the concentric
-                    // value, looked too sharp at a 4px inset), ending under the
-                    // title with the gap above the title mirrored below it
-                    // (at most 8px - inset + border). Inset 0 = the top of
-                    // the card plate.
+                if (laidOut) {
                     try {
                         if (auto bb = FindThumbnailBackgroundBorder(thumbView)) {
                             const double bw = bb.ActualWidth();
@@ -199,15 +183,19 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                                 bb.TransformToVisual(host).TransformPoint(
                                     winrt::Windows::Foundation::Point{0.f,
                                                                       0.f});
-                            const double edgeTop = origin.Y + edgeInset;
+                            const double edgeTop = origin.Y + kEdgeInset;
+                            // Gap below the title = gap above it, at most
+                            // 4px + border.
                             const double gap = (std::min)(
-                                titleTop - edgeTop, 8.0 - edgeInset + stroke);
-                            if (bw > 2.0 * edgeInset + 24.0 && gap >= 0.0) {
-                                x = origin.X + edgeInset;
-                                w = bw - 2.0 * edgeInset;
+                                titleTop - edgeTop, 8.0 - kEdgeInset + stroke);
+                            if (bw > 2.0 * kEdgeInset + 24.0 && gap >= 0.0) {
+                                x = origin.X + kEdgeInset;
+                                w = bw - 2.0 * kEdgeInset;
                                 top = edgeTop;
                                 stripH = (std::max)(20.0,
                                                     titleBottom + gap - top);
+                                // The card's own radius: radius - inset
+                                // (concentric) looked too sharp.
                                 if (auto b = bb.try_as<Controls::Border>()) {
                                     radius = b.CornerRadius();
                                 }
@@ -227,7 +215,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                     }
                 }
                 const int chipA = static_cast<int>(
-                    // Outline: half the tint so the border reads (as Outline).
+                    // Accent: half the tint so the border reads (as Outline).
                     (outline ? fillOpacitySetting / 2 : fillOpacitySetting) *
                         2.55 * t +
                     0.5);

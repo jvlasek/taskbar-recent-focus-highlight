@@ -54,9 +54,8 @@ other apps more recently. Single-window flyouts are left alone unless
 while its window is recent, so it reads as "used within the preview decay".
 
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
-plate for rank 1, title tint for ranks 2+); also an outline, an outline
-around the title (three experimental variants), a thin bar under the title, or none for
-ranks 2+.
+plate for rank 1, title plate for ranks 2+); either can also have an accent
+border, or be a thin bar under the title; ranks 2+ can be left unmarked.
 
 If you only want the active window highlighted in previews,
 [taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
@@ -232,47 +231,35 @@ to clear highlights.
     - topStyle: plate
       $name: Rank 1 style
       $description: >-
-        How to mark the most recent window. Plate = tint the whole card.
-        Outline = tinted card with an accent border (the look of Taskbar
-        Active Window Highlight). Title background = soft wash behind the
-        title. Title bar = thin line under the title (thickness follows
-        Icons → Thickness). Title outline (experimental) = the title wash
-        with an accent border, like Outline but only around the title. Title
-        plate outline (experimental) = Outline cut short under the title
-        (same card edges and corners). Inset title plate outline
-        (experimental) = the same, 4 px in from the card edges. Inset title
-        plate tint (experimental) = Title background in that inset shape.
-        Plate and Outline keep the card's own rounded corners and stay
+        How to mark the most recent window. Whole plate = tint the whole
+        card. Whole plate with accent = tinted card with an accent border (the
+        look of Taskbar Active Window Highlight). Title = a tinted plate over
+        the title row. Title with accent = the same with an accent border.
+        Bar under title = thin line under the title (thickness follows Icons →
+        Thickness). The plates follow the card's rounded corners and stay
         visible on hover.
       $options:
-      - plate: Whole preview plate
-      - outline: Plate with accent outline
-      - titleBg: Title background tint
-      - titleInsetBg: Inset title plate tint (experimental)
-      - titleOutline: Title with accent outline (experimental)
-      - titlePlateOutline: Title plate with accent outline (experimental)
-      - titleInsetOutline: Inset title plate with accent outline (experimental)
-      - titleBar: Bar under window title
+      - plate: Whole plate
+      - outline: Whole plate with accent
+      - titleBg: Title
+      - titleOutline: Title with accent
+      - titleBar: Bar under title
     - restStyle: titleBg
       $name: Ranks 2+ style
       $description: >-
         How to mark the other ranked windows (2nd, 3rd …). Not marked = only
         rank 1 is shown.
       $options:
-      - titleBg: Title background tint
-      - titleInsetBg: Inset title plate tint (experimental)
-      - titleOutline: Title with accent outline (experimental)
-      - titlePlateOutline: Title plate with accent outline (experimental)
-      - titleInsetOutline: Inset title plate with accent outline (experimental)
-      - titleBar: Bar under window title
-      - plate: Whole preview plate
-      - outline: Plate with accent outline
+      - titleBg: Title
+      - titleOutline: Title with accent
+      - titleBar: Bar under title
+      - plate: Whole plate
+      - outline: Whole plate with accent
       - none: Not marked
     - outlineThickness: 2
-      $name: Outline thickness
+      $name: Accent thickness
       $description: >-
-        Border width in pixels for the Outline and the Title outline styles
-        (1–8).
+        Border width in pixels for the "with accent" styles (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
       $description: Strength for the most recent window in the flyout (0–100)
@@ -287,9 +274,10 @@ to clear highlights.
     - fillOpacity: 40
       $name: Tint opacity
       $description: >-
-        0–100. Strength of title-background wash and whole-preview plate. Title bar
-        line uses full accent and ignores this. Independent of Icons → Fill opacity.
-        Per-rank intensity still scales the result.
+        0–100. Strength of the Whole plate and Title tint (half of it for the
+        "with accent" styles). Bar under title uses the full accent and
+        ignores this. Independent of Icons → Fill opacity. Per-rank intensity
+        still scales the result.
     - minFocusSeconds: 1
       $name: Minimum focus (seconds)
       $description: >-
