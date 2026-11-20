@@ -254,6 +254,7 @@ struct ButtonState {
     TaskbarEdge lastPaintEdge = TaskbarEdge::Bottom;
     int lastPaintBoxW = 0;
     int lastPaintBoxH = 0;
+    uint64_t lastPaintPlateGeometry = 0;
 };
 std::mutex g_buttonStateMutex;
 std::unordered_map<void*, ButtonState> g_buttonStates;

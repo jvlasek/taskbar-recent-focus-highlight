@@ -152,6 +152,7 @@ struct PaintCacheState {
     TaskbarEdge edge = TaskbarEdge::Bottom;
     int boxW = 0;
     int boxH = 0;
+    uint64_t plateGeometry = 0;  // ReadPlateShapes signature (plates only)
 };
 PaintCacheState GetCachedPaintState(FrameworkElement button);
 void SetCachedPaintState(FrameworkElement button,
@@ -159,7 +160,8 @@ void SetCachedPaintState(FrameworkElement button,
                          uint32_t gen,
                          TaskbarEdge edge = TaskbarEdge::Bottom,
                          int boxW = 0,
-                         int boxH = 0);
+                         int boxH = 0,
+                         uint64_t plateGeometry = 0);
 bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler);
 void ApplyAllHighlights_UIThread();
 void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb);

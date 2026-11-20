@@ -37,10 +37,25 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         if (!SafeGlowBounds(0, 0, keyW, keyH)) { keyW = panelW; keyH = panelH; }
         const int boxWi = static_cast<int>(keyW + 0.5);
         const int boxHi = static_cast<int>(keyH + 0.5);
+        // Plates: Windows' button shapes, read once (cache key and paint).
+        const bool plateStyle = settings->glowStyle == GlowStyle::Plate ||
+                                settings->glowStyle == GlowStyle::PlateAccent;
+        PlateShapes plateShapes;
+        if (plateStyle) {
+            plateShapes = ReadPlateShapes(iconPanel);
+        }
         {
+            // Skip an unchanged repaint. Explorer re-runs the button's
+            // visual states on every title change (IrfanView paging images:
+            // 8-16 a second, capture manual-20261120-150148); until the
+            // plates had this cache each run repainted them. The plates also
+            // compare Windows' shapes, which a window-count or hover change
+            // alters without changing the panel size.
             auto painted = GetCachedPaintState(button);
-            if (settings->glowStyle == GlowStyle::LeftBar &&
-                painted.rank == rankOneBased &&
+            const bool sameGeometry =
+                !plateStyle || (plateShapes.ok &&
+                                painted.plateGeometry == plateShapes.signature);
+            if (sameGeometry && painted.rank == rankOneBased &&
                 painted.settingsGen == settings->generation &&
                 painted.accent ==
                     g_cachedAccent.load(std::memory_order_relaxed) &&
@@ -94,7 +109,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         }
 
         if (style == GlowStyle::Plate || style == GlowStyle::PlateAccent) {
-            PaintNativeContour(host, iconPanel, style, base,
+            PaintNativeContour(host, plateShapes, style, base,
                                settings->glowAccentThickness, t,
                                fillOpacitySetting);
         } else {
@@ -119,7 +134,10 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                BarSideName(barSide), boxW, boxH, thickness,
                settings->glowSize, intensity);
         SetCachedPaintState(button, rankOneBased, settings->generation, edge,
-                            boxWi, boxHi);
+                            boxWi, boxHi,
+                            plateStyle && plateShapes.ok
+                                ? plateShapes.signature
+                                : 0);
     } catch (...) {
         HRESULT hr = winrt::to_hresult();
         Wh_Log(L"ApplyButtonHighlight error %08X", hr);

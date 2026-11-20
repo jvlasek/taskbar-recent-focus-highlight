@@ -101,8 +101,14 @@ Opacity, once.
 
 Geometry must be finite, positive and bounded before XAML assignment or integer
 conversion. No division by native width/height. Failed native reads fall back
-or skip. The plates bypass the old paint-cache early return so native
-geometry is reread on paints; Side keeps its existing cache. Check all styles
+or skip. Paint cache (perf/plate-cache): both styles skip a repaint when
+rank, settings generation, accent, edge and panel box are unchanged; the
+plates also compare a signature of the Windows shapes they copy
+(`ReadPlateShapes`: plate, MultiWindowElement sliver, content centre, in
+1/16 DIP). Explorer re-runs a button's visual states on every title change
+(IrfanView paging images: 8-16 a second, capture
+manual-20261120-150148-494712), and before the cache each run repainted the
+plates. Native geometry is still reread on every call. Check all styles
 live, including square/circular themes and active/inactive pills. Automated
 math/placement tests are `python tests/run-icon-order-tests.py`.
 

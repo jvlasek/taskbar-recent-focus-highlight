@@ -313,19 +313,28 @@ bool ReadNativeGlowShape(FrameworkElement element,
                        // fallback.
     }
 }
-void PaintNativeContour(Controls::Grid host,
-                        FrameworkElement iconPanel,
-                        GlowStyle style,
-                        winrt::Windows::UI::Color color,
-                        double accentThickness,
-                        double opacity,
-                        int fillOpacity) {
+// What the plates copy from Windows' button, read once per paint (0.12.1):
+// the plate (a Styler hover plate or BackgroundElement, else the content
+// box) and, on a multi-window button, the MultiWindowElement sliver. Also
+// the signature of all of it for the paint cache.
+struct PlateShapes {
+    bool ok = false;
+    double centerX = 0, centerY = 0;  // panel content centre
+    NativeGlowShape main;
+    bool fromBackground = false;
+    bool hasStack = false;
+    NativeGlowShape stack;
+    uint64_t signature = 0;
+};
+
+PlateShapes ReadPlateShapes(FrameworkElement iconPanel) {
+    PlateShapes out;
     // The host may not have been arranged yet. Use the native panel's content
     // center, not TransformToVisual(host), so first paint and later paints
     // agree.
     double panelW = iconPanel.ActualWidth(), panelH = iconPanel.ActualHeight();
     if (!SafeGlowBounds(0, 0, panelW, panelH))
-        return;
+        return out;
     Thickness padding{0, 0, 0, 0};
     if (auto grid = iconPanel.try_as<Controls::Grid>()) {
         auto p = grid.Padding();
@@ -335,23 +344,22 @@ void PaintNativeContour(Controls::Grid host,
     }
     if (!SafeGlowMetric(padding.Left) || !SafeGlowMetric(padding.Top) ||
         !SafeGlowMetric(padding.Right) || !SafeGlowMetric(padding.Bottom))
-        return;
+        return out;
     double contentW = panelW - padding.Left - padding.Right;
     double contentH = panelH - padding.Top - padding.Bottom;
     if (!SafeGlowBounds(0, 0, contentW, contentH))
-        return;
-    double centerX = padding.Left + contentW * 0.5;
-    double centerY = padding.Top + contentH * 0.5;
-    NativeGlowShape shape;
+        return out;
+    out.centerX = padding.Left + contentW * 0.5;
+    out.centerY = padding.Top + contentH * 0.5;
+    NativeGlowShape& shape = out.main;
     auto indicator = FindRunningIndicator(iconPanel);
     bool plate =
         indicator && RunningIndicatorLooksLikeHoverPlate(indicator, iconPanel);
     bool found = false;
     if (plate)
         found = ReadNativeGlowShape(indicator, iconPanel, shape);
-    bool fromBackground = false;
     if (!found) {
-        found = fromBackground = ReadNativeGlowShape(
+        found = out.fromBackground = ReadNativeGlowShape(
             FindChildByName(iconPanel, L"BackgroundElement"), iconPanel, shape);
     }
     if (!found) {
@@ -359,12 +367,52 @@ void PaintNativeContour(Controls::Grid host,
         shape.y = padding.Top;
         shape.w = contentW;
         shape.h = contentH;
-        if (!SafeGlowBounds(0, 0, shape.w, shape.h))
-            return;
         shape.corners = CornerRadius{4, 4, 4, 4};
     }
     if (!SafeGlowBounds(shape.x, shape.y, shape.w, shape.h))
+        return out;
+    out.hasStack =
+        out.fromBackground &&
+        ReadNativeGlowShape(FindChildByName(iconPanel, L"MultiWindowElement"),
+                            iconPanel, out.stack);
+    out.ok = true;
+
+    // FNV-1a over the geometry in 1/16 DIP steps.
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](double v) {
+        const int64_t q = static_cast<int64_t>(std::llround(v * 16.0));
+        for (int i = 0; i < 8; ++i) {
+            h ^= static_cast<uint64_t>(q >> (i * 8)) & 0xFF;
+            h *= 1099511628211ull;
+        }
+    };
+    auto mixShape = [&mix](NativeGlowShape const& s) {
+        mix(s.x); mix(s.y); mix(s.w); mix(s.h);
+        mix(s.corners.TopLeft); mix(s.corners.TopRight);
+        mix(s.corners.BottomRight); mix(s.corners.BottomLeft);
+    };
+    mix(out.centerX);
+    mix(out.centerY);
+    mix(plate ? 1 : out.fromBackground ? 2 : 3);
+    mixShape(shape);
+    mix(out.hasStack ? 1 : 0);
+    if (out.hasStack)
+        mixShape(out.stack);
+    out.signature = h ? h : 1;
+    return out;
+}
+
+void PaintNativeContour(Controls::Grid host,
+                        PlateShapes const& shapes,
+                        GlowStyle style,
+                        winrt::Windows::UI::Color color,
+                        double accentThickness,
+                        double opacity,
+                        int fillOpacity) {
+    if (!shapes.ok)
         return;
+    const double centerX = shapes.centerX, centerY = shapes.centerY;
+    NativeGlowShape const& shape = shapes.main;
 
     // Plate with accent: accent border (accent thickness) and half the fill,
     // as the preview "with accent" styles. Until 0.12.1 Frame was a 230-alpha
@@ -433,10 +481,8 @@ void PaintNativeContour(Controls::Grid host,
     // part right of the background so the tint does not double where they
     // overlap. UWPSpy dump: tests/uwspy/captures/multiwin-20261119-212700.
     bool stacked = false;
-    NativeGlowShape stack;
-    if (fromBackground &&
-        ReadNativeGlowShape(FindChildByName(iconPanel, L"MultiWindowElement"),
-                            iconPanel, stack)) {
+    if (shapes.hasStack) {
+        NativeGlowShape const& stack = shapes.stack;
         const double clipX = shape.x + shape.w - stack.x;
         if (clipX > 0.0 && clipX < stack.w - 0.5) {
             if (auto b = paint(kGlowStackName, stack, 0u)) {

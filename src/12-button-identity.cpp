@@ -425,6 +425,7 @@ PaintCacheState GetCachedPaintState(FrameworkElement button) {
     out.edge = e->lastPaintEdge;
     out.boxW = e->lastPaintBoxW;
     out.boxH = e->lastPaintBoxH;
+    out.plateGeometry = e->lastPaintPlateGeometry;
     return out;
 }
 
@@ -433,7 +434,8 @@ void SetCachedPaintState(FrameworkElement button,
                          uint32_t gen,
                          TaskbarEdge edge,
                          int boxW,
-                         int boxH) {
+                         int boxH,
+                         uint64_t plateGeometry) {
     const uint32_t accent = g_cachedAccent.load(std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(g_buttonStateMutex);
     ButtonState* e = FindButtonStateLocked(button, true);
@@ -446,6 +448,7 @@ void SetCachedPaintState(FrameworkElement button,
     e->lastPaintEdge = edge;
     e->lastPaintBoxW = boxW;
     e->lastPaintBoxH = boxH;
+    e->lastPaintPlateGeometry = plateGeometry;
 }
 
 template <typename Fn>
