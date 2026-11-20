@@ -44,6 +44,18 @@ User-visible consequences:
   buttons of one exe (Total Commander and its Lister, UWP apps sharing a
   host).
 
+## Recency: last use, not last switch
+
+Decay (apps and previews) now counts from when an app was last *used*: the
+last keyboard / mouse input while it was in front (`GetLastInputInfo`),
+refreshed on the 30 s decay tick and when it loses the foreground. Before,
+it counted from the switch, so an app used for longer than the decay time
+without switching lost its highlight while in use. Away from the keyboard
+the input time stops and everything ages out as before. Only a stretch in
+front in which the window passed the minimum focus counts, so a short visit
+cannot move an app up. No new setting; the decay settings' descriptions say
+"since you last used it".
+
 ## Look
 
 Icons (setting `icons.glowStyle`, ids unchanged):
@@ -107,8 +119,8 @@ Every item fails closed (no highlight rather than a guessed one):
   `BackgroundElement`, `MultiWindowElement`, `BackgroundBorder`,
   `IconsRepeater`, title text).
 - Public only: `RegisterShellHookWindow` (best effort), the
-  `CurrentVirtualDesktop` registry value with a change notification, and
-  `IVirtualDesktopManager`.
+  `CurrentVirtualDesktop` registry value with a change notification,
+  `IVirtualDesktopManager` and `GetLastInputInfo`.
 
 ## Performance
 

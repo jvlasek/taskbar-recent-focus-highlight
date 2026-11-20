@@ -426,6 +426,97 @@ void SchedulePreviewConfirm(bool windowAlreadyTracked) {
                  static_cast<ULONGLONG>(previewMin) * 1000ULL);
 }
 
+// ---------------------------------------------------------------------------
+// Last use (0.12.1): decay counts from when an app was last *used*, not from
+// when it was switched to. While a confirmed window is in front, the decay
+// tick moves its recency forward to the last keyboard / mouse input
+// (GetLastInputInfo, session-wide); when it loses the foreground it is
+// stamped with the last input before that. Walking away stops the input
+// time, so everything still ages out from the last input. Before, an app
+// used without switching for longer than decayMinutes lost its highlight
+// while in use (capture manual-20261120-071227: Windows Sandbox).
+// Only a stretch in front in which the window was confirmed counts: a visit
+// shorter than the minimum focus refreshes nothing, so it cannot jump ranks.
+// Focus thread only.
+// ---------------------------------------------------------------------------
+HWND g_inFrontHwnd = nullptr;
+ULONGLONG g_inFrontSince = 0;
+
+// GetTickCount64 time of the last input in this session, 0 if unknown.
+ULONGLONG LastInputTick64(ULONGLONG now) {
+    LASTINPUTINFO lii{};
+    lii.cbSize = sizeof(lii);
+    if (!GetLastInputInfo(&lii)) {
+        return 0;
+    }
+    // dwTime is GetTickCount (32-bit); the difference survives wrap.
+    const ULONGLONG ago = static_cast<DWORD>(static_cast<DWORD>(now) -
+                                              lii.dwTime);
+    return ago < now ? now - ago : 0;
+}
+
+// Requires g_stateMutex. Moves hwnd's app and preview recency forward to
+// `at`, only for records confirmed during the current stretch in front
+// (tick >= since). True if anything moved.
+bool RefreshLastUseLocked(HWND hwnd, ULONGLONG since, ULONGLONG at) {
+    bool moved = false;
+    for (auto& [id, desk] : g_desktopMaps) {
+        (void)id;
+        auto w = desk.windowAppFocus.find(hwnd);
+        if (w != desk.windowAppFocus.end() && w->second.tick >= since &&
+            w->second.tick < at && HwndMatchesStoredPid(hwnd, w->second.pid)) {
+            w->second.tick = at;
+            moved = true;
+        }
+        auto p = desk.windowFocusMap.find(hwnd);
+        if (p != desk.windowFocusMap.end() &&
+            p->second.lastConfirmedTick >= since &&
+            p->second.lastConfirmedTick < at &&
+            HwndMatchesStoredPid(hwnd, p->second.pid)) {
+            p->second.lastConfirmedTick = at;
+            moved = true;
+        }
+    }
+    return moved;
+}
+
+// A new foreground (any window, transient ones included): stamp the window
+// that left with its last use, then start the new stretch.
+void NoteForegroundForLastUse(HWND hwnd) {
+    if (hwnd == g_inFrontHwnd) {
+        return;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (g_inFrontHwnd) {
+        const ULONGLONG at = LastInputTick64(now);
+        if (at) {
+            DeferredLogScope logScope;  // logs after unlock
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            if (RefreshLastUseLocked(g_inFrontHwnd, g_inFrontSince, at)) {
+                LOG_DEFERRED(L"Last use: hwnd=%p left, used until %llus ago",
+                             g_inFrontHwnd,
+                             static_cast<unsigned long long>((now - at) / 1000));
+            }
+        }
+    }
+    g_inFrontHwnd = hwnd;
+    g_inFrontSince = now;
+}
+
+// Decay tick: the confirmed window in front was used up to the last input.
+void RefreshInFrontLastUse() {
+    HWND fg = NormalizeFocusHwnd(GetForegroundWindow());
+    if (!fg || fg != g_inFrontHwnd) {
+        return;  // a change the foreground handler has not seen yet
+    }
+    const ULONGLONG at = LastInputTick64(GetTickCount64());
+    if (!at) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    RefreshLastUseLocked(fg, g_inFrontSince, at);
+}
+
 void HandleForegroundChanged(HWND hWnd) {
     if (g_unloading.load()) {
         return;
@@ -433,6 +524,7 @@ void HandleForegroundChanged(HWND hWnd) {
     ProcessImagePathCacheScope pathCacheScope;
 
     hWnd = NormalizeFocusHwnd(hWnd);
+    NoteForegroundForLastUse(hWnd);
 
     // Normally the registry watch on the focus thread reports switches.
     // Without it, read here, before the transient check: switching to an
@@ -639,6 +731,7 @@ void OnDecayTimer() {
     if (RefreshCurrentDesktopId()) {
         OnVirtualDesktopSwitched(L"decay tick");  // it saw the switch first
     }
+    RefreshInFrontLastUse();  // before decay: the app in use is not idle
     {
         DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);

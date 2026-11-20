@@ -216,7 +216,7 @@ stateDiagram-v2
     WId --> App : derive: newest window wins<br/>lastHwnd, tick
     WNoId --> [*] : window dead, PID changed,<br/>decayed or excluded
     WId --> [*] : window dead, PID changed,<br/>decayed or excluded
-    App --> [*] : decayMinutes since last confirm,<br/>or excluded by settings
+    App --> [*] : decayMinutes since last use,<br/>or excluded by settings
 ```
 
 Notes
@@ -228,6 +228,10 @@ Notes
   machine 2 skip the wait (default `promoteMode`).
 - `HandleWindowDestroyed` removes the window record at once; the app record
   stays until decay.
+- Last use (0.12.1): a window record's tick is its confirm time, moved
+  forward to the last input while it stays in front (decay tick) and when it
+  leaves the foreground — only within a stretch in front in which it was
+  confirmed. Same for the preview record in machine 4.
 
 ## 4. Window recency record and flyout card
 
