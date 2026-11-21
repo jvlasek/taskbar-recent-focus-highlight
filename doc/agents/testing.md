@@ -56,16 +56,21 @@ adds an independent foreground observer.
 |-----------|---------|
 | `Focus candidate:` / `Confirmed focus:` | App recency |
 | `Preview focus confirmed:` | Window recency |
-| `Current virtual desktop:` / `Desktop switch (<reason>):` | Per-desktop recency; reason = registry, input desktop (lock / UAC), foreground (watch fallback), decay tick |
+| `Current virtual desktop:` / `Desktop switch (<reason>):` | Per-desktop recency; reason = registry, `input desktop: <name>` (`Default` = back on the user desktop, `not accessible (lock / UAC)` = secure desktop; 0.12.1), foreground (watch fallback), decay tick |
 | `Button identity:` | A button's Explorer AppId changed (first capture, reuse) |
 | `Identity state:` | A button's running state changed |
 | `Window … belongs to APPID:…` | A window record joined (or changed) its app at a recompute |
 | `Button windows:` / `Uncombined windows` | Never Combine detection |
-| `ApplyAllHighlights:` / `rank list[` / `bind rank` | Full pass |
+| `ApplyAllHighlights:` / `rank list[` / `bind rank` | Full pass. Since 0.12.1 `rank list[` / `bind rank` (and `no ranks — cleared`) are printed only when the ladder or a binding differs from that UI thread's last pass; otherwise the summary ends `(ladder unchanged)`. A `Glow rank` line still follows its `bind rank` line |
 | `UNMATCHED rank` | A ranked app bound to no shown button |
-| `Preview resolve:` / `sibling[` / `unresolved:` | Per-card window (`how=viewmodel`) and why a card did not resolve |
+| `Preview resolve:` / `sibling[` / `unresolved:` | Per-card window (`how=viewmodel`) and why a card did not resolve. `sibling[` lines only when the set, a rank or a failure changed (else `(unchanged)`, 0.12.1) |
 | `HWND recycled` | Preview map dropped a reused handle (PID mismatch) |
-| `gave up waiting through transient` | Min-focus grace expired; candidate dropped |
+| `transient FG, waiting on` / `gave up waiting through transient … (after Ns)` | Min-focus grace: first line once per wait (no 200 ms repeats since 0.12.1), the second if it expired and the candidate was dropped |
+| `Last use: hwnd=… left, used until Ns ago (app\|preview\|app+preview)` | The window that left the foreground was stamped; `preview` alone = a visit shorter than the app minimum focus (0.12.1) |
+| `Decayed: <name> key=… (last use N.N min ago)` | App record dropped; the age should be ≥ the decay time (+ up to one 30 s tick) |
+| `Hidden (no running button):` / `Shown again (running button):` | App keeps its history but has no slot, or got it back. A burst right after `Desktop switch` is the cleared running grace, until the next full pass |
+| `Decay tick late by N min` | Sleep (GetTickCount64 counts it) or a stalled worker; idle records decay at once |
+| `Focus tracking waits for the taskbar` / `Focus tracking started` | Process without / with Taskbar.View hooks; a waiting process logs nothing else (0.12.1) |
 | `Decay timer armed` / `Decay timer stopped` | 30 s decay tick started or idled |
 | `Hooked Taskbar.View.dll` / `Preview resolve: view model on` | Symbols found |
 | `no dispatcher anchor` | Before the first button is seen (logged once) |

@@ -576,6 +576,9 @@ struct AppFocusInfo {
     // Rank unit is one window (lastHwnd), not the app: set on the per-window
     // slots RecomputeRanks makes for uncombined buttons (Never Combine).
     bool perWindow = false;
+    // Last AppAppearsOnTaskbar result in RecomputeRanks, true = no slot.
+    // Only for logging the change.
+    bool hiddenNoButton = false;
 };
 
 struct PendingFocus {
@@ -1375,6 +1378,10 @@ bool RecencyMapsEmptyLocked() {
     return true;
 }
 
+// GetTickCount64 of the last decay tick, or of arming (focus thread only):
+// OnDecayTimer reports a tick far past its interval.
+ULONGLONG g_lastDecayTick = 0;
+
 void EnsureDecayTimerArmed() {
     if (!OnHookThread()) {
         return;
@@ -1382,6 +1389,7 @@ void EnsureDecayTimerArmed() {
     if (g_decayTimerArmed.exchange(true)) {
         return;
     }
+    g_lastDecayTick = GetTickCount64();  // a stopped timer is not a late one
     ArmHookTimer(kDecayTimerId, kDecayCheckIntervalMs);
     Wh_Log(L"Decay timer armed");
 }
@@ -2026,13 +2034,34 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
             continue;
         }
         if (IsTickDecayed(info.lastConfirmedFocusTick, decayMs, now)) {
-            LOG_DEFERRED(L"Decayed: %s", info.displayName.c_str());
+            // Key: two apps can share a display name (Total Commander and
+            // its Lister windows are both TOTALCMD64.EXE).
+            const ULONGLONG idleTenths =
+                (now - info.lastConfirmedFocusTick) / 6000;
+            LOG_DEFERRED(L"Decayed: %s key=%s (last use %llu.%llu min ago)",
+                         info.displayName.c_str(), info.key.c_str(),
+                         static_cast<unsigned long long>(idleTenths / 10),
+                         static_cast<unsigned long long>(idleTenths % 10));
             it = desk.appFocusMap.erase(it);
             continue;
         }
         // No running button with this AppId (closed, pinned-only, tray-only
-        // window): keep history but do not occupy a visible slot.
-        if (!AppAppearsOnTaskbar(info.key)) {
+        // window): keep history but do not occupy a visible slot. Logged on
+        // change, which also explains a ladder that empties without a decay
+        // (lock or desktop switch clears the running grace until the next
+        // full pass re-reads IsRunning).
+        const bool hidden = !AppAppearsOnTaskbar(info.key);
+        if (hidden != info.hiddenNoButton) {
+            info.hiddenNoButton = hidden;
+            if (hidden) {
+                LOG_DEFERRED(L"Hidden (no running button): %s key=%s",
+                             info.displayName.c_str(), info.key.c_str());
+            } else {
+                LOG_DEFERRED(L"Shown again (running button): %s",
+                             info.displayName.c_str());
+            }
+        }
+        if (hidden) {
             ++it;
             continue;
         }
@@ -4518,10 +4547,49 @@ void ApplyAllHighlights_UIThread() {
         deskId = g_currentDesktopId;
     }
 
+    // Ladder and bindings are logged only when they differ from this UI
+    // thread's last pass (capture manual-20261120-154409-086197: 1,251 of
+    // 1,565 passes repeated it). Pass 1 matches, pass 2 paints, so a
+    // "Glow rank" line still follows its "bind rank" line.
+    std::vector<int> buttonRank(live.size(), 0);
+    std::vector<std::wstring> boundNames(live.size());
+    std::vector<bool> rankTaken(ranks.size(), false);
+    const bool painting = !g_unloading.load() && !ranks.empty();
+    for (size_t bi = 0; painting && bi < live.size(); ++bi) {
+        for (size_t ri = 0; running[bi] && ri < ranks.size(); ++ri) {
+            if (IdentityMatchesRank(idents[bi], ranks[ri])) {
+                buttonRank[bi] = static_cast<int>(ri) + 1;
+                rankTaken[ri] = true;
+                boundNames[bi] = GetButtonAutomationName(live[bi]);
+                break;
+            }
+        }
+    }
+    std::wstring ladder = GuidToLogString(deskId);
+    for (const auto& r : ranks) {
+        ladder += L"|" + r.key + L"," + r.displayName;
+        if (r.perWindow) {
+            ladder += L"," + std::to_wstring(
+                                 reinterpret_cast<uintptr_t>(r.lastHwnd));
+        }
+    }
+    for (size_t bi = 0; bi < live.size(); ++bi) {
+        if (buttonRank[bi] > 0) {
+            ladder += L"#" + std::to_wstring(buttonRank[bi]) + L"," +
+                      boundNames[bi] + L"," + buttonAppIds[bi];
+        }
+    }
+    thread_local std::wstring t_lastLadderLog;
+    const bool ladderChanged = ladder != t_lastLadderLog;
+    if (ladderChanged) {
+        t_lastLadderLog = ladder;
+    }
+
     Wh_Log(L"ApplyAllHighlights: %zu tracked buttons (+%zu recycled, "
-           L"skipped), %zu ranks desktop=%s",
-           live.size(), parked, ranks.size(), GuidToLogString(deskId).c_str());
-    for (size_t i = 0; i < ranks.size(); ++i) {
+           L"skipped), %zu ranks desktop=%s%s",
+           live.size(), parked, ranks.size(), GuidToLogString(deskId).c_str(),
+           ladderChanged ? L"" : L" (ladder unchanged)");
+    for (size_t i = 0; ladderChanged && i < ranks.size(); ++i) {
         if (ranks[i].perWindow) {
             Wh_Log(L"  rank list[%zu]: %s window %p \"%s\"", i + 1,
                    ranks[i].displayName.c_str(), ranks[i].lastHwnd,
@@ -4531,12 +4599,12 @@ void ApplyAllHighlights_UIThread() {
         }
     }
 
-    if (g_unloading.load() || ranks.empty()) {
+    if (!painting) {
         for (auto& button : live) {
             ClearButtonHighlight(button);
         }
         g_pendingOverlaySweep = false;
-        if (ranks.empty()) {
+        if (ranks.empty() && ladderChanged) {
             Wh_Log(L"ApplyAllHighlights: no ranks — cleared overlays on %zu "
                    L"tracked buttons",
                    live.size());
@@ -4546,21 +4614,15 @@ void ApplyAllHighlights_UIThread() {
 
     // Explorer AppId (plus per-window slots). One rank may bind many buttons
     // (secondary taskbar / Never Combine); a button takes its best rank.
-    std::vector<bool> rankTaken(ranks.size(), false);
     for (size_t bi = 0; bi < live.size(); ++bi) {
-        int rank = 0;
-        for (size_t ri = 0; running[bi] && ri < ranks.size(); ++ri) {
-            if (IdentityMatchesRank(idents[bi], ranks[ri])) {
-                rank = static_cast<int>(ri) + 1;
-                rankTaken[ri] = true;
-                Wh_Log(L"  bind rank %zu %s -> \"%s\" (appId=%s)", ri + 1,
-                       ranks[ri].displayName.c_str(),
-                       GetButtonAutomationName(live[bi]).c_str(),
-                       buttonAppIds[bi].c_str());
-                break;
-            }
-        }
+        const int rank = buttonRank[bi];
         if (rank > 0) {
+            if (ladderChanged) {
+                const auto& r = ranks[static_cast<size_t>(rank - 1)];
+                Wh_Log(L"  bind rank %d %s -> \"%s\" (appId=%s)", rank,
+                       r.displayName.c_str(), boundNames[bi].c_str(),
+                       buttonAppIds[bi].c_str());
+            }
             ApplyButtonHighlight(live[bi], rank);
         } else {
             ClearButtonHighlight(live[bi]);
@@ -4894,13 +4956,13 @@ void WatchRepeaterElementClearing_UIThread(muxc::ItemsRepeater const& repeater) 
                                                         token})
                      .second;
     }
+    // Registration is not logged (205 lines a day); a watch left over at
+    // unload is (Wh_ModUninit, "ElementClearing watches not revoked").
     if (raced) {
         try {
             repeater.ElementClearing(token);
         } catch (...) {
         }
-    } else {
-        Wh_Log(L"Preview: watching flyout repeater %p for card removal", id);
     }
 }
 
@@ -6013,10 +6075,26 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     {
         const size_t painted =
             (std::min)(order.size(), static_cast<size_t>(limit));
+        // Siblings are listed only when the set, a rank or a resolve failure
+        // differs from this UI thread's last resolve: reopening the same
+        // flyout repeated about 2,100 sibling lines in a day (capture
+        // manual-20261120-154409-086197).
+        std::wstring sig = std::to_wstring(limit);
+        for (const auto& s : scored) {
+            sig += L"|" + std::to_wstring(reinterpret_cast<uintptr_t>(s.hwnd)) +
+                   L"," + std::to_wstring(s.rank) + L"," +
+                   std::to_wstring(static_cast<int>(s.fail));
+        }
+        thread_local std::wstring t_lastResolveLog;
+        const bool changed = sig != t_lastResolveLog;
+        if (changed) {
+            t_lastResolveLog = sig;
+        }
         Wh_Log(L"Preview resolve: %zu siblings, highlightCount=%d "
-               L"candidates=%zu painted=%zu",
-               siblings.size(), limit, order.size(), painted);
-        for (size_t i = 0; i < scored.size(); ++i) {
+               L"candidates=%zu painted=%zu%s",
+               siblings.size(), limit, order.size(), painted,
+               changed ? L"" : L" (unchanged)");
+        for (size_t i = 0; changed && i < scored.size(); ++i) {
             std::wstring name;
             try {
                 name = Automation::AutomationProperties::GetName(scored[i].view)
@@ -6954,6 +7032,7 @@ bool MinFocusDeadlineReached(const MinFocusTrack& track,
         // Alt-Tab / taskbar holds FG briefly: keep the candidate through a
         // bounded grace, then drop.
         ULONGLONG retryStart = pending.*track.retryStart;
+        const bool firstWait = retryStart == 0;
         const ULONGLONG delay = TransientRetryDelayMs(
             track.start, track.seconds, GetTickCount64(), retryStart);
         {
@@ -6963,17 +7042,22 @@ bool MinFocusDeadlineReached(const MinFocusTrack& track,
             }
         }
         if (delay == 0) {
-            Wh_Log(L"%s: gave up waiting through transient FG for %s",
-                   track.logName, pending.displayName.c_str());
+            const ULONGLONG waited =
+                retryStart ? GetTickCount64() - retryStart : 0;
+            Wh_Log(L"%s: gave up waiting through transient FG for %s "
+                   L"(after %llus)",
+                   track.logName, pending.displayName.c_str(),
+                   static_cast<unsigned long long>(waited / 1000));
             DropPendingFor(track, pending);
             return false;
         }
         ArmHookTimer(track.timerId, delay);
-        if (!track.preview) {
-            Wh_Log(L"Min-focus timer: transient FG, still waiting on %s "
-                   L"(%llums left)",
-                   pending.displayName.c_str(),
-                   static_cast<unsigned long long>(delay));
+        // Only the start of a wait: it re-polls every 200 ms (bursts of 40
+        // lines in capture manual-20261120-154409-086197). It ends in a
+        // confirmation or the "gave up" line.
+        if (!track.preview && firstWait) {
+            Wh_Log(L"Min-focus timer: transient FG, waiting on %s",
+                   pending.displayName.c_str());
         }
         return false;
     }
@@ -7254,18 +7338,36 @@ ULONGLONG LastInputTick64(ULONGLONG now) {
     return ago < now ? now - ago : 0;
 }
 
+// What RefreshLastUseLocked moved (for the log).
+constexpr unsigned kLastUseMovedApp = 1;
+constexpr unsigned kLastUseMovedPreview = 2;
+
+PCWSTR LastUseMovedName(unsigned moved) {
+    switch (moved) {
+        case kLastUseMovedApp:
+            return L"app";
+        case kLastUseMovedPreview:
+            return L"preview";
+        default:
+            return L"app+preview";
+    }
+}
+
 // Requires g_stateMutex. Moves hwnd's app and preview recency forward to
 // `at`, only for records confirmed during the current stretch in front
-// (tick >= since). True if anything moved.
-bool RefreshLastUseLocked(HWND hwnd, ULONGLONG since, ULONGLONG at) {
-    bool moved = false;
+// (tick >= since). Returns the kLastUseMoved* bits; 0 if nothing moved.
+// The app record needs the app minimum focus in this stretch; the preview
+// one only the preview minimum (often 0 s), so a short visit moves only
+// "preview".
+unsigned RefreshLastUseLocked(HWND hwnd, ULONGLONG since, ULONGLONG at) {
+    unsigned moved = 0;
     for (auto& [id, desk] : g_desktopMaps) {
         (void)id;
         auto w = desk.windowAppFocus.find(hwnd);
         if (w != desk.windowAppFocus.end() && w->second.tick >= since &&
             w->second.tick < at && HwndMatchesStoredPid(hwnd, w->second.pid)) {
             w->second.tick = at;
-            moved = true;
+            moved |= kLastUseMovedApp;
         }
         auto p = desk.windowFocusMap.find(hwnd);
         if (p != desk.windowFocusMap.end() &&
@@ -7273,7 +7375,7 @@ bool RefreshLastUseLocked(HWND hwnd, ULONGLONG since, ULONGLONG at) {
             p->second.lastConfirmedTick < at &&
             HwndMatchesStoredPid(hwnd, p->second.pid)) {
             p->second.lastConfirmedTick = at;
-            moved = true;
+            moved |= kLastUseMovedPreview;
         }
     }
     return moved;
@@ -7291,10 +7393,13 @@ void NoteForegroundForLastUse(HWND hwnd) {
         if (at) {
             DeferredLogScope logScope;  // logs after unlock
             std::lock_guard<std::mutex> lock(g_stateMutex);
-            if (RefreshLastUseLocked(g_inFrontHwnd, g_inFrontSince, at)) {
-                LOG_DEFERRED(L"Last use: hwnd=%p left, used until %llus ago",
+            if (const unsigned moved = RefreshLastUseLocked(
+                    g_inFrontHwnd, g_inFrontSince, at)) {
+                LOG_DEFERRED(L"Last use: hwnd=%p left, used until %llus ago "
+                             L"(%s)",
                              g_inFrontHwnd,
-                             static_cast<unsigned long long>((now - at) / 1000));
+                             static_cast<unsigned long long>((now - at) / 1000),
+                             LastUseMovedName(moved));
             }
         }
     }
@@ -7523,6 +7628,20 @@ void OnDecayTimer() {
     if (g_unloading.load()) {
         return;
     }
+    // A tick far past its interval: the machine slept (GetTickCount64 counts
+    // sleep, so everything idle that long decays now) or the thread stalled.
+    // Before, only the late "Decay recompute" line showed it.
+    {
+        const ULONGLONG now = GetTickCount64();
+        if (g_lastDecayTick &&
+            now - g_lastDecayTick > kDecayCheckIntervalMs + 60000) {
+            Wh_Log(L"Decay tick late by %llu min (sleep or stall)",
+                   static_cast<unsigned long long>(
+                       (now - g_lastDecayTick - kDecayCheckIntervalMs) /
+                       60000));
+        }
+        g_lastDecayTick = now;
+    }
     std::vector<std::wstring> keysBefore;
     std::vector<std::wstring> keysAfter;
     size_t windowsBefore = 0;
@@ -7679,6 +7798,24 @@ void HandleForegroundNotification(HWND target) {
     HandleForegroundChanged(foreground);
 }
 
+// EVENT_SYSTEM_DESKTOPSWITCH fires on the way to the lock screen / UAC and
+// back, and the old "lock / UAC" label read the same both ways. Names the
+// input desktop now: "Default" means back on the user desktop; one this
+// session may not open (the secure Winlogon desktop) is "not accessible".
+std::wstring InputDesktopSwitchReason() {
+    HDESK desk = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+    if (!desk) {
+        return L"input desktop: not accessible (lock / UAC)";
+    }
+    wchar_t name[64] = L"";
+    if (!GetUserObjectInformationW(desk, UOI_NAME, name, sizeof(name),
+                                   nullptr)) {
+        name[0] = L'\0';
+    }
+    CloseDesktop(desk);
+    return std::wstring(L"input desktop: ") + (name[0] ? name : L"?");
+}
+
 void HandleShellActivation(WPARAM code, HWND target) {
     if (code == HSHELL_WINDOWACTIVATED || code == HSHELL_RUDEAPPACTIVATED) {
         HandleForegroundNotification(target);
@@ -7727,7 +7864,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             HandleForegroundNotification(reinterpret_cast<HWND>(wParam));
             return 0;
         case WM_APP_DESKTOP_SWITCHED:
-            OnVirtualDesktopSwitched(L"input desktop: lock / UAC");
+            OnVirtualDesktopSwitched(InputDesktopSwitchReason().c_str());
             return 0;
         case WM_APP_SHUTDOWN:
             PostQuitMessage(0);

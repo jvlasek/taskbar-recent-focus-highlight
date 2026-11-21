@@ -23,7 +23,7 @@ results and notes: https://github.com/jvlasek/taskbar-recent-focus-highlight
 - **The side bar's halo** (a second, slightly larger translucent rectangle;
   XAML cannot blur it, so it showed as a hard-edged rim when magnified).
 - Symbol count: 26 (Taskbar.View.dll + taskbar.dll) -> 12 (Taskbar.View.dll
-  only). Lines: 8294 -> 8307, with the new features below included.
+  only). Lines: 8294 -> 8669, with the new features below included.
 
 ## Identity rule
 
@@ -55,6 +55,21 @@ the input time stops and everything ages out as before. Only a stretch in
 front in which the window passed the minimum focus counts, so a short visit
 cannot move an app up. No new setting; the decay settings' descriptions say
 "since you last used it".
+
+## Explorer processes without a taskbar
+
+Windhawk loads the mod into every `explorer.exe`, also folder-window and
+COM-server processes that never load `Taskbar.View.dll`. Before, it tracked
+focus there too (hooks, timers, log lines duplicating the taskbar
+process). Now the focus thread only creates its hidden window at init and
+installs its hooks once the Taskbar.View hooks are in; a process without a
+taskbar does nothing after init.
+
+The log is quieter: the ladder, the button bindings and the preview
+siblings are printed only when they change, and repeating wait lines are
+gone. New lines say why an app has no slot, how long ago a decayed app was
+last used, which desktop the input switched to, and when the decay tick ran
+late after sleep.
 
 ## Look
 

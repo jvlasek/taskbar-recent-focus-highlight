@@ -102,13 +102,34 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
             continue;
         }
         if (IsTickDecayed(info.lastConfirmedFocusTick, decayMs, now)) {
-            LOG_DEFERRED(L"Decayed: %s", info.displayName.c_str());
+            // Key: two apps can share a display name (Total Commander and
+            // its Lister windows are both TOTALCMD64.EXE).
+            const ULONGLONG idleTenths =
+                (now - info.lastConfirmedFocusTick) / 6000;
+            LOG_DEFERRED(L"Decayed: %s key=%s (last use %llu.%llu min ago)",
+                         info.displayName.c_str(), info.key.c_str(),
+                         static_cast<unsigned long long>(idleTenths / 10),
+                         static_cast<unsigned long long>(idleTenths % 10));
             it = desk.appFocusMap.erase(it);
             continue;
         }
         // No running button with this AppId (closed, pinned-only, tray-only
-        // window): keep history but do not occupy a visible slot.
-        if (!AppAppearsOnTaskbar(info.key)) {
+        // window): keep history but do not occupy a visible slot. Logged on
+        // change, which also explains a ladder that empties without a decay
+        // (lock or desktop switch clears the running grace until the next
+        // full pass re-reads IsRunning).
+        const bool hidden = !AppAppearsOnTaskbar(info.key);
+        if (hidden != info.hiddenNoButton) {
+            info.hiddenNoButton = hidden;
+            if (hidden) {
+                LOG_DEFERRED(L"Hidden (no running button): %s key=%s",
+                             info.displayName.c_str(), info.key.c_str());
+            } else {
+                LOG_DEFERRED(L"Shown again (running button): %s",
+                             info.displayName.c_str());
+            }
+        }
+        if (hidden) {
             ++it;
             continue;
         }

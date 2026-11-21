@@ -97,6 +97,10 @@ bool RecencyMapsEmptyLocked() {
     return true;
 }
 
+// GetTickCount64 of the last decay tick, or of arming (focus thread only):
+// OnDecayTimer reports a tick far past its interval.
+ULONGLONG g_lastDecayTick = 0;
+
 void EnsureDecayTimerArmed() {
     if (!OnHookThread()) {
         return;
@@ -104,6 +108,7 @@ void EnsureDecayTimerArmed() {
     if (g_decayTimerArmed.exchange(true)) {
         return;
     }
+    g_lastDecayTick = GetTickCount64();  // a stopped timer is not a late one
     ArmHookTimer(kDecayTimerId, kDecayCheckIntervalMs);
     Wh_Log(L"Decay timer armed");
 }

@@ -18,6 +18,9 @@ struct AppFocusInfo {
     // Rank unit is one window (lastHwnd), not the app: set on the per-window
     // slots RecomputeRanks makes for uncombined buttons (Never Combine).
     bool perWindow = false;
+    // Last AppAppearsOnTaskbar result in RecomputeRanks, true = no slot.
+    // Only for logging the change.
+    bool hiddenNoButton = false;
 };
 
 struct PendingFocus {

@@ -77,4 +77,17 @@ with tempfile.TemporaryDirectory(prefix='windhawk-review-') as folder:
     path.write_text(cpp, encoding='utf-8')
     subprocess.run(['g++', '-std=c++17', '-pthread', str(path), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True, timeout=15)
-print('PASS: concurrent hook attempts, failed-attempt suppression, nested cache release')
+
+# Log volume (0.12.1, capture manual-20261120-154409-086197): repeated passes
+# do not repeat their detail lines.
+def body(signature):
+    start = source.index(signature)
+    return source[start:source.index('\n}', start) + 2]
+apply_all = body('void ApplyAllHighlights_UIThread() {')
+assert 'for (size_t i = 0; ladderChanged && i < ranks.size(); ++i)' in apply_all
+assert apply_all.index('if (ladderChanged) {\n                const auto& r') < apply_all.index('ApplyButtonHighlight(live[bi], rank)')
+assert 'for (size_t i = 0; changed && i < scored.size(); ++i)' in body('void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {')
+deadline = body('bool MinFocusDeadlineReached(')
+assert 'still waiting on' not in deadline and 'if (!track.preview && firstWait)' in deadline
+assert 'watching flyout repeater' not in source
+print('PASS: concurrent hook attempts, failed-attempt suppression, nested cache release, repeated-pass log lines suppressed')

@@ -20,6 +20,24 @@ void HandleForegroundNotification(HWND target) {
     HandleForegroundChanged(foreground);
 }
 
+// EVENT_SYSTEM_DESKTOPSWITCH fires on the way to the lock screen / UAC and
+// back, and the old "lock / UAC" label read the same both ways. Names the
+// input desktop now: "Default" means back on the user desktop; one this
+// session may not open (the secure Winlogon desktop) is "not accessible".
+std::wstring InputDesktopSwitchReason() {
+    HDESK desk = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+    if (!desk) {
+        return L"input desktop: not accessible (lock / UAC)";
+    }
+    wchar_t name[64] = L"";
+    if (!GetUserObjectInformationW(desk, UOI_NAME, name, sizeof(name),
+                                   nullptr)) {
+        name[0] = L'\0';
+    }
+    CloseDesktop(desk);
+    return std::wstring(L"input desktop: ") + (name[0] ? name : L"?");
+}
+
 void HandleShellActivation(WPARAM code, HWND target) {
     if (code == HSHELL_WINDOWACTIVATED || code == HSHELL_RUDEAPPACTIVATED) {
         HandleForegroundNotification(target);
@@ -68,7 +86,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             HandleForegroundNotification(reinterpret_cast<HWND>(wParam));
             return 0;
         case WM_APP_DESKTOP_SWITCHED:
-            OnVirtualDesktopSwitched(L"input desktop: lock / UAC");
+            OnVirtualDesktopSwitched(InputDesktopSwitchReason().c_str());
             return 0;
         case WM_APP_SHUTDOWN:
             PostQuitMessage(0);

@@ -300,13 +300,13 @@ void WatchRepeaterElementClearing_UIThread(muxc::ItemsRepeater const& repeater) 
                                                         token})
                      .second;
     }
+    // Registration is not logged (205 lines a day); a watch left over at
+    // unload is (Wh_ModUninit, "ElementClearing watches not revoked").
     if (raced) {
         try {
             repeater.ElementClearing(token);
         } catch (...) {
         }
-    } else {
-        Wh_Log(L"Preview: watching flyout repeater %p for card removal", id);
     }
 }
 
