@@ -7,8 +7,10 @@ This update started when
 [taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
 by EphremTil17 was published. Comparing the two showed that this mod's
 preview matching was unreliable, and that mod pointed the way out: the
-thumbnail view model and the public WindowsUdk task interfaces. Thanks to
-EphremTil17 for both; details under "Related mod" below. The result is a
+thumbnail view model and the public WindowsUdk task interfaces. The
+"with accent" styles (a tinted plate with an accent border, for previews
+and icons) are that mod's look as well. Thanks to EphremTil17 for all of
+it; details under "Related mod" below. The result is a
 mod that no longer hooks taskbar.dll (12 symbols instead of 26), changes no
 native element, and counts recency from when an app was last *used*.
 
@@ -32,7 +34,7 @@ native element, and counts recency from when an app was last *used*.
 - **The side bar's halo** (a second, slightly larger translucent rectangle;
   XAML cannot blur it, so it showed as a hard-edged rim when magnified).
 - Symbol count: 26 (Taskbar.View.dll + taskbar.dll) -> 12 (Taskbar.View.dll
-  only). Lines: 8294 -> 8710, with the new features below included.
+  only). Lines: 8294 -> 8712, with the new features below included.
 
 ## Identity rule
 
@@ -195,8 +197,11 @@ preview cards through the public
 WindowsUdk `ITaskGroup` / `ITaskItem` / `ITaskItemThumbnail` interfaces
 follows that mod, and replaced this mod's private taskbar.dll lookups. So
 does drawing the preview plate / outline as an own `Border` instead of
-tinting the card's native one, which keeps it visible on hover. The in-mod
-README credits it.
+tinting the card's native one, which keeps it visible on hover. And the
+"with accent" styles are lifted from it: Whole plate with accent is that
+mod's preview look, and Title with accent and the icons' Plate with accent
+apply the same idea. The in-mod README and the Rank 1 style description
+credit it.
 
 The two still make sense as separate mods. That one marks the window that
 is active right now, from Explorer's own active-item state, and is much
@@ -232,8 +237,8 @@ If this pull request updates an existing mod, describe the changes inside the ch
 
 * Highlights now last from when you last used an app (keyboard or mouse input while it was in front), not from when you switched to it, so the app you are working in keeps its highlight.
 * taskbar.dll is no longer hooked (12 symbols instead of 26), and preview cards are matched to their windows through Explorer's own card data, improving reliability.
-* New icon styles: Plate (the button's own plate, tinted) and Plate with accent (half tint plus an accent border) replace Full and Frame. The side bar lost its halo. On multi-window buttons the plates also tint the stacked edge.
-* Previews: separate styles for rank 1 and ranks 2+, new Title (a plate over the card's title row) and "with accent" variants, and ranks 2+ can be left unmarked. A previously chosen preview style is kept until you save the settings.
+* New icon styles: Plate (the button's own plate, tinted) and Plate with accent (half tint plus an accent border, the look of Taskbar Active Window Highlight) replace Full and Frame. The side bar lost its halo. On multi-window buttons the plates also tint the stacked edge.
+* Previews: separate styles for rank 1 and ranks 2+, new Title (a plate over the card's title row) and "with accent" variants (after Taskbar Active Window Highlight), and ranks 2+ can be left unmarked. A previously chosen preview style is kept until you save the settings.
 * New option to also mark single-window previews (off by default).
 * Ranks 4 and up fade further instead of repeating rank 3.
 * Icons are matched by Explorer's own app ID, so two buttons of one program (e.g. Total Commander and its Lister) are told apart; the exclude list accepts app IDs too.

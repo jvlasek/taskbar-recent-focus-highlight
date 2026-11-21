@@ -117,7 +117,9 @@ to clear highlights.
   [taskbar-volume-control-per-app](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-volume-control-per-app.wh.cpp);
   button windows and preview cards use the public WindowsUdk task
   interfaces, as in
-  [taskbar-active-window-highlight](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-active-window-highlight.wh.cpp);
+  [taskbar-active-window-highlight](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-active-window-highlight.wh.cpp),
+  whose look (a tinted plate with an accent border) is also where the
+  "with accent" styles come from;
   the flyout `ItemsRepeater` handling follows
   [taskbar-thumbnail-reorder](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-thumbnail-reorder.wh.cpp).
 */
