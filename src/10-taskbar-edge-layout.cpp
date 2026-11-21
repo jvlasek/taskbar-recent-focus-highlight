@@ -265,27 +265,31 @@ void StyleGlowBarOnSide(Shapes::Rectangle rect,
     rect.IsHitTestVisible(false);
     rect.Visibility(Visibility::Visible);
 
+    // Zero desired size, as the plates (ZeroDesiredMargin): the far margin
+    // takes back the bar's thickness and its pad, the centred axis half the
+    // length on each side. The placement is the same as before.
+    const double back = -(t + edgePad);
     switch (side) {
         case BarSide::Left:
             rect.Width(t);
             rect.Height(len);
             rect.HorizontalAlignment(HorizontalAlignment::Left);
             rect.VerticalAlignment(VerticalAlignment::Center);
-            rect.Margin(Thickness{edgePad, 0, 0, 0});
+            rect.Margin(Thickness{edgePad, -len * 0.5, back, -len * 0.5});
             break;
         case BarSide::Right:
             rect.Width(t);
             rect.Height(len);
             rect.HorizontalAlignment(HorizontalAlignment::Right);
             rect.VerticalAlignment(VerticalAlignment::Center);
-            rect.Margin(Thickness{0, 0, edgePad, 0});
+            rect.Margin(Thickness{back, -len * 0.5, edgePad, -len * 0.5});
             break;
         case BarSide::Top:
             rect.Width(len);
             rect.Height(t);
             rect.HorizontalAlignment(HorizontalAlignment::Center);
             rect.VerticalAlignment(VerticalAlignment::Top);
-            rect.Margin(Thickness{0, edgePad, 0, 0});
+            rect.Margin(Thickness{-len * 0.5, edgePad, -len * 0.5, back});
             break;
         case BarSide::Bottom:
         default:
@@ -293,7 +297,7 @@ void StyleGlowBarOnSide(Shapes::Rectangle rect,
             rect.Height(t);
             rect.HorizontalAlignment(HorizontalAlignment::Center);
             rect.VerticalAlignment(VerticalAlignment::Bottom);
-            rect.Margin(Thickness{0, 0, 0, edgePad});
+            rect.Margin(Thickness{-len * 0.5, back, -len * 0.5, edgePad});
             break;
     }
 }

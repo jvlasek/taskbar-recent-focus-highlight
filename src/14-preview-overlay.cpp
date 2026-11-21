@@ -230,6 +230,10 @@ Controls::Grid EnsureThumbOverlayHost(Controls::Panel panel) {
 
 // Position with Margin, not RenderTransform: the layout clip is the
 // un-transformed slot, so a translate of `pad` clipped the right end-cap.
+// The far margins take back the offset and the size, so the desired size is
+// 0 and an overlay can never make the card larger than Windows laid it out
+// (as the icon plates, ZeroDesiredMargin). Placement unchanged, and no
+// layout clip: the slot minus these margins only grows.
 void PlaceOverlayChild(FrameworkElement el,
                        double x,
                        double y,
@@ -241,7 +245,8 @@ void PlaceOverlayChild(FrameworkElement el,
     try {
         el.HorizontalAlignment(HorizontalAlignment::Left);
         el.VerticalAlignment(VerticalAlignment::Top);
-        el.Margin(Thickness{x, y, 0, 0});
+        el.Margin(Thickness{x, y, width > 0 ? -(x + width) : 0,
+                            height > 0 ? -(y + height) : 0});
         el.ClearValue(UIElement::RenderTransformProperty());
         if (width > 0) {
             el.Width(width);

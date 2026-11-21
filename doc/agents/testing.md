@@ -16,6 +16,7 @@ commit.
 - `run-preview-identity-tests.py`: card → window resolve.
 - `run-shell-activation-tests.py`: focus notification path.
 - `run-icon-order-tests.py`: glow host placement planner and geometry.
+- `run-layout-footprint-tests.py`: overlay chrome has zero desired size (plates, side bar, preview overlays) and unchanged placement.
 - `run-dispatcher-tests.py`: unload drain (Windows + g++ only).
 - `run-perf-build-tests.py`, `run-review-helper-tests.py`.
 

@@ -92,6 +92,7 @@ and must not guess identity from localized UI strings.
 
 | Lesson | Why it bit us | Rule |
 |--------|----------------|------|
+| Overlay chrome has no layout footprint | A plate with explicit size and balanced margins asked the icon panel for the old size: highlighted buttons stayed big after a Taskbar Styler theme shrank the rest (2026-11-21) | Far margins take back offset + size (desired 0); `run-layout-footprint-tests.py` |
 | Uninit **worker first**, then UI drain | Drain then stop: decay/`RequestApplyVisuals` `TryRunAsync` after the Low sentinel → `FreeLibrary` then crash | `g_unloading`; stop focus thread; then `RunOnEachUiDispatcherAndWait` |
 | Unbounded drain, not a timeout | Timed-out drain leaves `SizeChanged` in the image | INFINITE wait for dispatcher join **and** focus thread |
 | Ready event before `Start` returns | `PostThreadMessage` fails until the worker has a queue → INFINITE hang on Disable | Manual-reset event after `CreateWindowExW` (and on every early-fail path) |
