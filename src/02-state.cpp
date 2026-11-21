@@ -267,6 +267,9 @@ std::vector<winrt::weak_ref<FrameworkElement>> g_trackedThumbViews;
 
 std::atomic<bool> g_unloading{false};
 std::atomic<bool> g_taskbarViewHookAttempted{false};
+// Taskbar.View.dll symbols hooked: this process hosts the taskbar. Until then
+// the focus thread tracks nothing (ActivateFocusTracking).
+std::atomic<bool> g_taskbarViewHooked{false};
 // After decay / empty ranks / desktop switch: ApplyAllHighlights must visit
 // every button. UVS must not clear chrome just because this is set (flicker).
 std::atomic<bool> g_pendingOverlaySweep{false};
@@ -427,6 +430,7 @@ constexpr UINT WM_APP_SHUTDOWN = WM_APP + 3;
 constexpr UINT WM_APP_REQUEST_APPLY_DEBOUNCED = WM_APP + 4;
 constexpr UINT WM_APP_REFRESH_ACCENT = WM_APP + 5;
 constexpr UINT WM_APP_SETTINGS_CHANGED = WM_APP + 6;
+constexpr UINT WM_APP_TASKBAR_READY = WM_APP + 7;
 
 constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;

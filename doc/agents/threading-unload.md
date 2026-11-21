@@ -42,6 +42,19 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
   plus a trailing timer on the worker), not run per hover.
 - `LoadLibraryExW` hook covers a late `Taskbar.View.dll` load; the hook
   install is claimed once with `g_taskbarViewHookAttempted.exchange(true)`.
+- **Focus tracking waits for the taskbar (0.12.1).** Windhawk loads the mod
+  into every `explorer.exe`, including folder-window / COM-server processes
+  that never load `Taskbar.View.dll`. The worker always starts (its window
+  must exist so the shutdown post cannot be lost), but installs the shell
+  hook, both WinEvent hooks, the accent subscription and the registry watch
+  only in `ActivateFocusTracking`: at worker start when `g_taskbarViewHooked`
+  is already set, otherwise on `WM_APP_TASKBAR_READY`, posted after
+  `Wh_ApplyHookOperations` succeeds in the `LoadLibraryExW` path. Until then
+  `HandleForegroundNotification` ignores posts (`g_focusTrackingActive`), so
+  such a process logs only init and "Focus tracking waits for the taskbar".
+  Capture manual-20261120-154409-086197 had seven of them logging the same
+  focus events as the taskbar process. A failed `SetWinEventHook` is now an
+  `ERROR` line, not a failed init.
 
 ## Shared state
 
@@ -59,6 +72,8 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
 | `g_uiSettings` | `[[clang::no_destroy]] optional` | Subscribed and revoked on the worker, before its window is destroyed |
 | `g_vdm` | `g_vdmMutex` | Created, used and released on the worker only |
 | `g_hookThreadHwnd`, `g_hookThreadId` | atomics | Worker writes; others `PostMessage`. `SetTimer` / `KillTimer` only on the worker |
+| `g_taskbarViewHooked` | atomic | Set once the Taskbar.View hooks succeed (init or `LoadLibraryExW`); read by the worker at start |
+| `g_focusTracking`, `g_focusTrackingActive` | worker only | Hooks / watch installed by `ActivateFocusTracking`, removed by `DeactivateFocusTracking` at worker exit |
 | `g_unloading` | atomic | Any thread |
 
 **Lock order:** `g_stateMutex` first, then any one of `g_buttonStateMutex`,

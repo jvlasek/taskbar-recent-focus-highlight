@@ -22,7 +22,11 @@ using DWORD = unsigned long;
 using HMODULE = void*;
 using LPCWSTR = const wchar_t*;
 std::atomic<bool> g_taskbarViewHookAttempted{false};
-std::atomic<int> attempts{0}, applied{0};
+std::atomic<int> attempts{0}, applied{0}, readyPosts{0};
+std::atomic<bool> g_taskbarViewHooked{false};
+using UINT = unsigned;
+constexpr UINT WM_APP_TASKBAR_READY = 0x8007;
+bool PostToHookThread(UINT msg) { assert(msg == WM_APP_TASKBAR_READY); ++readyPosts; return true; }
 bool succeed = true;
 HMODULE GetTaskbarViewModuleHandle() { return reinterpret_cast<void*>(1); }
 void Wh_Log(const wchar_t*, ...) {}
@@ -36,7 +40,7 @@ void Wh_ApplyHookOperations() { ++applied; }
 int main() {
     for (bool result : {true, false}) {
         succeed = result;
-        attempts = 0; applied = 0; g_taskbarViewHookAttempted = false;
+        attempts = 0; applied = 0; readyPosts = 0; g_taskbarViewHookAttempted = false; g_taskbarViewHooked = false;
         HandleLoadedModuleIfTaskbarView(reinterpret_cast<void*>(2), L"other");
         assert(!g_taskbarViewHookAttempted);
         std::vector<std::thread> threads;
@@ -47,6 +51,8 @@ int main() {
         HandleLoadedModuleIfTaskbarView(GetTaskbarViewModuleHandle(), L"repeat");
         assert(attempts == 1);
         assert(applied == (result ? 1 : 0));
+        // Only a successful hook starts focus tracking, once.
+        assert(g_taskbarViewHooked == result && readyPosts == (result ? 1 : 0));
     }
     auto checkScope = [] {
         {

@@ -23,7 +23,7 @@ start = source.index('    if (sameAppPending) {', source.index('void HandleForeg
 end = source.index('\n    CancelMinFocusTimer();', start)
 duplicate = source[start:end]
 registration_start = source.index('    g_shellHookMessage = RegisterWindowMessageW')
-registration_end = source.index('    g_hookThreadHwnd.store(hwnd', registration_start)
+registration_end = source.index('    // Foreground WinEvents', registration_start)
 registration = source[registration_start:registration_end]
 fixture = r'''
 #include <algorithm>
@@ -38,6 +38,7 @@ constexpr int kPreviewMinFocusTimerId=3, kMinFocusTimerId=1;
 using UINT_PTR = unsigned long long;
 using PCWSTR = const wchar_t*;
 std::atomic<bool> g_unloading=false;
+bool g_focusTrackingActive=false;
 HWND foreground=1;
 int handled=0, scheduled=0, appEnsures=0, confirmed=0, canceled=0;
 ULONGLONG now=100, armed=0;
@@ -86,6 +87,8 @@ void Duplicate(bool hwndChanged,bool windowAlreadyTracked) {
     // DUPLICATE
 }
 int main() {
+    HandleForegroundNotification(1); assert(handled==0); // no taskbar yet
+    g_focusTrackingActive=true;
     assert(RegisterForTest(1) && g_shellHookMessage==1234);
     registrationSucceeds=false;
     assert(!RegisterForTest(1) && g_shellHookMessage==0);
@@ -119,11 +122,23 @@ assert 'TraceExtendedClick' not in source
 assert 'ForegroundRecheck' not in source
 assert 'g_foregroundRecheckDeadline' not in source
 worker = function('DWORD WINAPI WinEventHookThread(')
+activate = function('void ActivateFocusTracking(HWND hwnd) {')
+deactivate = function('void DeactivateFocusTracking(HWND hwnd) {')
 assert 'WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE' in worker and 'HWND_MESSAGE' not in worker
-assert worker.index('RegisterShellHookWindow(hwnd)') < worker.index('g_hookThreadHwnd.store(hwnd')
-assert worker.count('if (shellHookRegistered)') == 2
-assert worker.count('DeregisterShellHookWindow(hwnd)') == 2  # WinEvent failure + normal exit
+# A process without a taskbar gets the window and nothing else.
+for call in ('RegisterShellHookWindow', 'SetWinEventHook', 'SubscribeAccentChanges', 'desktopWatch.Open()'):
+    assert call not in worker, call
+    assert call in activate, call
+assert worker.index('g_hookThreadHwnd.store(hwnd') < worker.index('if (g_taskbarViewHooked.load())')
+assert worker.index('SignalHookThreadReady();\n\n') < worker.index('ActivateFocusTracking(hwnd)')
+assert 'DeactivateFocusTracking(hwnd)' in worker
+assert activate.index('if (g_focusTrackingActive || g_unloading.load())') < activate.index('RegisterShellHookWindow')
+assert deactivate.count('DeregisterShellHookWindow(hwnd)') == 1 and 'if (t.shellHookRegistered)' in deactivate
+assert 'ActivateFocusTracking(hWnd)' in function('LRESULT CALLBACK HookThreadWndProc(')
 assert 'HandleForegroundNotification(reinterpret_cast<HWND>(wParam))' in function('LRESULT CALLBACK HookThreadWndProc(')
+loaded = function('void HandleLoadedModuleIfTaskbarView(')
+assert loaded.index('Wh_ApplyHookOperations()') < loaded.index('g_taskbarViewHooked = true') < loaded.index('PostToHookThread(WM_APP_TASKBAR_READY)')
+assert 'WM_APP_FOREGROUND_CHANGED' not in function('void Wh_ModAfterInit() {')
 
 with tempfile.TemporaryDirectory(prefix='windhawk-shell-') as folder:
     cpp = Path(folder) / 'test.cpp'
@@ -131,4 +146,4 @@ with tempfile.TemporaryDirectory(prefix='windhawk-shell-') as folder:
     cpp.write_text(fixture, encoding='utf-8')
     subprocess.run(['g++', '-std=c++17', str(cpp), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True, timeout=20)
-print('PASS: activation filtering, stale/background/null targets, unload, normalization, duplicate deadlines, sibling transitions, registration structure, no recovery timer')
+print('PASS: tracking waits for the taskbar, activation filtering, stale/background/null targets, unload, normalization, duplicate deadlines, sibling transitions, registration structure, no recovery timer')

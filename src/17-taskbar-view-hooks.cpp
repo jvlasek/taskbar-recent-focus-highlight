@@ -369,6 +369,8 @@ void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName) {
     // Claim once before resolving symbols, including when resolution fails.
     if (HookTaskbarViewDllSymbols(module)) {
         Wh_ApplyHookOperations();
+        g_taskbarViewHooked = true;
+        PostToHookThread(WM_APP_TASKBAR_READY);
     }
 }
 

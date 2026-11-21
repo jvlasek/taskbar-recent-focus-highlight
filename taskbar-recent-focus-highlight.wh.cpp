@@ -825,6 +825,9 @@ std::vector<winrt::weak_ref<FrameworkElement>> g_trackedThumbViews;
 
 std::atomic<bool> g_unloading{false};
 std::atomic<bool> g_taskbarViewHookAttempted{false};
+// Taskbar.View.dll symbols hooked: this process hosts the taskbar. Until then
+// the focus thread tracks nothing (ActivateFocusTracking).
+std::atomic<bool> g_taskbarViewHooked{false};
 // After decay / empty ranks / desktop switch: ApplyAllHighlights must visit
 // every button. UVS must not clear chrome just because this is set (flicker).
 std::atomic<bool> g_pendingOverlaySweep{false};
@@ -985,6 +988,7 @@ constexpr UINT WM_APP_SHUTDOWN = WM_APP + 3;
 constexpr UINT WM_APP_REQUEST_APPLY_DEBOUNCED = WM_APP + 4;
 constexpr UINT WM_APP_REFRESH_ACCENT = WM_APP + 5;
 constexpr UINT WM_APP_SETTINGS_CHANGED = WM_APP + 6;
+constexpr UINT WM_APP_TASKBAR_READY = WM_APP + 7;
 
 constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
@@ -6776,6 +6780,8 @@ void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName) {
     // Claim once before resolving symbols, including when resolution fails.
     if (HookTaskbarViewDllSymbols(module)) {
         Wh_ApplyHookOperations();
+        g_taskbarViewHooked = true;
+        PostToHookThread(WM_APP_TASKBAR_READY);
     }
 }
 
@@ -7655,10 +7661,15 @@ void HandleWindowDestroyed(HWND hwnd) {
 // WinEvent hook thread
 // ---------------------------------------------------------------------------
 
+// Focus thread only. False until the Taskbar.View hooks are in (see
+// ActivateFocusTracking); a foreground posted before that is ignored.
+bool g_focusTrackingActive = false;
+void ActivateFocusTracking(HWND hwnd);
+
 // Notification targets can already be stale when the focus worker receives
 // them. Background creation/attention is identity information, not recency.
 void HandleForegroundNotification(HWND target) {
-    if (g_unloading.load() || !target) {
+    if (g_unloading.load() || !target || !g_focusTrackingActive) {
         return;
     }
     HWND foreground = NormalizeFocusHwnd(GetForegroundWindow());
@@ -7720,6 +7731,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             return 0;
         case WM_APP_SHUTDOWN:
             PostQuitMessage(0);
+            return 0;
+        case WM_APP_TASKBAR_READY:
+            ActivateFocusTracking(hWnd);
             return 0;
         case WM_APP_REQUEST_APPLY_DEBOUNCED:
             if (!g_fullRebindTimerArmed) {
@@ -7840,6 +7854,121 @@ struct DesktopKeyWatch {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Focus tracking starts with the taskbar (0.12.1). Windhawk loads the mod into
+// every explorer.exe, also folder-window and COM-server processes that never
+// load Taskbar.View.dll. There the worker keeps only its hidden window and
+// waits: no shell hook, no WinEvents, no accent subscription, no registry
+// watch, and no focus logs (capture manual-20261120-154409-086197: seven such
+// processes logged the same focus events as the taskbar process).
+// Started by WM_APP_TASKBAR_READY once the Taskbar.View hooks are in, or at
+// worker start when they already are. Focus thread only.
+// ---------------------------------------------------------------------------
+struct FocusTracking {
+    bool shellHookRegistered = false;
+    bool accentSubscribed = false;
+    HWINEVENTHOOK foregroundHook = nullptr;
+    HWINEVENTHOOK desktopHook = nullptr;
+    DesktopKeyWatch desktopWatch;
+};
+FocusTracking g_focusTracking;
+
+void ActivateFocusTracking(HWND hwnd) {
+    if (g_focusTrackingActive || g_unloading.load()) {
+        return;
+    }
+    g_focusTrackingActive = true;
+    FocusTracking& t = g_focusTracking;
+
+    // Shell notifications require a desktop window. Never show or activate it.
+    g_shellHookMessage = RegisterWindowMessageW(L"SHELLHOOK");
+    const bool shellHookRegistered =
+        g_shellHookMessage && RegisterShellHookWindow(hwnd);
+    if (!shellHookRegistered) {
+        Wh_Log(L"Shell activation registration failed: %u; using foreground WinEvents only",
+               GetLastError());
+        g_shellHookMessage = 0;
+    } else {
+        Wh_Log(L"Shell activation notifications registered (no foreground polling)");
+    }
+    // Foreground WinEvents
+    t.shellHookRegistered = shellHookRegistered;
+
+    SubscribeAccentChanges();
+    t.accentSubscribed = true;
+    RefreshCachedAccent();
+
+    t.foregroundHook =
+        SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                        nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
+    if (!t.foregroundHook) {
+        // Before 0.12.1 this failed Wh_ModInit; now init is long over.
+        if (shellHookRegistered) {
+            Wh_Log(L"ERROR: SetWinEventHook failed: %u; focus from shell "
+                   L"activations only",
+                   GetLastError());
+        } else {
+            Wh_Log(L"ERROR: SetWinEventHook failed: %u; no focus "
+                   L"notifications, nothing will be ranked",
+                   GetLastError());
+        }
+    } else {
+        Wh_Log(L"EVENT_SYSTEM_FOREGROUND hook installed");
+    }
+
+    t.desktopHook =
+        SetWinEventHook(EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH,
+                        nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
+    if (!t.desktopHook) {
+        Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook failed: %u", GetLastError());
+    } else {
+        Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook installed");
+    }
+
+    g_desktopKeyWatchActive = t.desktopWatch.Open();
+    if (g_desktopKeyWatchActive) {
+        Wh_Log(L"Virtual desktop registry watch installed");
+    } else {
+        Wh_Log(L"Virtual desktop registry watch failed: %u; reading the "
+               L"desktop on each foreground change",
+               GetLastError());
+        t.desktopWatch.Close();
+    }
+
+    RefreshCurrentDesktopId();
+    Wh_Log(L"Focus tracking started");
+
+    if (HWND fg = GetForegroundWindow()) {
+        PostMessage(hwnd, WM_APP_FOREGROUND_CHANGED,
+                    reinterpret_cast<WPARAM>(fg), 0);
+    }
+}
+
+// Worker exit. Safe when tracking never started.
+void DeactivateFocusTracking(HWND hwnd) {
+    FocusTracking& t = g_focusTracking;
+    t.desktopWatch.Close();
+    g_desktopKeyWatchActive = false;
+    if (t.foregroundHook) {
+        UnhookWinEvent(t.foregroundHook);
+        t.foregroundHook = nullptr;
+    }
+    if (t.desktopHook) {
+        UnhookWinEvent(t.desktopHook);
+        t.desktopHook = nullptr;
+    }
+    if (t.accentSubscribed) {
+        UnsubscribeAccentChanges();
+        t.accentSubscribed = false;
+    }
+    if (t.shellHookRegistered) {
+        DeregisterShellHookWindow(hwnd);
+        t.shellHookRegistered = false;
+    }
+    g_shellHookMessage = 0;
+    g_focusTrackingActive = false;
+}
+
 DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
     g_hookThreadId.store(GetCurrentThreadId(), std::memory_order_release);
     g_decayTimerArmed.store(false);
@@ -7884,78 +8013,26 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
         SignalHookThreadReady();
         return 1;
     }
-    // Shell notifications require a desktop window. Never show or activate it.
-    g_shellHookMessage = RegisterWindowMessageW(L"SHELLHOOK");
-    const bool shellHookRegistered =
-        g_shellHookMessage && RegisterShellHookWindow(hwnd);
-    if (!shellHookRegistered) {
-        Wh_Log(L"Shell activation registration failed: %u; using foreground WinEvents only",
-               GetLastError());
-        g_shellHookMessage = 0;
-    } else {
-        Wh_Log(L"Shell activation notifications registered (no foreground polling)");
-    }
     g_hookThreadHwnd.store(hwnd, std::memory_order_release);
 
     HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(coHr) && coHr != RPC_E_CHANGED_MODE) {
         Wh_Log(L"Focus thread CoInitializeEx failed %08X", coHr);
     }
-    SubscribeAccentChanges();
-    RefreshCachedAccent();
-
-    HWINEVENTHOOK hook =
-        SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
-                        nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
-    if (!hook) {
-        Wh_Log(L"SetWinEventHook failed: %u", GetLastError());
-        UnsubscribeAccentChanges();
-        ReleaseVdm();
-        g_hookThreadHwnd.store(nullptr, std::memory_order_release);
-        if (shellHookRegistered)
-            DeregisterShellHookWindow(hwnd);
-        DestroyWindow(hwnd);
-        g_shellHookMessage = 0;
-        UnregisterClassW(wc.lpszClassName, wc.hInstance);
-        g_hookThreadId.store(0, std::memory_order_release);
-        if (SUCCEEDED(coHr)) {
-            CoUninitialize();
-        }
-        SignalHookThreadReady();
-        return 1;
-    }
-    Wh_Log(L"EVENT_SYSTEM_FOREGROUND hook installed");
     SignalHookThreadReady();
 
-    HWINEVENTHOOK deskHook =
-        SetWinEventHook(EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH,
-                        nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
-    if (!deskHook) {
-        Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook failed: %u", GetLastError());
+    // The window is published above, so a WM_APP_TASKBAR_READY posted from
+    // now on arrives; the flag covers hooks installed before this point.
+    if (g_taskbarViewHooked.load()) {
+        ActivateFocusTracking(hwnd);
     } else {
-        Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook installed");
-    }
-
-    DesktopKeyWatch desktopWatch;
-    g_desktopKeyWatchActive = desktopWatch.Open();
-    if (g_desktopKeyWatchActive) {
-        Wh_Log(L"Virtual desktop registry watch installed");
-    } else {
-        Wh_Log(L"Virtual desktop registry watch failed: %u; reading the "
-               L"desktop on each foreground change",
-               GetLastError());
-        desktopWatch.Close();
-    }
-
-    RefreshCurrentDesktopId();
-
-    if (HWND fg = GetForegroundWindow()) {
-        PostMessage(hwnd, WM_APP_FOREGROUND_CHANGED,
-                    reinterpret_cast<WPARAM>(fg), 0);
+        Wh_Log(L"Focus tracking waits for the taskbar (Taskbar.View.dll not "
+               L"hooked in this process)");
     }
 
     // Messages (WinEvents, shell hook, timers, posted work) plus the
     // desktop key event.
+    DesktopKeyWatch& desktopWatch = g_focusTracking.desktopWatch;
     bool quit = false;
     while (!quit) {
         const DWORD handles = desktopWatch.event ? 1 : 0;
@@ -7989,28 +8066,13 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
             DispatchMessageW(&msg);
         }
     }
-    desktopWatch.Close();
-    g_desktopKeyWatchActive = false;
-
-    if (hook) {
-        UnhookWinEvent(hook);
-    }
-    if (deskHook) {
-        UnhookWinEvent(deskHook);
-    }
-
     ReleaseVdm();
-    UnsubscribeAccentChanges();
-
     g_decayTimerArmed.store(false);
     g_hookThreadHwnd.store(nullptr, std::memory_order_release);
-    if (shellHookRegistered)
-        DeregisterShellHookWindow(hwnd);
+    DeactivateFocusTracking(hwnd);
     DestroyWindow(hwnd);
-    g_shellHookMessage = 0;
     UnregisterClassW(wc.lpszClassName, wc.hInstance);
     g_hookThreadId.store(0, std::memory_order_release);
-
     if (SUCCEEDED(coHr)) {
         CoUninitialize();
     }
@@ -8294,6 +8356,7 @@ BOOL Wh_ModInit() {
             return FALSE;
         }
         g_taskbarViewHookAttempted = true;
+        g_taskbarViewHooked = true;  // the focus thread starts tracking
     } else {
         Wh_Log(L"Taskbar view module not loaded yet");
     }
@@ -8311,11 +8374,8 @@ void Wh_ModAfterInit() {
     if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
         HandleLoadedModuleIfTaskbarView(taskbarViewModule, L"Taskbar view (after init)");
     }
-
-    if (HWND fg = GetForegroundWindow()) {
-        PostToHookThread(WM_APP_FOREGROUND_CHANGED,
-                         reinterpret_cast<WPARAM>(fg));
-    }
+    // The current foreground is posted by ActivateFocusTracking, once this
+    // process is known to host the taskbar.
 }
 
 void Wh_ModUninit() {
