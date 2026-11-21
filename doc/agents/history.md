@@ -67,6 +67,12 @@ Short timeline:
   `Desktop switch (<reason>)`.
 - 0.12.0: windhawk-mods submission; in-mod README / settings wording for
   ranks 4+ and "highlight" (not "boost"). PR text: `doc/pr-0.12.1.md` (was `pr-0.12.0.md`).
+- 0.12.1 (after the 26 h capture manual-20261120-154409-086197): decay from
+  last use; focus tracking waits for the Taskbar.View hooks
+  (`ActivateFocusTracking`), so folder-window explorer.exe processes stay
+  idle; the log prints ladder / bindings / preview siblings only on change and
+  gained `Hidden`, `Decayed … key … last use`, input-desktop name and
+  late-tick lines (testing.md).
 
 ## Review lessons about removed mechanisms
 
