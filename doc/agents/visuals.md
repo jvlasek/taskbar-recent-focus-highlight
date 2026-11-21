@@ -128,3 +128,12 @@ math/placement tests are `python tests/run-icon-order-tests.py`.
    because `g_pendingOverlaySweep` is set, no-op when rank 0 and no chrome.
 6. Inspect real trees with [UWPSpy](https://ramensoftware.com/uwpspy);
    element names vary by build and by Taskbar Styler theme.
+7. **Zero layout footprint (0.12.1).** Our chrome must never size a native
+   panel: every child with an explicit `Width` / `Height` gets far margins
+   that take back its offset and size (`ZeroDesiredMargin` for plates, the
+   `back` margin in `StyleGlowBarOnSide`, `PlaceOverlayChild` for cards), so
+   its desired size is 0 and its placement is unchanged.
+   `tests/run-layout-footprint-tests.py` simulates measure / arrange. Before,
+   a plate asked for the old BackgroundElement size and held its button big
+   after a Taskbar Styler theme (BottomDensy) shrank the others; the next
+   repaint read the held size, so the plate cache kept it.

@@ -317,6 +317,15 @@ bool ReadNativeGlowShape(FrameworkElement element,
 // the plate (a Styler hover plate or BackgroundElement, else the content
 // box) and, on a multi-window button, the MultiWindowElement sliver. Also
 // the signature of all of it for the paint cache.
+// Margins that place an element of size w x h, centred in its slot and
+// moved by (dx, dy), while its desired size is 0: overlay chrome must never
+// make a native panel larger than Windows laid it out. Arrange is unchanged
+// (the slot minus these margins is w x h larger, and centring adds it back);
+// no layout clip, since the element fits.
+Thickness ZeroDesiredMargin(double w, double h, double dx, double dy) {
+    return Thickness{dx - w * 0.5, dy - h * 0.5, -dx - w * 0.5, -dy - h * 0.5};
+}
+
 struct PlateShapes {
     bool ok = false;
     double centerX = 0, centerY = 0;  // panel content centre
@@ -452,7 +461,13 @@ void PaintNativeContour(Controls::Grid host,
         b.VerticalAlignment(VerticalAlignment::Center);
         b.Width(w);
         b.Height(h);
-        b.Margin({dx, dy, -dx, -dy});
+        // Same place as balanced margins {dx, dy, -dx, -dy}, but each pair
+        // also subtracts the size, so the desired size is 0 and the plate
+        // never sizes the button. With plain margins a plate kept the old
+        // BackgroundElement size and held its button big after a Taskbar
+        // Styler theme shrank the others (BottomDensy, 2026-11-21); the next
+        // repaint read the held size, so the plate cache kept it.
+        b.Margin(ZeroDesiredMargin(w, h, dx, dy));
         b.CornerRadius({InsetGlowRadius(s.corners.TopLeft, 0, w, h),
                         InsetGlowRadius(s.corners.TopRight, 0, w, h),
                         InsetGlowRadius(s.corners.BottomRight, 0, w, h),

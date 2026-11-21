@@ -2891,6 +2891,15 @@ bool ReadNativeGlowShape(FrameworkElement element,
 // the plate (a Styler hover plate or BackgroundElement, else the content
 // box) and, on a multi-window button, the MultiWindowElement sliver. Also
 // the signature of all of it for the paint cache.
+// Margins that place an element of size w x h, centred in its slot and
+// moved by (dx, dy), while its desired size is 0: overlay chrome must never
+// make a native panel larger than Windows laid it out. Arrange is unchanged
+// (the slot minus these margins is w x h larger, and centring adds it back);
+// no layout clip, since the element fits.
+Thickness ZeroDesiredMargin(double w, double h, double dx, double dy) {
+    return Thickness{dx - w * 0.5, dy - h * 0.5, -dx - w * 0.5, -dy - h * 0.5};
+}
+
 struct PlateShapes {
     bool ok = false;
     double centerX = 0, centerY = 0;  // panel content centre
@@ -3026,7 +3035,13 @@ void PaintNativeContour(Controls::Grid host,
         b.VerticalAlignment(VerticalAlignment::Center);
         b.Width(w);
         b.Height(h);
-        b.Margin({dx, dy, -dx, -dy});
+        // Same place as balanced margins {dx, dy, -dx, -dy}, but each pair
+        // also subtracts the size, so the desired size is 0 and the plate
+        // never sizes the button. With plain margins a plate kept the old
+        // BackgroundElement size and held its button big after a Taskbar
+        // Styler theme shrank the others (BottomDensy, 2026-11-21); the next
+        // repaint read the held size, so the plate cache kept it.
+        b.Margin(ZeroDesiredMargin(w, h, dx, dy));
         b.CornerRadius({InsetGlowRadius(s.corners.TopLeft, 0, w, h),
                         InsetGlowRadius(s.corners.TopRight, 0, w, h),
                         InsetGlowRadius(s.corners.BottomRight, 0, w, h),
@@ -3342,27 +3357,31 @@ void StyleGlowBarOnSide(Shapes::Rectangle rect,
     rect.IsHitTestVisible(false);
     rect.Visibility(Visibility::Visible);
 
+    // Zero desired size, as the plates (ZeroDesiredMargin): the far margin
+    // takes back the bar's thickness and its pad, the centred axis half the
+    // length on each side. The placement is the same as before.
+    const double back = -(t + edgePad);
     switch (side) {
         case BarSide::Left:
             rect.Width(t);
             rect.Height(len);
             rect.HorizontalAlignment(HorizontalAlignment::Left);
             rect.VerticalAlignment(VerticalAlignment::Center);
-            rect.Margin(Thickness{edgePad, 0, 0, 0});
+            rect.Margin(Thickness{edgePad, -len * 0.5, back, -len * 0.5});
             break;
         case BarSide::Right:
             rect.Width(t);
             rect.Height(len);
             rect.HorizontalAlignment(HorizontalAlignment::Right);
             rect.VerticalAlignment(VerticalAlignment::Center);
-            rect.Margin(Thickness{0, 0, edgePad, 0});
+            rect.Margin(Thickness{back, -len * 0.5, edgePad, -len * 0.5});
             break;
         case BarSide::Top:
             rect.Width(len);
             rect.Height(t);
             rect.HorizontalAlignment(HorizontalAlignment::Center);
             rect.VerticalAlignment(VerticalAlignment::Top);
-            rect.Margin(Thickness{0, edgePad, 0, 0});
+            rect.Margin(Thickness{-len * 0.5, edgePad, -len * 0.5, back});
             break;
         case BarSide::Bottom:
         default:
@@ -3370,7 +3389,7 @@ void StyleGlowBarOnSide(Shapes::Rectangle rect,
             rect.Height(t);
             rect.HorizontalAlignment(HorizontalAlignment::Center);
             rect.VerticalAlignment(VerticalAlignment::Bottom);
-            rect.Margin(Thickness{0, 0, 0, edgePad});
+            rect.Margin(Thickness{-len * 0.5, back, -len * 0.5, edgePad});
             break;
     }
 }
@@ -5447,6 +5466,10 @@ Controls::Grid EnsureThumbOverlayHost(Controls::Panel panel) {
 
 // Position with Margin, not RenderTransform: the layout clip is the
 // un-transformed slot, so a translate of `pad` clipped the right end-cap.
+// The far margins take back the offset and the size, so the desired size is
+// 0 and an overlay can never make the card larger than Windows laid it out
+// (as the icon plates, ZeroDesiredMargin). Placement unchanged, and no
+// layout clip: the slot minus these margins only grows.
 void PlaceOverlayChild(FrameworkElement el,
                        double x,
                        double y,
@@ -5458,7 +5481,8 @@ void PlaceOverlayChild(FrameworkElement el,
     try {
         el.HorizontalAlignment(HorizontalAlignment::Left);
         el.VerticalAlignment(VerticalAlignment::Top);
-        el.Margin(Thickness{x, y, 0, 0});
+        el.Margin(Thickness{x, y, width > 0 ? -(x + width) : 0,
+                            height > 0 ? -(y + height) : 0});
         el.ClearValue(UIElement::RenderTransformProperty());
         if (width > 0) {
             el.Width(width);

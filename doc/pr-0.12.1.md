@@ -65,6 +65,11 @@ process). Now the focus thread only creates its hidden window at init and
 installs its hooks once the Taskbar.View hooks are in; a process without a
 taskbar does nothing after init.
 
+The mod's own elements no longer take up layout space: a plate used to ask
+its button for the old size, so with a Taskbar Styler theme that shrinks the
+buttons (BottomDensy) the highlighted ones stayed big. Plates, the side bar
+and the preview overlays now have zero desired size at the same place.
+
 The log is quieter: the ladder, the button bindings and the preview
 siblings are printed only when they change, and repeating wait lines are
 gone. New lines say why an app has no slot, how long ago a decayed app was
