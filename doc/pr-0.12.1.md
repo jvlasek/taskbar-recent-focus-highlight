@@ -3,6 +3,15 @@
 Update of the published 0.11.1. Development repository with tests, perf
 results and notes: https://github.com/jvlasek/taskbar-recent-focus-highlight
 
+This update started when
+[taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
+by EphremTil17 was published. Comparing the two showed that this mod's
+preview matching was unreliable, and that mod pointed the way out: the
+thumbnail view model and the public WindowsUdk task interfaces. Thanks to
+EphremTil17 for both; details under "Related mod" below. The result is a
+mod that no longer hooks taskbar.dll (12 symbols instead of 26), changes no
+native element, and counts recency from when an app was last *used*.
+
 ## What was removed
 
 - **Every `taskbar.dll` hook and private lookup.** 0.11.1 hooked or resolved
@@ -23,7 +32,7 @@ results and notes: https://github.com/jvlasek/taskbar-recent-focus-highlight
 - **The side bar's halo** (a second, slightly larger translucent rectangle;
   XAML cannot blur it, so it showed as a hard-edged rim when magnified).
 - Symbol count: 26 (Taskbar.View.dll + taskbar.dll) -> 12 (Taskbar.View.dll
-  only). Lines: 8294 -> 8669, with the new features below included.
+  only). Lines: 8294 -> 8710, with the new features below included.
 
 ## Identity rule
 
@@ -163,9 +172,10 @@ use with idle stretches:
   when its visual state changes. The first button that changes (hover,
   window switch) now brings in all buttons of that taskbar; until then the
   window focused at load is recorded but not ranked.
-- **Apps that show documents as taskbar tabs** (SOLIDWORKS): their preview
-  cards have no window behind them and stay unmarked. The icon is ranked
-  normally.
+- **Apps that show documents as taskbar tabs** (SOLIDWORKS): they manage
+  those preview cards themselves, the cards have no window behind them and
+  stay unmarked. The icon is ranked normally. The README lists this under
+  Limitations.
 - **Unload waits are unbounded.** `Wh_ModUninit` stops the focus thread,
   then waits until each taskbar UI thread has run a sentinel (or exited)
   before freeing state. A timeout would let a late XAML callback run into
@@ -177,8 +187,11 @@ use with idle stretches:
 ## Related mod: taskbar-active-window-highlight
 
 [taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
-by EphremTil17 was merged while this update was in progress. Credit where
-it is due: reading button windows and preview cards through the public
+by EphremTil17 was merged while this update was in progress, and is the
+reason for it: next to it, this mod's preview cards were sometimes matched
+to the wrong window or left unmarked. Credit where it is due: reading the
+card's window through the thumbnail view model, and button windows and
+preview cards through the public
 WindowsUdk `ITaskGroup` / `ITaskItem` / `ITaskItemThumbnail` interfaces
 follows that mod, and replaced this mod's private taskbar.dll lookups. So
 does drawing the preview plate / outline as an own `Border` instead of
@@ -208,3 +221,40 @@ buttons (layout from a UWPSpy dump) and a ranked app requesting attention.
 Script tests in the development
 repository cover identity, exclude list, rank derivation, notification
 filtering, min-focus deadlines and the perf build.
+
+<!-- ⚠️ Please keep the template below intact and fill in the relevant sections. Any additional content can be placed above the template. -->
+
+## Changelog
+
+If this pull request updates an existing mod, describe the changes inside the changelog markers:
+
+<!-- changelog:start -->
+
+* Highlights now last from when you last used an app (keyboard or mouse input while it was in front), not from when you switched to it, so the app you are working in keeps its highlight.
+* taskbar.dll is no longer hooked (12 symbols instead of 26), and preview cards are matched to their windows through Explorer's own card data, improving reliability.
+* New icon styles: Plate (the button's own plate, tinted) and Plate with accent (half tint plus an accent border) replace Full and Frame. The side bar lost its halo. On multi-window buttons the plates also tint the stacked edge.
+* Previews: separate styles for rank 1 and ranks 2+, new Title (a plate over the card's title row) and "with accent" variants, and ranks 2+ can be left unmarked. A previously chosen preview style is kept until you save the settings.
+* New option to also mark single-window previews (off by default).
+* Ranks 4 and up fade further instead of repeating rank 3.
+* Icons are matched by Explorer's own app ID, so two buttons of one program (e.g. Total Commander and its Lister) are told apart; the exclude list accepts app IDs too.
+* No native taskbar element is modified any more (the icon size boost is gone), and highlights take no layout space: they follow Taskbar Styler themes that resize the buttons.
+* Less work on the taskbar thread, nothing done in Explorer processes without a taskbar, and a quieter log.
+* Removed settings: icon roundness, glow layers, size boost and "Only apps on the taskbar" (always on now).
+
+<!-- changelog:end -->
+
+## Mod authorship
+
+If this pull request introduces a new mod, please complete the section below.
+
+This mod was created by:
+
+- - [ ] The submitter, without AI assistance
+- - [x] The submitter, with AI assistance
+- - [x] Claude
+- - [ ] ChatGPT
+- - [ ] Gemini
+- - [ ] Another AI (please specify): 
+- - [ ] Other (please specify): 
+
+Please select the options that best apply. Your selection does not affect the acceptance criteria, but it helps reviewers understand the context of the code and provide relevant feedback.

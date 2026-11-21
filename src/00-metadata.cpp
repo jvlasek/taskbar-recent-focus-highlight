@@ -83,6 +83,16 @@ is a much lighter mod for exactly that.
 All of those are in the Windhawk settings panel. Disable the mod in Windhawk
 to clear highlights.
 
+## Limitations
+
+- **SOLIDWORKS** and other apps that show their open documents as separate
+  preview cards (one card per document, one real window) manage those
+  previews themselves: Explorer links the cards to no window, and switching
+  documents is not a window focus change, so their previews are not marked.
+  Their taskbar icon is ranked normally.
+- When the mod is enabled while Explorer is already running, the ranks show
+  up after the first taskbar button changes (hover or a window switch).
+
 ## Notes
 
 - Works with Windows 11 Taskbar Styler: the mod draws its own elements,
@@ -95,10 +105,6 @@ to clear highlights.
 - Preview cards match through Explorer's own card view model (the window the
   card shows). If that is unavailable, the card is left unmarked rather than
   guessed from its title.
-- Apps that show documents as taskbar tabs (e.g. SOLIDWORKS: one card per
-  open document, one real window) are not marked in previews: Explorer links
-  those cards to no window, and switching documents is not a window focus
-  change. Their taskbar icon is ranked normally.
 - File Explorer folder windows (`CabinetWClass`) are ranked like other apps.
   The taskbar, desktop, Start, and IME stay ignored.
 - Multi-monitor: the same rank is applied on every taskbar that shows that
