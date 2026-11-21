@@ -36,7 +36,12 @@ buttons on the current desktop get a highlight:
 
 - **Side bar** (default) — a bar beside the icon (left on a bottom/top
   taskbar, under the icon on a left/right taskbar)
-- **Frame** / **Full** — a rounded rectangle around or behind the icon
+- **Plate** — the button's own rounded plate, tinted in the highlight color
+- **Plate with accent** — the same plate at half the tint, with an accent
+  border
+
+On a button with several windows the plates also tint Windows' stacked
+edge. An app that asks for attention keeps Windows' red marks on top.
 
 Rank 1 is strongest; ranks 2 and 3 use the intensities you set, and ranks
 4+ fade further from rank 3.
@@ -45,6 +50,11 @@ A new app is added only after the minimum focus time. Re-focus of an app
 already in the list follows “When to skip min-focus” (default: it becomes
 rank 1 immediately). A short Alt+Tab that never settles does not add a new
 app. Each virtual desktop keeps its own list.
+
+An app drops out of the list a set time (**Decay**, default 30 minutes)
+after you last *used* it: keyboard or mouse input while it was in front
+counts, so the app you are working in keeps its highlight however long you
+stay in it. Away from the keyboard everything ages out from your last input.
 
 When you hover a combined icon and the flyout shows **two or more** windows,
 that flyout gets its own recency ladder (independent of icon ranks). The
@@ -66,7 +76,7 @@ is a much lighter mod for exactly that.
 - **General** — how many apps, min-focus wait, when to skip the wait on
   re-focus, decay, exclude list
 - **Icons** — style, color (including system accent), per-rank intensity,
-  thickness / size / fill
+  side bar thickness / length, fill opacity, accent thickness
 - **Previews** — on/off, how many windows, single-window previews, styles,
   intensities, separate min-focus and decay
 
@@ -75,9 +85,10 @@ to clear highlights.
 
 ## Notes
 
-- Works with Windows 11 Taskbar Styler: the mod draws its own elements and
-  changes no property of the native ones, so the side bar stays visible on
-  hover.
+- Works with Windows 11 Taskbar Styler: the mod draws its own elements,
+  changes no property of the native ones and takes no layout space, so the
+  highlights stay visible on hover and follow themes that resize the
+  buttons.
 - An icon is matched by the application ID Explorer itself groups taskbar
   buttons by, not by its label or process name. A window that has no taskbar
   button is never ranked.
@@ -240,7 +251,7 @@ to clear highlights.
         look of Taskbar Active Window Highlight). Title = a tinted plate over
         the title row. Title with accent = the same with an accent border.
         Bar under title = thin line under the title (thickness follows Icons →
-        Thickness). The plates follow the card's rounded corners and stay
+        Side bar thickness). The plates follow the card's rounded corners and stay
         visible on hover.
       $options:
       - plate: Whole plate
