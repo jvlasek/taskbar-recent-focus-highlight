@@ -138,8 +138,10 @@ to clear highlights.
 - decayMinutes: 30
   $name: Decay time (minutes)
   $description: >-
-    Time after last focus before an app drops out of the taskbar highlight
-    list. (Preview windows use a separate decay under Previews.)
+    Time since you last used an app (keyboard or mouse input while it was
+    in front) before it drops out of the taskbar highlight list. The app
+    you are working in stays highlighted. (Preview windows use a separate
+    decay under Previews.)
 - excludedPrograms: [""]
   $name: Exclude list
   $description: >-
@@ -289,8 +291,8 @@ to clear highlights.
     - decayMinutes: 15
       $name: Decay (minutes)
       $description: >-
-        Drop a window from preview recency after this idle time (0 = never).
-        Separate from app ranking decay.
+        Drop a window from preview recency this long after you last used it
+        (0 = never). Separate from app ranking decay.
   $name: Thumbnail previews
 */
 // ==/WindhawkModSettings==

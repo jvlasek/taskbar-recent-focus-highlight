@@ -138,8 +138,10 @@ to clear highlights.
 - decayMinutes: 30
   $name: Decay time (minutes)
   $description: >-
-    Time after last focus before an app drops out of the taskbar highlight
-    list. (Preview windows use a separate decay under Previews.)
+    Time since you last used an app (keyboard or mouse input while it was
+    in front) before it drops out of the taskbar highlight list. The app
+    you are working in stays highlighted. (Preview windows use a separate
+    decay under Previews.)
 - excludedPrograms: [""]
   $name: Exclude list
   $description: >-
@@ -289,8 +291,8 @@ to clear highlights.
     - decayMinutes: 15
       $name: Decay (minutes)
       $description: >-
-        Drop a window from preview recency after this idle time (0 = never).
-        Separate from app ranking decay.
+        Drop a window from preview recency this long after you last used it
+        (0 = never). Separate from app ranking decay.
   $name: Thumbnail previews
 */
 // ==/WindhawkModSettings==
@@ -574,6 +576,9 @@ struct AppFocusInfo {
     // Rank unit is one window (lastHwnd), not the app: set on the per-window
     // slots RecomputeRanks makes for uncombined buttons (Never Combine).
     bool perWindow = false;
+    // Last AppAppearsOnTaskbar result in RecomputeRanks, true = no slot.
+    // Only for logging the change.
+    bool hiddenNoButton = false;
 };
 
 struct PendingFocus {
@@ -823,6 +828,9 @@ std::vector<winrt::weak_ref<FrameworkElement>> g_trackedThumbViews;
 
 std::atomic<bool> g_unloading{false};
 std::atomic<bool> g_taskbarViewHookAttempted{false};
+// Taskbar.View.dll symbols hooked: this process hosts the taskbar. Until then
+// the focus thread tracks nothing (ActivateFocusTracking).
+std::atomic<bool> g_taskbarViewHooked{false};
 // After decay / empty ranks / desktop switch: ApplyAllHighlights must visit
 // every button. UVS must not clear chrome just because this is set (flicker).
 std::atomic<bool> g_pendingOverlaySweep{false};
@@ -983,6 +991,7 @@ constexpr UINT WM_APP_SHUTDOWN = WM_APP + 3;
 constexpr UINT WM_APP_REQUEST_APPLY_DEBOUNCED = WM_APP + 4;
 constexpr UINT WM_APP_REFRESH_ACCENT = WM_APP + 5;
 constexpr UINT WM_APP_SETTINGS_CHANGED = WM_APP + 6;
+constexpr UINT WM_APP_TASKBAR_READY = WM_APP + 7;
 
 constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
@@ -1369,6 +1378,10 @@ bool RecencyMapsEmptyLocked() {
     return true;
 }
 
+// GetTickCount64 of the last decay tick, or of arming (focus thread only):
+// OnDecayTimer reports a tick far past its interval.
+ULONGLONG g_lastDecayTick = 0;
+
 void EnsureDecayTimerArmed() {
     if (!OnHookThread()) {
         return;
@@ -1376,6 +1389,7 @@ void EnsureDecayTimerArmed() {
     if (g_decayTimerArmed.exchange(true)) {
         return;
     }
+    g_lastDecayTick = GetTickCount64();  // a stopped timer is not a late one
     ArmHookTimer(kDecayTimerId, kDecayCheckIntervalMs);
     Wh_Log(L"Decay timer armed");
 }
@@ -2020,13 +2034,34 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
             continue;
         }
         if (IsTickDecayed(info.lastConfirmedFocusTick, decayMs, now)) {
-            LOG_DEFERRED(L"Decayed: %s", info.displayName.c_str());
+            // Key: two apps can share a display name (Total Commander and
+            // its Lister windows are both TOTALCMD64.EXE).
+            const ULONGLONG idleTenths =
+                (now - info.lastConfirmedFocusTick) / 6000;
+            LOG_DEFERRED(L"Decayed: %s key=%s (last use %llu.%llu min ago)",
+                         info.displayName.c_str(), info.key.c_str(),
+                         static_cast<unsigned long long>(idleTenths / 10),
+                         static_cast<unsigned long long>(idleTenths % 10));
             it = desk.appFocusMap.erase(it);
             continue;
         }
         // No running button with this AppId (closed, pinned-only, tray-only
-        // window): keep history but do not occupy a visible slot.
-        if (!AppAppearsOnTaskbar(info.key)) {
+        // window): keep history but do not occupy a visible slot. Logged on
+        // change, which also explains a ladder that empties without a decay
+        // (lock or desktop switch clears the running grace until the next
+        // full pass re-reads IsRunning).
+        const bool hidden = !AppAppearsOnTaskbar(info.key);
+        if (hidden != info.hiddenNoButton) {
+            info.hiddenNoButton = hidden;
+            if (hidden) {
+                LOG_DEFERRED(L"Hidden (no running button): %s key=%s",
+                             info.displayName.c_str(), info.key.c_str());
+            } else {
+                LOG_DEFERRED(L"Shown again (running button): %s",
+                             info.displayName.c_str());
+            }
+        }
+        if (hidden) {
             ++it;
             continue;
         }
@@ -4512,10 +4547,49 @@ void ApplyAllHighlights_UIThread() {
         deskId = g_currentDesktopId;
     }
 
+    // Ladder and bindings are logged only when they differ from this UI
+    // thread's last pass (capture manual-20261120-154409-086197: 1,251 of
+    // 1,565 passes repeated it). Pass 1 matches, pass 2 paints, so a
+    // "Glow rank" line still follows its "bind rank" line.
+    std::vector<int> buttonRank(live.size(), 0);
+    std::vector<std::wstring> boundNames(live.size());
+    std::vector<bool> rankTaken(ranks.size(), false);
+    const bool painting = !g_unloading.load() && !ranks.empty();
+    for (size_t bi = 0; painting && bi < live.size(); ++bi) {
+        for (size_t ri = 0; running[bi] && ri < ranks.size(); ++ri) {
+            if (IdentityMatchesRank(idents[bi], ranks[ri])) {
+                buttonRank[bi] = static_cast<int>(ri) + 1;
+                rankTaken[ri] = true;
+                boundNames[bi] = GetButtonAutomationName(live[bi]);
+                break;
+            }
+        }
+    }
+    std::wstring ladder = GuidToLogString(deskId);
+    for (const auto& r : ranks) {
+        ladder += L"|" + r.key + L"," + r.displayName;
+        if (r.perWindow) {
+            ladder += L"," + std::to_wstring(
+                                 reinterpret_cast<uintptr_t>(r.lastHwnd));
+        }
+    }
+    for (size_t bi = 0; bi < live.size(); ++bi) {
+        if (buttonRank[bi] > 0) {
+            ladder += L"#" + std::to_wstring(buttonRank[bi]) + L"," +
+                      boundNames[bi] + L"," + buttonAppIds[bi];
+        }
+    }
+    thread_local std::wstring t_lastLadderLog;
+    const bool ladderChanged = ladder != t_lastLadderLog;
+    if (ladderChanged) {
+        t_lastLadderLog = ladder;
+    }
+
     Wh_Log(L"ApplyAllHighlights: %zu tracked buttons (+%zu recycled, "
-           L"skipped), %zu ranks desktop=%s",
-           live.size(), parked, ranks.size(), GuidToLogString(deskId).c_str());
-    for (size_t i = 0; i < ranks.size(); ++i) {
+           L"skipped), %zu ranks desktop=%s%s",
+           live.size(), parked, ranks.size(), GuidToLogString(deskId).c_str(),
+           ladderChanged ? L"" : L" (ladder unchanged)");
+    for (size_t i = 0; ladderChanged && i < ranks.size(); ++i) {
         if (ranks[i].perWindow) {
             Wh_Log(L"  rank list[%zu]: %s window %p \"%s\"", i + 1,
                    ranks[i].displayName.c_str(), ranks[i].lastHwnd,
@@ -4525,12 +4599,12 @@ void ApplyAllHighlights_UIThread() {
         }
     }
 
-    if (g_unloading.load() || ranks.empty()) {
+    if (!painting) {
         for (auto& button : live) {
             ClearButtonHighlight(button);
         }
         g_pendingOverlaySweep = false;
-        if (ranks.empty()) {
+        if (ranks.empty() && ladderChanged) {
             Wh_Log(L"ApplyAllHighlights: no ranks — cleared overlays on %zu "
                    L"tracked buttons",
                    live.size());
@@ -4540,21 +4614,15 @@ void ApplyAllHighlights_UIThread() {
 
     // Explorer AppId (plus per-window slots). One rank may bind many buttons
     // (secondary taskbar / Never Combine); a button takes its best rank.
-    std::vector<bool> rankTaken(ranks.size(), false);
     for (size_t bi = 0; bi < live.size(); ++bi) {
-        int rank = 0;
-        for (size_t ri = 0; running[bi] && ri < ranks.size(); ++ri) {
-            if (IdentityMatchesRank(idents[bi], ranks[ri])) {
-                rank = static_cast<int>(ri) + 1;
-                rankTaken[ri] = true;
-                Wh_Log(L"  bind rank %zu %s -> \"%s\" (appId=%s)", ri + 1,
-                       ranks[ri].displayName.c_str(),
-                       GetButtonAutomationName(live[bi]).c_str(),
-                       buttonAppIds[bi].c_str());
-                break;
-            }
-        }
+        const int rank = buttonRank[bi];
         if (rank > 0) {
+            if (ladderChanged) {
+                const auto& r = ranks[static_cast<size_t>(rank - 1)];
+                Wh_Log(L"  bind rank %d %s -> \"%s\" (appId=%s)", rank,
+                       r.displayName.c_str(), boundNames[bi].c_str(),
+                       buttonAppIds[bi].c_str());
+            }
             ApplyButtonHighlight(live[bi], rank);
         } else {
             ClearButtonHighlight(live[bi]);
@@ -4888,13 +4956,13 @@ void WatchRepeaterElementClearing_UIThread(muxc::ItemsRepeater const& repeater) 
                                                         token})
                      .second;
     }
+    // Registration is not logged (205 lines a day); a watch left over at
+    // unload is (Wh_ModUninit, "ElementClearing watches not revoked").
     if (raced) {
         try {
             repeater.ElementClearing(token);
         } catch (...) {
         }
-    } else {
-        Wh_Log(L"Preview: watching flyout repeater %p for card removal", id);
     }
 }
 
@@ -6007,10 +6075,26 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     {
         const size_t painted =
             (std::min)(order.size(), static_cast<size_t>(limit));
+        // Siblings are listed only when the set, a rank or a resolve failure
+        // differs from this UI thread's last resolve: reopening the same
+        // flyout repeated about 2,100 sibling lines in a day (capture
+        // manual-20261120-154409-086197).
+        std::wstring sig = std::to_wstring(limit);
+        for (const auto& s : scored) {
+            sig += L"|" + std::to_wstring(reinterpret_cast<uintptr_t>(s.hwnd)) +
+                   L"," + std::to_wstring(s.rank) + L"," +
+                   std::to_wstring(static_cast<int>(s.fail));
+        }
+        thread_local std::wstring t_lastResolveLog;
+        const bool changed = sig != t_lastResolveLog;
+        if (changed) {
+            t_lastResolveLog = sig;
+        }
         Wh_Log(L"Preview resolve: %zu siblings, highlightCount=%d "
-               L"candidates=%zu painted=%zu",
-               siblings.size(), limit, order.size(), painted);
-        for (size_t i = 0; i < scored.size(); ++i) {
+               L"candidates=%zu painted=%zu%s",
+               siblings.size(), limit, order.size(), painted,
+               changed ? L"" : L" (unchanged)");
+        for (size_t i = 0; changed && i < scored.size(); ++i) {
             std::wstring name;
             try {
                 name = Automation::AutomationProperties::GetName(scored[i].view)
@@ -6774,6 +6858,8 @@ void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName) {
     // Claim once before resolving symbols, including when resolution fails.
     if (HookTaskbarViewDllSymbols(module)) {
         Wh_ApplyHookOperations();
+        g_taskbarViewHooked = true;
+        PostToHookThread(WM_APP_TASKBAR_READY);
     }
 }
 
@@ -6946,6 +7032,7 @@ bool MinFocusDeadlineReached(const MinFocusTrack& track,
         // Alt-Tab / taskbar holds FG briefly: keep the candidate through a
         // bounded grace, then drop.
         ULONGLONG retryStart = pending.*track.retryStart;
+        const bool firstWait = retryStart == 0;
         const ULONGLONG delay = TransientRetryDelayMs(
             track.start, track.seconds, GetTickCount64(), retryStart);
         {
@@ -6955,17 +7042,22 @@ bool MinFocusDeadlineReached(const MinFocusTrack& track,
             }
         }
         if (delay == 0) {
-            Wh_Log(L"%s: gave up waiting through transient FG for %s",
-                   track.logName, pending.displayName.c_str());
+            const ULONGLONG waited =
+                retryStart ? GetTickCount64() - retryStart : 0;
+            Wh_Log(L"%s: gave up waiting through transient FG for %s "
+                   L"(after %llus)",
+                   track.logName, pending.displayName.c_str(),
+                   static_cast<unsigned long long>(waited / 1000));
             DropPendingFor(track, pending);
             return false;
         }
         ArmHookTimer(track.timerId, delay);
-        if (!track.preview) {
-            Wh_Log(L"Min-focus timer: transient FG, still waiting on %s "
-                   L"(%llums left)",
-                   pending.displayName.c_str(),
-                   static_cast<unsigned long long>(delay));
+        // Only the start of a wait: it re-polls every 200 ms (bursts of 40
+        // lines in capture manual-20261120-154409-086197). It ends in a
+        // confirmation or the "gave up" line.
+        if (!track.preview && firstWait) {
+            Wh_Log(L"Min-focus timer: transient FG, waiting on %s",
+                   pending.displayName.c_str());
         }
         return false;
     }
@@ -7217,6 +7309,118 @@ void SchedulePreviewConfirm(bool windowAlreadyTracked) {
                  static_cast<ULONGLONG>(previewMin) * 1000ULL);
 }
 
+// ---------------------------------------------------------------------------
+// Last use (0.12.1): decay counts from when an app was last *used*, not from
+// when it was switched to. While a confirmed window is in front, the decay
+// tick moves its recency forward to the last keyboard / mouse input
+// (GetLastInputInfo, session-wide); when it loses the foreground it is
+// stamped with the last input before that. Walking away stops the input
+// time, so everything still ages out from the last input. Before, an app
+// used without switching for longer than decayMinutes lost its highlight
+// while in use (capture manual-20261120-071227: Windows Sandbox).
+// Only a stretch in front in which the window was confirmed counts: a visit
+// shorter than the minimum focus refreshes nothing, so it cannot jump ranks.
+// Focus thread only.
+// ---------------------------------------------------------------------------
+HWND g_inFrontHwnd = nullptr;
+ULONGLONG g_inFrontSince = 0;
+
+// GetTickCount64 time of the last input in this session, 0 if unknown.
+ULONGLONG LastInputTick64(ULONGLONG now) {
+    LASTINPUTINFO lii{};
+    lii.cbSize = sizeof(lii);
+    if (!GetLastInputInfo(&lii)) {
+        return 0;
+    }
+    // dwTime is GetTickCount (32-bit); the difference survives wrap.
+    const ULONGLONG ago = static_cast<DWORD>(static_cast<DWORD>(now) -
+                                              lii.dwTime);
+    return ago < now ? now - ago : 0;
+}
+
+// What RefreshLastUseLocked moved (for the log).
+constexpr unsigned kLastUseMovedApp = 1;
+constexpr unsigned kLastUseMovedPreview = 2;
+
+PCWSTR LastUseMovedName(unsigned moved) {
+    switch (moved) {
+        case kLastUseMovedApp:
+            return L"app";
+        case kLastUseMovedPreview:
+            return L"preview";
+        default:
+            return L"app+preview";
+    }
+}
+
+// Requires g_stateMutex. Moves hwnd's app and preview recency forward to
+// `at`, only for records confirmed during the current stretch in front
+// (tick >= since). Returns the kLastUseMoved* bits; 0 if nothing moved.
+// The app record needs the app minimum focus in this stretch; the preview
+// one only the preview minimum (often 0 s), so a short visit moves only
+// "preview".
+unsigned RefreshLastUseLocked(HWND hwnd, ULONGLONG since, ULONGLONG at) {
+    unsigned moved = 0;
+    for (auto& [id, desk] : g_desktopMaps) {
+        (void)id;
+        auto w = desk.windowAppFocus.find(hwnd);
+        if (w != desk.windowAppFocus.end() && w->second.tick >= since &&
+            w->second.tick < at && HwndMatchesStoredPid(hwnd, w->second.pid)) {
+            w->second.tick = at;
+            moved |= kLastUseMovedApp;
+        }
+        auto p = desk.windowFocusMap.find(hwnd);
+        if (p != desk.windowFocusMap.end() &&
+            p->second.lastConfirmedTick >= since &&
+            p->second.lastConfirmedTick < at &&
+            HwndMatchesStoredPid(hwnd, p->second.pid)) {
+            p->second.lastConfirmedTick = at;
+            moved |= kLastUseMovedPreview;
+        }
+    }
+    return moved;
+}
+
+// A new foreground (any window, transient ones included): stamp the window
+// that left with its last use, then start the new stretch.
+void NoteForegroundForLastUse(HWND hwnd) {
+    if (hwnd == g_inFrontHwnd) {
+        return;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (g_inFrontHwnd) {
+        const ULONGLONG at = LastInputTick64(now);
+        if (at) {
+            DeferredLogScope logScope;  // logs after unlock
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            if (const unsigned moved = RefreshLastUseLocked(
+                    g_inFrontHwnd, g_inFrontSince, at)) {
+                LOG_DEFERRED(L"Last use: hwnd=%p left, used until %llus ago "
+                             L"(%s)",
+                             g_inFrontHwnd,
+                             static_cast<unsigned long long>((now - at) / 1000),
+                             LastUseMovedName(moved));
+            }
+        }
+    }
+    g_inFrontHwnd = hwnd;
+    g_inFrontSince = now;
+}
+
+// Decay tick: the confirmed window in front was used up to the last input.
+void RefreshInFrontLastUse() {
+    HWND fg = NormalizeFocusHwnd(GetForegroundWindow());
+    if (!fg || fg != g_inFrontHwnd) {
+        return;  // a change the foreground handler has not seen yet
+    }
+    const ULONGLONG at = LastInputTick64(GetTickCount64());
+    if (!at) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    RefreshLastUseLocked(fg, g_inFrontSince, at);
+}
+
 void HandleForegroundChanged(HWND hWnd) {
     if (g_unloading.load()) {
         return;
@@ -7224,6 +7428,7 @@ void HandleForegroundChanged(HWND hWnd) {
     ProcessImagePathCacheScope pathCacheScope;
 
     hWnd = NormalizeFocusHwnd(hWnd);
+    NoteForegroundForLastUse(hWnd);
 
     // Normally the registry watch on the focus thread reports switches.
     // Without it, read here, before the transient check: switching to an
@@ -7423,6 +7628,20 @@ void OnDecayTimer() {
     if (g_unloading.load()) {
         return;
     }
+    // A tick far past its interval: the machine slept (GetTickCount64 counts
+    // sleep, so everything idle that long decays now) or the thread stalled.
+    // Before, only the late "Decay recompute" line showed it.
+    {
+        const ULONGLONG now = GetTickCount64();
+        if (g_lastDecayTick &&
+            now - g_lastDecayTick > kDecayCheckIntervalMs + 60000) {
+            Wh_Log(L"Decay tick late by %llu min (sleep or stall)",
+                   static_cast<unsigned long long>(
+                       (now - g_lastDecayTick - kDecayCheckIntervalMs) /
+                       60000));
+        }
+        g_lastDecayTick = now;
+    }
     std::vector<std::wstring> keysBefore;
     std::vector<std::wstring> keysAfter;
     size_t windowsBefore = 0;
@@ -7430,6 +7649,7 @@ void OnDecayTimer() {
     if (RefreshCurrentDesktopId()) {
         OnVirtualDesktopSwitched(L"decay tick");  // it saw the switch first
     }
+    RefreshInFrontLastUse();  // before decay: the app in use is not idle
     {
         DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -7560,10 +7780,15 @@ void HandleWindowDestroyed(HWND hwnd) {
 // WinEvent hook thread
 // ---------------------------------------------------------------------------
 
+// Focus thread only. False until the Taskbar.View hooks are in (see
+// ActivateFocusTracking); a foreground posted before that is ignored.
+bool g_focusTrackingActive = false;
+void ActivateFocusTracking(HWND hwnd);
+
 // Notification targets can already be stale when the focus worker receives
 // them. Background creation/attention is identity information, not recency.
 void HandleForegroundNotification(HWND target) {
-    if (g_unloading.load() || !target) {
+    if (g_unloading.load() || !target || !g_focusTrackingActive) {
         return;
     }
     HWND foreground = NormalizeFocusHwnd(GetForegroundWindow());
@@ -7571,6 +7796,24 @@ void HandleForegroundNotification(HWND target) {
         return;
     }
     HandleForegroundChanged(foreground);
+}
+
+// EVENT_SYSTEM_DESKTOPSWITCH fires on the way to the lock screen / UAC and
+// back, and the old "lock / UAC" label read the same both ways. Names the
+// input desktop now: "Default" means back on the user desktop; one this
+// session may not open (the secure Winlogon desktop) is "not accessible".
+std::wstring InputDesktopSwitchReason() {
+    HDESK desk = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+    if (!desk) {
+        return L"input desktop: not accessible (lock / UAC)";
+    }
+    wchar_t name[64] = L"";
+    if (!GetUserObjectInformationW(desk, UOI_NAME, name, sizeof(name),
+                                   nullptr)) {
+        name[0] = L'\0';
+    }
+    CloseDesktop(desk);
+    return std::wstring(L"input desktop: ") + (name[0] ? name : L"?");
 }
 
 void HandleShellActivation(WPARAM code, HWND target) {
@@ -7621,10 +7864,13 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             HandleForegroundNotification(reinterpret_cast<HWND>(wParam));
             return 0;
         case WM_APP_DESKTOP_SWITCHED:
-            OnVirtualDesktopSwitched(L"input desktop: lock / UAC");
+            OnVirtualDesktopSwitched(InputDesktopSwitchReason().c_str());
             return 0;
         case WM_APP_SHUTDOWN:
             PostQuitMessage(0);
+            return 0;
+        case WM_APP_TASKBAR_READY:
+            ActivateFocusTracking(hWnd);
             return 0;
         case WM_APP_REQUEST_APPLY_DEBOUNCED:
             if (!g_fullRebindTimerArmed) {
@@ -7745,6 +7991,121 @@ struct DesktopKeyWatch {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Focus tracking starts with the taskbar (0.12.1). Windhawk loads the mod into
+// every explorer.exe, also folder-window and COM-server processes that never
+// load Taskbar.View.dll. There the worker keeps only its hidden window and
+// waits: no shell hook, no WinEvents, no accent subscription, no registry
+// watch, and no focus logs (capture manual-20261120-154409-086197: seven such
+// processes logged the same focus events as the taskbar process).
+// Started by WM_APP_TASKBAR_READY once the Taskbar.View hooks are in, or at
+// worker start when they already are. Focus thread only.
+// ---------------------------------------------------------------------------
+struct FocusTracking {
+    bool shellHookRegistered = false;
+    bool accentSubscribed = false;
+    HWINEVENTHOOK foregroundHook = nullptr;
+    HWINEVENTHOOK desktopHook = nullptr;
+    DesktopKeyWatch desktopWatch;
+};
+FocusTracking g_focusTracking;
+
+void ActivateFocusTracking(HWND hwnd) {
+    if (g_focusTrackingActive || g_unloading.load()) {
+        return;
+    }
+    g_focusTrackingActive = true;
+    FocusTracking& t = g_focusTracking;
+
+    // Shell notifications require a desktop window. Never show or activate it.
+    g_shellHookMessage = RegisterWindowMessageW(L"SHELLHOOK");
+    const bool shellHookRegistered =
+        g_shellHookMessage && RegisterShellHookWindow(hwnd);
+    if (!shellHookRegistered) {
+        Wh_Log(L"Shell activation registration failed: %u; using foreground WinEvents only",
+               GetLastError());
+        g_shellHookMessage = 0;
+    } else {
+        Wh_Log(L"Shell activation notifications registered (no foreground polling)");
+    }
+    // Foreground WinEvents
+    t.shellHookRegistered = shellHookRegistered;
+
+    SubscribeAccentChanges();
+    t.accentSubscribed = true;
+    RefreshCachedAccent();
+
+    t.foregroundHook =
+        SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                        nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
+    if (!t.foregroundHook) {
+        // Before 0.12.1 this failed Wh_ModInit; now init is long over.
+        if (shellHookRegistered) {
+            Wh_Log(L"ERROR: SetWinEventHook failed: %u; focus from shell "
+                   L"activations only",
+                   GetLastError());
+        } else {
+            Wh_Log(L"ERROR: SetWinEventHook failed: %u; no focus "
+                   L"notifications, nothing will be ranked",
+                   GetLastError());
+        }
+    } else {
+        Wh_Log(L"EVENT_SYSTEM_FOREGROUND hook installed");
+    }
+
+    t.desktopHook =
+        SetWinEventHook(EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH,
+                        nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
+    if (!t.desktopHook) {
+        Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook failed: %u", GetLastError());
+    } else {
+        Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook installed");
+    }
+
+    g_desktopKeyWatchActive = t.desktopWatch.Open();
+    if (g_desktopKeyWatchActive) {
+        Wh_Log(L"Virtual desktop registry watch installed");
+    } else {
+        Wh_Log(L"Virtual desktop registry watch failed: %u; reading the "
+               L"desktop on each foreground change",
+               GetLastError());
+        t.desktopWatch.Close();
+    }
+
+    RefreshCurrentDesktopId();
+    Wh_Log(L"Focus tracking started");
+
+    if (HWND fg = GetForegroundWindow()) {
+        PostMessage(hwnd, WM_APP_FOREGROUND_CHANGED,
+                    reinterpret_cast<WPARAM>(fg), 0);
+    }
+}
+
+// Worker exit. Safe when tracking never started.
+void DeactivateFocusTracking(HWND hwnd) {
+    FocusTracking& t = g_focusTracking;
+    t.desktopWatch.Close();
+    g_desktopKeyWatchActive = false;
+    if (t.foregroundHook) {
+        UnhookWinEvent(t.foregroundHook);
+        t.foregroundHook = nullptr;
+    }
+    if (t.desktopHook) {
+        UnhookWinEvent(t.desktopHook);
+        t.desktopHook = nullptr;
+    }
+    if (t.accentSubscribed) {
+        UnsubscribeAccentChanges();
+        t.accentSubscribed = false;
+    }
+    if (t.shellHookRegistered) {
+        DeregisterShellHookWindow(hwnd);
+        t.shellHookRegistered = false;
+    }
+    g_shellHookMessage = 0;
+    g_focusTrackingActive = false;
+}
+
 DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
     g_hookThreadId.store(GetCurrentThreadId(), std::memory_order_release);
     g_decayTimerArmed.store(false);
@@ -7789,78 +8150,26 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
         SignalHookThreadReady();
         return 1;
     }
-    // Shell notifications require a desktop window. Never show or activate it.
-    g_shellHookMessage = RegisterWindowMessageW(L"SHELLHOOK");
-    const bool shellHookRegistered =
-        g_shellHookMessage && RegisterShellHookWindow(hwnd);
-    if (!shellHookRegistered) {
-        Wh_Log(L"Shell activation registration failed: %u; using foreground WinEvents only",
-               GetLastError());
-        g_shellHookMessage = 0;
-    } else {
-        Wh_Log(L"Shell activation notifications registered (no foreground polling)");
-    }
     g_hookThreadHwnd.store(hwnd, std::memory_order_release);
 
     HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(coHr) && coHr != RPC_E_CHANGED_MODE) {
         Wh_Log(L"Focus thread CoInitializeEx failed %08X", coHr);
     }
-    SubscribeAccentChanges();
-    RefreshCachedAccent();
-
-    HWINEVENTHOOK hook =
-        SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
-                        nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
-    if (!hook) {
-        Wh_Log(L"SetWinEventHook failed: %u", GetLastError());
-        UnsubscribeAccentChanges();
-        ReleaseVdm();
-        g_hookThreadHwnd.store(nullptr, std::memory_order_release);
-        if (shellHookRegistered)
-            DeregisterShellHookWindow(hwnd);
-        DestroyWindow(hwnd);
-        g_shellHookMessage = 0;
-        UnregisterClassW(wc.lpszClassName, wc.hInstance);
-        g_hookThreadId.store(0, std::memory_order_release);
-        if (SUCCEEDED(coHr)) {
-            CoUninitialize();
-        }
-        SignalHookThreadReady();
-        return 1;
-    }
-    Wh_Log(L"EVENT_SYSTEM_FOREGROUND hook installed");
     SignalHookThreadReady();
 
-    HWINEVENTHOOK deskHook =
-        SetWinEventHook(EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH,
-                        nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
-    if (!deskHook) {
-        Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook failed: %u", GetLastError());
+    // The window is published above, so a WM_APP_TASKBAR_READY posted from
+    // now on arrives; the flag covers hooks installed before this point.
+    if (g_taskbarViewHooked.load()) {
+        ActivateFocusTracking(hwnd);
     } else {
-        Wh_Log(L"EVENT_SYSTEM_DESKTOPSWITCH hook installed");
-    }
-
-    DesktopKeyWatch desktopWatch;
-    g_desktopKeyWatchActive = desktopWatch.Open();
-    if (g_desktopKeyWatchActive) {
-        Wh_Log(L"Virtual desktop registry watch installed");
-    } else {
-        Wh_Log(L"Virtual desktop registry watch failed: %u; reading the "
-               L"desktop on each foreground change",
-               GetLastError());
-        desktopWatch.Close();
-    }
-
-    RefreshCurrentDesktopId();
-
-    if (HWND fg = GetForegroundWindow()) {
-        PostMessage(hwnd, WM_APP_FOREGROUND_CHANGED,
-                    reinterpret_cast<WPARAM>(fg), 0);
+        Wh_Log(L"Focus tracking waits for the taskbar (Taskbar.View.dll not "
+               L"hooked in this process)");
     }
 
     // Messages (WinEvents, shell hook, timers, posted work) plus the
     // desktop key event.
+    DesktopKeyWatch& desktopWatch = g_focusTracking.desktopWatch;
     bool quit = false;
     while (!quit) {
         const DWORD handles = desktopWatch.event ? 1 : 0;
@@ -7894,28 +8203,13 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
             DispatchMessageW(&msg);
         }
     }
-    desktopWatch.Close();
-    g_desktopKeyWatchActive = false;
-
-    if (hook) {
-        UnhookWinEvent(hook);
-    }
-    if (deskHook) {
-        UnhookWinEvent(deskHook);
-    }
-
     ReleaseVdm();
-    UnsubscribeAccentChanges();
-
     g_decayTimerArmed.store(false);
     g_hookThreadHwnd.store(nullptr, std::memory_order_release);
-    if (shellHookRegistered)
-        DeregisterShellHookWindow(hwnd);
+    DeactivateFocusTracking(hwnd);
     DestroyWindow(hwnd);
-    g_shellHookMessage = 0;
     UnregisterClassW(wc.lpszClassName, wc.hInstance);
     g_hookThreadId.store(0, std::memory_order_release);
-
     if (SUCCEEDED(coHr)) {
         CoUninitialize();
     }
@@ -8199,6 +8493,7 @@ BOOL Wh_ModInit() {
             return FALSE;
         }
         g_taskbarViewHookAttempted = true;
+        g_taskbarViewHooked = true;  // the focus thread starts tracking
     } else {
         Wh_Log(L"Taskbar view module not loaded yet");
     }
@@ -8216,11 +8511,8 @@ void Wh_ModAfterInit() {
     if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
         HandleLoadedModuleIfTaskbarView(taskbarViewModule, L"Taskbar view (after init)");
     }
-
-    if (HWND fg = GetForegroundWindow()) {
-        PostToHookThread(WM_APP_FOREGROUND_CHANGED,
-                         reinterpret_cast<WPARAM>(fg));
-    }
+    // The current foreground is posted by ActivateFocusTracking, once this
+    // process is known to host the taskbar.
 }
 
 void Wh_ModUninit() {

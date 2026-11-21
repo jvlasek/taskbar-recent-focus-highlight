@@ -683,10 +683,49 @@ void ApplyAllHighlights_UIThread() {
         deskId = g_currentDesktopId;
     }
 
+    // Ladder and bindings are logged only when they differ from this UI
+    // thread's last pass (capture manual-20261120-154409-086197: 1,251 of
+    // 1,565 passes repeated it). Pass 1 matches, pass 2 paints, so a
+    // "Glow rank" line still follows its "bind rank" line.
+    std::vector<int> buttonRank(live.size(), 0);
+    std::vector<std::wstring> boundNames(live.size());
+    std::vector<bool> rankTaken(ranks.size(), false);
+    const bool painting = !g_unloading.load() && !ranks.empty();
+    for (size_t bi = 0; painting && bi < live.size(); ++bi) {
+        for (size_t ri = 0; running[bi] && ri < ranks.size(); ++ri) {
+            if (IdentityMatchesRank(idents[bi], ranks[ri])) {
+                buttonRank[bi] = static_cast<int>(ri) + 1;
+                rankTaken[ri] = true;
+                boundNames[bi] = GetButtonAutomationName(live[bi]);
+                break;
+            }
+        }
+    }
+    std::wstring ladder = GuidToLogString(deskId);
+    for (const auto& r : ranks) {
+        ladder += L"|" + r.key + L"," + r.displayName;
+        if (r.perWindow) {
+            ladder += L"," + std::to_wstring(
+                                 reinterpret_cast<uintptr_t>(r.lastHwnd));
+        }
+    }
+    for (size_t bi = 0; bi < live.size(); ++bi) {
+        if (buttonRank[bi] > 0) {
+            ladder += L"#" + std::to_wstring(buttonRank[bi]) + L"," +
+                      boundNames[bi] + L"," + buttonAppIds[bi];
+        }
+    }
+    thread_local std::wstring t_lastLadderLog;
+    const bool ladderChanged = ladder != t_lastLadderLog;
+    if (ladderChanged) {
+        t_lastLadderLog = ladder;
+    }
+
     Wh_Log(L"ApplyAllHighlights: %zu tracked buttons (+%zu recycled, "
-           L"skipped), %zu ranks desktop=%s",
-           live.size(), parked, ranks.size(), GuidToLogString(deskId).c_str());
-    for (size_t i = 0; i < ranks.size(); ++i) {
+           L"skipped), %zu ranks desktop=%s%s",
+           live.size(), parked, ranks.size(), GuidToLogString(deskId).c_str(),
+           ladderChanged ? L"" : L" (ladder unchanged)");
+    for (size_t i = 0; ladderChanged && i < ranks.size(); ++i) {
         if (ranks[i].perWindow) {
             Wh_Log(L"  rank list[%zu]: %s window %p \"%s\"", i + 1,
                    ranks[i].displayName.c_str(), ranks[i].lastHwnd,
@@ -696,12 +735,12 @@ void ApplyAllHighlights_UIThread() {
         }
     }
 
-    if (g_unloading.load() || ranks.empty()) {
+    if (!painting) {
         for (auto& button : live) {
             ClearButtonHighlight(button);
         }
         g_pendingOverlaySweep = false;
-        if (ranks.empty()) {
+        if (ranks.empty() && ladderChanged) {
             Wh_Log(L"ApplyAllHighlights: no ranks — cleared overlays on %zu "
                    L"tracked buttons",
                    live.size());
@@ -711,21 +750,15 @@ void ApplyAllHighlights_UIThread() {
 
     // Explorer AppId (plus per-window slots). One rank may bind many buttons
     // (secondary taskbar / Never Combine); a button takes its best rank.
-    std::vector<bool> rankTaken(ranks.size(), false);
     for (size_t bi = 0; bi < live.size(); ++bi) {
-        int rank = 0;
-        for (size_t ri = 0; running[bi] && ri < ranks.size(); ++ri) {
-            if (IdentityMatchesRank(idents[bi], ranks[ri])) {
-                rank = static_cast<int>(ri) + 1;
-                rankTaken[ri] = true;
-                Wh_Log(L"  bind rank %zu %s -> \"%s\" (appId=%s)", ri + 1,
-                       ranks[ri].displayName.c_str(),
-                       GetButtonAutomationName(live[bi]).c_str(),
-                       buttonAppIds[bi].c_str());
-                break;
-            }
-        }
+        const int rank = buttonRank[bi];
         if (rank > 0) {
+            if (ladderChanged) {
+                const auto& r = ranks[static_cast<size_t>(rank - 1)];
+                Wh_Log(L"  bind rank %d %s -> \"%s\" (appId=%s)", rank,
+                       r.displayName.c_str(), boundNames[bi].c_str(),
+                       buttonAppIds[bi].c_str());
+            }
             ApplyButtonHighlight(live[bi], rank);
         } else {
             ClearButtonHighlight(live[bi]);

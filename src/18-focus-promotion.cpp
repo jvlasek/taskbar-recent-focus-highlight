@@ -155,6 +155,7 @@ bool MinFocusDeadlineReached(const MinFocusTrack& track,
         // Alt-Tab / taskbar holds FG briefly: keep the candidate through a
         // bounded grace, then drop.
         ULONGLONG retryStart = pending.*track.retryStart;
+        const bool firstWait = retryStart == 0;
         const ULONGLONG delay = TransientRetryDelayMs(
             track.start, track.seconds, GetTickCount64(), retryStart);
         {
@@ -164,17 +165,22 @@ bool MinFocusDeadlineReached(const MinFocusTrack& track,
             }
         }
         if (delay == 0) {
-            Wh_Log(L"%s: gave up waiting through transient FG for %s",
-                   track.logName, pending.displayName.c_str());
+            const ULONGLONG waited =
+                retryStart ? GetTickCount64() - retryStart : 0;
+            Wh_Log(L"%s: gave up waiting through transient FG for %s "
+                   L"(after %llus)",
+                   track.logName, pending.displayName.c_str(),
+                   static_cast<unsigned long long>(waited / 1000));
             DropPendingFor(track, pending);
             return false;
         }
         ArmHookTimer(track.timerId, delay);
-        if (!track.preview) {
-            Wh_Log(L"Min-focus timer: transient FG, still waiting on %s "
-                   L"(%llums left)",
-                   pending.displayName.c_str(),
-                   static_cast<unsigned long long>(delay));
+        // Only the start of a wait: it re-polls every 200 ms (bursts of 40
+        // lines in capture manual-20261120-154409-086197). It ends in a
+        // confirmation or the "gave up" line.
+        if (!track.preview && firstWait) {
+            Wh_Log(L"Min-focus timer: transient FG, waiting on %s",
+                   pending.displayName.c_str());
         }
         return false;
     }
@@ -426,6 +432,118 @@ void SchedulePreviewConfirm(bool windowAlreadyTracked) {
                  static_cast<ULONGLONG>(previewMin) * 1000ULL);
 }
 
+// ---------------------------------------------------------------------------
+// Last use (0.12.1): decay counts from when an app was last *used*, not from
+// when it was switched to. While a confirmed window is in front, the decay
+// tick moves its recency forward to the last keyboard / mouse input
+// (GetLastInputInfo, session-wide); when it loses the foreground it is
+// stamped with the last input before that. Walking away stops the input
+// time, so everything still ages out from the last input. Before, an app
+// used without switching for longer than decayMinutes lost its highlight
+// while in use (capture manual-20261120-071227: Windows Sandbox).
+// Only a stretch in front in which the window was confirmed counts: a visit
+// shorter than the minimum focus refreshes nothing, so it cannot jump ranks.
+// Focus thread only.
+// ---------------------------------------------------------------------------
+HWND g_inFrontHwnd = nullptr;
+ULONGLONG g_inFrontSince = 0;
+
+// GetTickCount64 time of the last input in this session, 0 if unknown.
+ULONGLONG LastInputTick64(ULONGLONG now) {
+    LASTINPUTINFO lii{};
+    lii.cbSize = sizeof(lii);
+    if (!GetLastInputInfo(&lii)) {
+        return 0;
+    }
+    // dwTime is GetTickCount (32-bit); the difference survives wrap.
+    const ULONGLONG ago = static_cast<DWORD>(static_cast<DWORD>(now) -
+                                              lii.dwTime);
+    return ago < now ? now - ago : 0;
+}
+
+// What RefreshLastUseLocked moved (for the log).
+constexpr unsigned kLastUseMovedApp = 1;
+constexpr unsigned kLastUseMovedPreview = 2;
+
+PCWSTR LastUseMovedName(unsigned moved) {
+    switch (moved) {
+        case kLastUseMovedApp:
+            return L"app";
+        case kLastUseMovedPreview:
+            return L"preview";
+        default:
+            return L"app+preview";
+    }
+}
+
+// Requires g_stateMutex. Moves hwnd's app and preview recency forward to
+// `at`, only for records confirmed during the current stretch in front
+// (tick >= since). Returns the kLastUseMoved* bits; 0 if nothing moved.
+// The app record needs the app minimum focus in this stretch; the preview
+// one only the preview minimum (often 0 s), so a short visit moves only
+// "preview".
+unsigned RefreshLastUseLocked(HWND hwnd, ULONGLONG since, ULONGLONG at) {
+    unsigned moved = 0;
+    for (auto& [id, desk] : g_desktopMaps) {
+        (void)id;
+        auto w = desk.windowAppFocus.find(hwnd);
+        if (w != desk.windowAppFocus.end() && w->second.tick >= since &&
+            w->second.tick < at && HwndMatchesStoredPid(hwnd, w->second.pid)) {
+            w->second.tick = at;
+            moved |= kLastUseMovedApp;
+        }
+        auto p = desk.windowFocusMap.find(hwnd);
+        if (p != desk.windowFocusMap.end() &&
+            p->second.lastConfirmedTick >= since &&
+            p->second.lastConfirmedTick < at &&
+            HwndMatchesStoredPid(hwnd, p->second.pid)) {
+            p->second.lastConfirmedTick = at;
+            moved |= kLastUseMovedPreview;
+        }
+    }
+    return moved;
+}
+
+// A new foreground (any window, transient ones included): stamp the window
+// that left with its last use, then start the new stretch.
+void NoteForegroundForLastUse(HWND hwnd) {
+    if (hwnd == g_inFrontHwnd) {
+        return;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (g_inFrontHwnd) {
+        const ULONGLONG at = LastInputTick64(now);
+        if (at) {
+            DeferredLogScope logScope;  // logs after unlock
+            std::lock_guard<std::mutex> lock(g_stateMutex);
+            if (const unsigned moved = RefreshLastUseLocked(
+                    g_inFrontHwnd, g_inFrontSince, at)) {
+                LOG_DEFERRED(L"Last use: hwnd=%p left, used until %llus ago "
+                             L"(%s)",
+                             g_inFrontHwnd,
+                             static_cast<unsigned long long>((now - at) / 1000),
+                             LastUseMovedName(moved));
+            }
+        }
+    }
+    g_inFrontHwnd = hwnd;
+    g_inFrontSince = now;
+}
+
+// Decay tick: the confirmed window in front was used up to the last input.
+void RefreshInFrontLastUse() {
+    HWND fg = NormalizeFocusHwnd(GetForegroundWindow());
+    if (!fg || fg != g_inFrontHwnd) {
+        return;  // a change the foreground handler has not seen yet
+    }
+    const ULONGLONG at = LastInputTick64(GetTickCount64());
+    if (!at) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_stateMutex);
+    RefreshLastUseLocked(fg, g_inFrontSince, at);
+}
+
 void HandleForegroundChanged(HWND hWnd) {
     if (g_unloading.load()) {
         return;
@@ -433,6 +551,7 @@ void HandleForegroundChanged(HWND hWnd) {
     ProcessImagePathCacheScope pathCacheScope;
 
     hWnd = NormalizeFocusHwnd(hWnd);
+    NoteForegroundForLastUse(hWnd);
 
     // Normally the registry watch on the focus thread reports switches.
     // Without it, read here, before the transient check: switching to an
@@ -632,6 +751,20 @@ void OnDecayTimer() {
     if (g_unloading.load()) {
         return;
     }
+    // A tick far past its interval: the machine slept (GetTickCount64 counts
+    // sleep, so everything idle that long decays now) or the thread stalled.
+    // Before, only the late "Decay recompute" line showed it.
+    {
+        const ULONGLONG now = GetTickCount64();
+        if (g_lastDecayTick &&
+            now - g_lastDecayTick > kDecayCheckIntervalMs + 60000) {
+            Wh_Log(L"Decay tick late by %llu min (sleep or stall)",
+                   static_cast<unsigned long long>(
+                       (now - g_lastDecayTick - kDecayCheckIntervalMs) /
+                       60000));
+        }
+        g_lastDecayTick = now;
+    }
     std::vector<std::wstring> keysBefore;
     std::vector<std::wstring> keysAfter;
     size_t windowsBefore = 0;
@@ -639,6 +772,7 @@ void OnDecayTimer() {
     if (RefreshCurrentDesktopId()) {
         OnVirtualDesktopSwitched(L"decay tick");  // it saw the switch first
     }
+    RefreshInFrontLastUse();  // before decay: the app in use is not idle
     {
         DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);

@@ -216,7 +216,7 @@ stateDiagram-v2
     WId --> App : derive: newest window wins<br/>lastHwnd, tick
     WNoId --> [*] : window dead, PID changed,<br/>decayed or excluded
     WId --> [*] : window dead, PID changed,<br/>decayed or excluded
-    App --> [*] : decayMinutes since last confirm,<br/>or excluded by settings
+    App --> [*] : decayMinutes since last use,<br/>or excluded by settings
 ```
 
 Notes
@@ -228,6 +228,10 @@ Notes
   machine 2 skip the wait (default `promoteMode`).
 - `HandleWindowDestroyed` removes the window record at once; the app record
   stays until decay.
+- Last use (0.12.1): a window record's tick is its confirm time, moved
+  forward to the last input while it stays in front (decay tick) and when it
+  leaves the foreground — only within a stretch in front in which it was
+  confirmed. Same for the preview record in machine 4.
 
 ## 4. Window recency record and flyout card
 
@@ -448,23 +452,29 @@ stateDiagram-v2
     direction TB
     state "Not started" as N
     state "Starting (Init waits on ready event)" as S
-    state "Running: shell hook + WinEvents" as Full
-    state "Running: WinEvents only (degraded)" as Deg
+    state "Idle: window only, no hooks" as Idle
+    state "Tracking: shell hook + WinEvents" as Full
+    state "Tracking: degraded (one source)" as Deg
     state "Stopping" as X
     state "Failed" as F
     [*] --> N
     N --> S : Wh_ModInit
-    S --> F : class, window or<br/>SetWinEventHook failed
-    S --> Full : RegisterShellHookWindow ok
-    S --> Deg : shell hook registration failed
+    S --> F : class or window failed
+    S --> Idle : window published, ready signalled
+    Idle --> Full : g_taskbarViewHooked at start, or<br/>WM_APP_TASKBAR_READY (ActivateFocusTracking)
+    Idle --> Deg : same, but shell hook or<br/>SetWinEventHook failed (ERROR)
     F --> [*] : Init returns FALSE
-    Full --> X : WM_APP_SHUTDOWN + thread WM_APP<br/>(Wh_ModUninit, INFINITE join)
+    Idle --> X : WM_APP_SHUTDOWN + thread WM_APP<br/>(Wh_ModUninit, INFINITE join)
+    Full --> X : same
     Deg --> X : same
-    X --> N : hooks removed, timers killed,<br/>VDM and accent released
+    X --> N : DeactivateFocusTracking (hooks, watch,<br/>accent, shell hook), timers killed, VDM released
 ```
 
-Startup posts the current foreground window, so the first candidate does not
-wait for a focus change. No polling fallback exists in either running state.
+Activation posts the current foreground window, so the first candidate does
+not wait for a focus change. A foreground posted while *Idle* is ignored: a
+folder-window `explorer.exe` that never loads `Taskbar.View.dll` stays *Idle*
+for its whole life (0.12.1). No polling fallback exists in either tracking
+state.
 
 ## 11. Mod lifecycle
 
@@ -486,8 +496,9 @@ stateDiagram-v2
     Init --> Hooked : Taskbar.View.dll already loaded
     Init --> WaitDll : not loaded yet (LoadLibraryExW hooked)
     WaitDll --> Hooked : LoadLibraryExW or Wh_ModAfterInit<br/>sees the module (hooked once)
-    Hooked --> Run : worker running, first foreground posted
-    WaitDll --> Run : worker running (no buttons yet)
+    Hooked --> Run : worker tracking, first foreground posted
+    WaitDll --> Run : worker idle (no hooks, no focus logs)
+    Run --> Run : late Taskbar.View load: Hooked,<br/>WM_APP_TASKBAR_READY starts tracking
     Run --> Unl : Wh_ModUninit (g_unloading)
     Unl --> Done : worker stopped, every UI dispatcher drained,<br/>state cleared
 ```

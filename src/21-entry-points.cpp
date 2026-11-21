@@ -41,6 +41,7 @@ BOOL Wh_ModInit() {
             return FALSE;
         }
         g_taskbarViewHookAttempted = true;
+        g_taskbarViewHooked = true;  // the focus thread starts tracking
     } else {
         Wh_Log(L"Taskbar view module not loaded yet");
     }
@@ -58,11 +59,8 @@ void Wh_ModAfterInit() {
     if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
         HandleLoadedModuleIfTaskbarView(taskbarViewModule, L"Taskbar view (after init)");
     }
-
-    if (HWND fg = GetForegroundWindow()) {
-        PostToHookThread(WM_APP_FOREGROUND_CHANGED,
-                         reinterpret_cast<WPARAM>(fg));
-    }
+    // The current foreground is posted by ActivateFocusTracking, once this
+    // process is known to host the taskbar.
 }
 
 void Wh_ModUninit() {

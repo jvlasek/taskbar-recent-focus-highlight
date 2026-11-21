@@ -18,8 +18,9 @@ in `identity.md`.
 | Promote mode | immediateTracked / immediateTopN / alwaysWait | When re-focus skips app min-focus. A confirm past `decayMinutes` does not qualify, even if the 30 s prune has not removed the map entry yet |
 | Preview min focus | Default 1s; independent of app min-focus | Snappier window mark. App confirm does not stamp the current HWND. |
 | Same-PID during app timer | Still the same candidate only if the new foreground window maps to the same Explorer AppId | New window of the app; UWP hosts and TC / Lister share a process |
-| App decay | Default 30 min | List stays “recent” |
-| Preview decay | Default 15 min | Separate |
+| App decay | Default 30 min, **from last use** (0.12.1) | List stays “recent” |
+| Preview decay | Default 15 min, from last use | Separate |
+| Last use (0.12.1) | Decay tick: the confirmed window in front gets `GetLastInputInfo` time; on a foreground change the window that left gets it (`NoteForegroundForLastUse`, `RefreshInFrontLastUse`). Only records confirmed in the current stretch in front (`tick >= g_inFrontSince`) move | "Recently used", not "recently switched to": an app used without switching for longer than the decay lost its highlight while in use (Windows Sandbox, capture manual-20261120-071227). A visit shorter than min focus refreshes nothing, so it cannot jump ranks. Away from the keyboard the input time stops, so everything still ages out; lock screen = shell, refreshes nothing. Watching without input ages out too. Checked on capture manual-20261120-154409-086197 (26 h): 59 decays, none earlier than 30 min after the last confirm, 19 extended by use (up to 53 min after the last switch) |
 | Exclude list | Path / file / AppId, case-insensitive | Standard Windhawk UX |
 | Shell hosts ignored | SearchHost, StartMenuExperienceHost, ShellExperienceHost, ShellHost, TextInputHost; explorer **except** `CabinetWClass` / `ExploreWClass` | Don’t rank the shell. Folder windows are a real app (same process as the taskbar). AFH/WWAHost **are** ranked via `APPID:` |
 | Highlight count | 0–16 (UI suggests 1–6) | Settings-capped |

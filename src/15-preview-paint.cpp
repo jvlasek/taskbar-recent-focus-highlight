@@ -403,10 +403,26 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     {
         const size_t painted =
             (std::min)(order.size(), static_cast<size_t>(limit));
+        // Siblings are listed only when the set, a rank or a resolve failure
+        // differs from this UI thread's last resolve: reopening the same
+        // flyout repeated about 2,100 sibling lines in a day (capture
+        // manual-20261120-154409-086197).
+        std::wstring sig = std::to_wstring(limit);
+        for (const auto& s : scored) {
+            sig += L"|" + std::to_wstring(reinterpret_cast<uintptr_t>(s.hwnd)) +
+                   L"," + std::to_wstring(s.rank) + L"," +
+                   std::to_wstring(static_cast<int>(s.fail));
+        }
+        thread_local std::wstring t_lastResolveLog;
+        const bool changed = sig != t_lastResolveLog;
+        if (changed) {
+            t_lastResolveLog = sig;
+        }
         Wh_Log(L"Preview resolve: %zu siblings, highlightCount=%d "
-               L"candidates=%zu painted=%zu",
-               siblings.size(), limit, order.size(), painted);
-        for (size_t i = 0; i < scored.size(); ++i) {
+               L"candidates=%zu painted=%zu%s",
+               siblings.size(), limit, order.size(), painted,
+               changed ? L"" : L" (unchanged)");
+        for (size_t i = 0; changed && i < scored.size(); ++i) {
             std::wstring name;
             try {
                 name = Automation::AutomationProperties::GetName(scored[i].view)

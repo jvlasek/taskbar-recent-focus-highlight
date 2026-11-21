@@ -22,7 +22,11 @@ using DWORD = unsigned long;
 using HMODULE = void*;
 using LPCWSTR = const wchar_t*;
 std::atomic<bool> g_taskbarViewHookAttempted{false};
-std::atomic<int> attempts{0}, applied{0};
+std::atomic<int> attempts{0}, applied{0}, readyPosts{0};
+std::atomic<bool> g_taskbarViewHooked{false};
+using UINT = unsigned;
+constexpr UINT WM_APP_TASKBAR_READY = 0x8007;
+bool PostToHookThread(UINT msg) { assert(msg == WM_APP_TASKBAR_READY); ++readyPosts; return true; }
 bool succeed = true;
 HMODULE GetTaskbarViewModuleHandle() { return reinterpret_cast<void*>(1); }
 void Wh_Log(const wchar_t*, ...) {}
@@ -36,7 +40,7 @@ void Wh_ApplyHookOperations() { ++applied; }
 int main() {
     for (bool result : {true, false}) {
         succeed = result;
-        attempts = 0; applied = 0; g_taskbarViewHookAttempted = false;
+        attempts = 0; applied = 0; readyPosts = 0; g_taskbarViewHookAttempted = false; g_taskbarViewHooked = false;
         HandleLoadedModuleIfTaskbarView(reinterpret_cast<void*>(2), L"other");
         assert(!g_taskbarViewHookAttempted);
         std::vector<std::thread> threads;
@@ -47,6 +51,8 @@ int main() {
         HandleLoadedModuleIfTaskbarView(GetTaskbarViewModuleHandle(), L"repeat");
         assert(attempts == 1);
         assert(applied == (result ? 1 : 0));
+        // Only a successful hook starts focus tracking, once.
+        assert(g_taskbarViewHooked == result && readyPosts == (result ? 1 : 0));
     }
     auto checkScope = [] {
         {
@@ -71,4 +77,17 @@ with tempfile.TemporaryDirectory(prefix='windhawk-review-') as folder:
     path.write_text(cpp, encoding='utf-8')
     subprocess.run(['g++', '-std=c++17', '-pthread', str(path), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True, timeout=15)
-print('PASS: concurrent hook attempts, failed-attempt suppression, nested cache release')
+
+# Log volume (0.12.1, capture manual-20261120-154409-086197): repeated passes
+# do not repeat their detail lines.
+def body(signature):
+    start = source.index(signature)
+    return source[start:source.index('\n}', start) + 2]
+apply_all = body('void ApplyAllHighlights_UIThread() {')
+assert 'for (size_t i = 0; ladderChanged && i < ranks.size(); ++i)' in apply_all
+assert apply_all.index('if (ladderChanged) {\n                const auto& r') < apply_all.index('ApplyButtonHighlight(live[bi], rank)')
+assert 'for (size_t i = 0; changed && i < scored.size(); ++i)' in body('void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {')
+deadline = body('bool MinFocusDeadlineReached(')
+assert 'still waiting on' not in deadline and 'if (!track.preview && firstWait)' in deadline
+assert 'watching flyout repeater' not in source
+print('PASS: concurrent hook attempts, failed-attempt suppression, nested cache release, repeated-pass log lines suppressed')
