@@ -298,8 +298,9 @@ to clear highlights.
       $name: Tint opacity
       $description: >-
         0–100. Strength of the Whole plate and Title tint (half of it for the
-        "with accent" styles). Bar under title uses the full accent and
-        ignores this. Independent of Icons → Fill opacity. Per-rank intensity
+        "with accent" styles, and for ranks 2+ when rank 1 uses one, so no
+        lower rank is tinted more than rank 1). Bar under title uses the full
+        accent and ignores this. Independent of Icons → Fill opacity. Per-rank intensity
         still scales the result.
     - minFocusSeconds: 1
       $name: Minimum focus (seconds)
@@ -5758,6 +5759,22 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         }
         PreviewStyle paintStyle = style;
 
+        // Tint base. An accent style halves it so its same-colour border
+        // still reads (0.11.38). One tint level per flyout (0.12.1): with an
+        // accent style at rank 1, ranks 2+ in a non-accent style are halved
+        // too. Before, a rank-2 Title plate (Tint 40, intensity 85: 34 %)
+        // was tinted more than the rank-1 Whole plate with accent (20 %),
+        // against the ladder; the accent styles themselves are unchanged.
+        auto isAccent = [](PreviewStyle s) {
+            return s == PreviewStyle::Outline ||
+                   s == PreviewStyle::TitleOutline;
+        };
+        const bool halfTint =
+            isAccent(style) ||
+            (rankOneBased > 1 && isAccent(settings->previewTopStyle));
+        const int tintSetting =
+            halfTint ? fillOpacitySetting / 2 : fillOpacitySetting;
+
         // Measure card BEFORE injecting any overlay (critical for layout).
         double cardW = 0, cardH = 0;
         try {
@@ -5806,15 +5823,11 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         if (paintStyle == PreviewStyle::Plate ||
             paintStyle == PreviewStyle::Outline) {
             const bool outline = paintStyle == PreviewStyle::Outline;
-            const int fillA = static_cast<int>(
-                // Outline: half the tint so the accent border still reads as
-                // an outline (0.11.38; was its own setting, default 20 = 40/2).
-                (outline ? fillOpacitySetting / 2 : fillOpacitySetting) *
-                    2.55 * t +
-                0.5);
+            const int fillA =
+                static_cast<int>(tintSetting * 2.55 * t + 0.5);
             const int strokeA = static_cast<int>(255 * t + 0.5);
             // painted: card overlay drawn, or nothing to draw (zero tint).
-            bool painted = !outline && fillOpacitySetting <= 0;
+            bool painted = !outline && tintSetting <= 0;
             if (!painted) {
                 try {
                     painted = PaintCardOverlay(
@@ -5830,8 +5843,8 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                 HideThumbOverlayChildren(host);
                 if (auto plate = FindChildByName(host, kThumbGlowLayerNames[0])
                                      .try_as<Shapes::Rectangle>()) {
-                    const int plateA = static_cast<int>(
-                        fillOpacitySetting * 2.55 + 0.5);
+                    const int plateA =
+                        static_cast<int>(tintSetting * 2.55 + 0.5);
                     plate.Fill(Media::SolidColorBrush{withAlpha(base, plateA)});
                     plate.Stroke(nullptr);
                     plate.StrokeThickness(0);
@@ -5929,11 +5942,8 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
                         stripH = (std::max)(20.0, bottom - top);
                     }
                 }
-                const int chipA = static_cast<int>(
-                    // Accent: half the tint so the border reads (as Outline).
-                    (outline ? fillOpacitySetting / 2 : fillOpacitySetting) *
-                        2.55 * t +
-                    0.5);
+                const int chipA =
+                    static_cast<int>(tintSetting * 2.55 * t + 0.5);
                 chip.Background(Media::SolidColorBrush{withAlpha(base, chipA)});
                 if (outline) {
                     const int strokeA = static_cast<int>(255 * t + 0.5);

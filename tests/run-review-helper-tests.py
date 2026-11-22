@@ -90,4 +90,8 @@ assert 'for (size_t i = 0; changed && i < scored.size(); ++i)' in body('void Ref
 deadline = body('bool MinFocusDeadlineReached(')
 assert 'still waiting on' not in deadline and 'if (!track.preview && firstWait)' in deadline
 assert 'watching flyout repeater' not in source
+# One tint level per flyout (0.12.1): an accent rank 1 halves ranks 2+.
+thumb = body('void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {')
+assert '(rankOneBased > 1 && isAccent(settings->previewTopStyle))' in thumb
+assert thumb.count('tintSetting * 2.55') == 3 and 'fillOpacitySetting * 2.55' not in thumb
 print('PASS: concurrent hook attempts, failed-attempt suppression, nested cache release, repeated-pass log lines suppressed')

@@ -298,8 +298,9 @@ to clear highlights.
       $name: Tint opacity
       $description: >-
         0–100. Strength of the Whole plate and Title tint (half of it for the
-        "with accent" styles). Bar under title uses the full accent and
-        ignores this. Independent of Icons → Fill opacity. Per-rank intensity
+        "with accent" styles, and for ranks 2+ when rank 1 uses one, so no
+        lower rank is tinted more than rank 1). Bar under title uses the full
+        accent and ignores this. Independent of Icons → Fill opacity. Per-rank intensity
         still scales the result.
     - minFocusSeconds: 1
       $name: Minimum focus (seconds)
