@@ -24,9 +24,7 @@ Highlights the taskbar icons of the apps you actually stayed on, and ranks
 the recently focused windows inside a multi-window thumbnail flyout.
 Previews have their own on/off setting.
 
-![Taskbar side-bar highlight](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/main/screenshots/taskbar-highlight-edge.png)
-
-![Thumbnail flyout ranks](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/main/screenshots/flyout-preview-highlight.png)
+![A crowded taskbar with the three most recently used apps marked, and the open flyout ranking that app's windows](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/hero.png)
 
 ## What you see
 
@@ -36,9 +34,15 @@ buttons on the current desktop get a highlight:
 
 - **Side bar** (default) — a bar beside the icon (left on a bottom/top
   taskbar, under the icon on a left/right taskbar)
+
+  ![Side bar](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/icons-side-bar.png)
 - **Plate** — the button's own rounded plate, tinted in the highlight color
+
+  ![Plate](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/icons-plate.png)
 - **Plate with accent** — the same plate at half the tint, with an accent
   border
+
+  ![Plate with accent](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/icons-plate-with-accent.png)
 
 On a button with several windows the plates also tint Windows' stacked
 edge. An app that asks for attention keeps Windows' red marks on top.
@@ -66,6 +70,10 @@ while its window is recent, so it reads as "used within the preview decay".
 Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
 plate for rank 1, title plate for ranks 2+); either can also have an accent
 border, or be a thin bar under the title; ranks 2+ can be left unmarked.
+
+![Default preview styles: whole plate for rank 1, title plates for ranks 2 and 3](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/flyout-plate-title.png)
+
+![The "with accent" preview styles](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/flyout-plate-accent-title-accent.png)
 
 If you only want the active window highlighted in previews,
 [taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
