@@ -106,7 +106,9 @@ void RefreshButtonHighlight(FrameworkElement button) {
 // The anchor only selects the dispatcher. The queued bind still runs if
 // that button is destroyed before Low priority.
 void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor) {
-    if (!dispatcherAnchor || g_unloading.load()) {
+    // Only on a dispatcher the unload drain knows (Neon review 1.4.1).
+    if (!dispatcherAnchor || g_unloading.load() ||
+        !RememberUiDispatcher(dispatcherAnchor)) {
         return;
     }
     const ULONGLONG now = GetTickCount64();
@@ -211,6 +213,8 @@ int32_t WINAPI TaskItemThumbnailView_put_ThumbnailSource_Hook(void* pThis,
         static_cast<::IUnknown*>(pThis)->QueryInterface(
             winrt::guid_of<FrameworkElement>(), winrt::put_abi(card));
         if (card) {
+            // Tracking records the card's dispatcher for the unload drain.
+            TrackThumbView_UIThread(card);
             // Coalesced: a flyout binding N cards schedules one refresh.
             SchedulePreviewFlyoutRefresh(card);
         }
@@ -339,10 +343,16 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
         if (param1) {
             key = reinterpret_cast<const winrt::hstring*>(param1)->c_str();
         }
-        if (key.empty() || key != lastKey) {
+        // An empty key (flyout closing) clears once, and has no cards to
+        // paint (Neon review 1.7.8).
+        const bool empty = key.empty();
+        if (empty ? !lastKey.empty() : key != lastKey) {
             ClearAllThumbnailHighlights_UIThread();
         }
         lastKey = std::move(key);
+        if (empty) {
+            return;
+        }
         FrameworkElement el = PickLiveFlyoutThumbOnThisDispatcher();
         if (el) {
             SchedulePreviewFlyoutRefresh(el);
@@ -360,7 +370,7 @@ HMODULE GetTaskbarViewModuleHandle() {
 }
 
 void HandleLoadedModuleIfTaskbarView(HMODULE module, LPCWSTR lpLibFileName) {
-    if (g_taskbarViewHookAttempted.load() ||
+    if (g_unloading.load() || g_taskbarViewHookAttempted.load() ||
         GetTaskbarViewModuleHandle() != module ||
         g_taskbarViewHookAttempted.exchange(true)) {
         return;

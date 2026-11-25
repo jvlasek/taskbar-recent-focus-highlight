@@ -60,7 +60,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
                 painted.accent ==
                     g_cachedAccent.load(std::memory_order_relaxed) &&
                 painted.edge == edge && painted.boxW == boxWi &&
-                painted.boxH == boxHi && ButtonHasOurChrome(button)) {
+                painted.boxH == boxHi && existingHost) {
                 EnsureGlowHostZOrder(panel, existingHost);
                 return;
             }
@@ -103,8 +103,13 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         HideAllGlowLayers(host);
 
         if (t <= 0.0) {
+            // With the plate signature, or Plate styles at intensity 0 missed
+            // the cache on every UpdateVisualStates (Neon review 1.7.1).
             SetCachedPaintState(button, rankOneBased, settings->generation,
-                                edge, boxWi, boxHi);
+                                edge, boxWi, boxHi,
+                                plateStyle && plateShapes.ok
+                                    ? plateShapes.signature
+                                    : 0);
             return;
         }
 

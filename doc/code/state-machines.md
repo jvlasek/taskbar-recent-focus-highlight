@@ -497,7 +497,6 @@ stateDiagram-v2
     state "Unloaded" as Done
     state "Not loaded" as NotLoaded
     [*] --> Init : Wh_ModInit, LoadSettings
-    Init --> NotLoaded : nothing to paint<br/>(highlightCount 0 and previews off)
     Init --> NotLoaded : Taskbar.View hooks or worker failed
     Init --> Hooked : Taskbar.View.dll already loaded
     Init --> WaitDll : not loaded yet (LoadLibraryExW hooked)
@@ -509,9 +508,11 @@ stateDiagram-v2
     Unl --> Done : worker stopped, every UI dispatcher drained,<br/>state cleared
 ```
 
-`Wh_ModSettingsChanged` keeps the mod in *Running*: reload settings, drop
-newly excluded records, recompute ranks, re-arm or drop the candidate's
-timers on the worker, repaint. `Running` without `Hooked` paints nothing: ranks wait for the first
+`Wh_ModSettingsChanged` keeps the mod in *Running*: reload settings and
+repaint; on the worker, drop newly excluded records (`DropExcludedRecords`,
+0.12.2) and re-arm or drop the candidate's timers. Nothing to paint
+(highlightCount 0, previews off) is *Running* too since 0.12.2, so a later
+settings change takes effect. `Running` without `Hooked` paints nothing: ranks wait for the first
 `TaskListButton` (`RunOnUiThread` logs "no dispatcher anchor yet").
 
 ## 12. Unload drain of one UI dispatcher

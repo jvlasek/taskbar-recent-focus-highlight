@@ -10,8 +10,6 @@
 // above BackgroundBorder and below the title/thumbnail, so hover changes the
 // background underneath and still shows through a partial fill.
 
-constexpr wchar_t kThumbCardOverlayName[] = L"WhRecentFocusThumbCard";
-
 void BindCardOverlay(FrameworkElement const& target,
                      DependencyObject const& source,
                      DependencyProperty const& property,
@@ -389,7 +387,10 @@ FrameworkElement PickLiveFlyoutThumbOnThisDispatcher() {
 }
 
 void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
-    if (!dispatcherAnchor || g_unloading.load()) {
+    // Only on this thread's dispatcher, and one the unload drain knows: the
+    // pending flag below is per thread (Neon review 1.4.1 / 3.2).
+    if (!dispatcherAnchor || g_unloading.load() ||
+        !RememberUiDispatcher(dispatcherAnchor)) {
         return;
     }
     if (g_thumbRelayoutDepth > 0) {

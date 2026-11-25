@@ -267,6 +267,9 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     if (!MinFocusDeadlineReached(track, pending, mode, &confirmHwnd, &title)) {
         return;  // re-armed, waiting through Alt-Tab, or dropped
     }
+    // The deadline check can retarget to a sibling window of the app; the
+    // pending focus is still keyed by the original one (Neon review 1.7.3).
+    const HWND pendingHwnd = pending.hwnd;
     pending.hwnd = confirmHwnd;
     if (!title.empty()) {
         pending.windowTitle = std::move(title);
@@ -277,7 +280,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     if (IsExcludedKey(pending.key, ToUpper(pending.displayName), appIdUpper,
                       pending.pathUpper)) {
         std::lock_guard<std::mutex> lock(g_stateMutex);
-        if (g_pendingFocus.hwnd == pending.hwnd) {
+        if (g_pendingFocus.hwnd == pendingHwnd) {
             g_pendingFocus = {};
         }
         return;

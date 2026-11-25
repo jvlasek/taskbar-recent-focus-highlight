@@ -46,8 +46,8 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
   into every `explorer.exe`, including folder-window / COM-server processes
   that never load `Taskbar.View.dll`. The worker always starts (its window
   must exist so the shutdown post cannot be lost), but installs the shell
-  hook, both WinEvent hooks, the accent subscription and the registry watch
-  only in `ActivateFocusTracking`: at worker start when `g_taskbarViewHooked`
+  hook, both WinEvent hooks and the registry watch (and reacts to accent
+  broadcasts) only in `ActivateFocusTracking`: at worker start when `g_taskbarViewHooked`
   is already set, otherwise on `WM_APP_TASKBAR_READY`, posted after
   `Wh_ApplyHookOperations` succeeds in the `LoadLibraryExW` path. Until then
   `HandleForegroundNotification` ignores posts (`g_focusTrackingActive`), so
@@ -80,8 +80,11 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
 reverse, and never publish settings while holding `g_stateMutex`.
 
 **Not under a lock:** XAML calls, `Dispatcher` calls, COM and cross-process
-reads (`SHGetPropertyStoreForWindow`, `GetProcessImagePath`). Resolve first,
-then lock and assign. The UI thread takes `g_stateMutex` to paint.
+reads (`SHGetPropertyStoreForWindow`, `GetProcessImagePath`), and `Wh_Log`
+(0.12.2: any mutex, not only `g_stateMutex`). Resolve first, then lock and
+assign. The UI thread takes `g_stateMutex` to paint. Inside a lock log with
+`LOG_DEFERRED` under a `DeferredLogScope` declared before the lock; read
+`GetLastError()` into a local first. `run-review-helper-tests.py` checks it.
 
 ## Rules
 
@@ -103,6 +106,19 @@ then lock and assign. The UI thread takes `g_stateMutex` to paint.
 6. `StartWinEventHookThread` returns only after the worker signalled its ready
    event, so the shutdown post cannot be lost.
 7. try/catch around XAML in hooks; a hook must never throw into Explorer.
+8. No WinRT event subscription whose handler can run on a thread-pool thread
+   (`UISettings::ColorValuesChanged` until 0.12.2): revoking it does not wait
+   for a call already running. Use a window message to the worker instead.
+9. Subscribe to an element's event, post to its dispatcher or track it only
+   after `RememberUiDispatcher(element)` returned true
+   (`WatchRepeaterElementClearing_UIThread`, `TrackThumbView_UIThread`,
+   `SchedulePreviewFlyoutRefresh`, `ScheduleRefreshAllHighlights`, 0.12.2);
+   otherwise the unload drain never visits that thread.
+10. A stored PID of 0 matches nothing (`HwndMatchesStoredPid`, 0.12.2): a
+    window already gone when it was recorded is not stored at all.
+11. COM that needs an apartment runs on the worker (an STA), not on
+    Windhawk's settings thread: `DropExcludedRecords` handles a settings
+    change there (0.12.2). `EnsureVdm` returns nullptr off the worker.
 
 ## Unload (`Wh_ModUninit`)
 

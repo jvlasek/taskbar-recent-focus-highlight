@@ -28,6 +28,7 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
     void* id = InspectableIdentity(button);
     bool grace = false;
     {
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_buttonStateMutex);
         ButtonState* state = FindButtonStateLocked(button, false);
         if (!state) {
@@ -35,7 +36,7 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
         }
         auto& e = *state;
         if (running != e.observedRunning) {
-            Wh_Log(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u appId=%s",
+            LOG_DEFERRED(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u appId=%s",
                    id, e.observedRunning, running, e.sampleHwnd, e.samplePid,
                    e.appIdUpper.c_str());
         }

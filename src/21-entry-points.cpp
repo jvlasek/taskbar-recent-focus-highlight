@@ -7,13 +7,16 @@ BOOL Wh_ModInit() {
 
     g_unloading = false;
     LoadSettings(/*userSavedSettings=*/false);
+    // highlightCount=0 with previews off used to return FALSE here. Windhawk
+    // shows nothing for a failed init and then does not call
+    // Wh_ModSettingsChanged, so turning a highlight back on did nothing
+    // until the mod was toggled (Neon review 1.8.2). Now the mod loads and
+    // paints nothing until a setting asks for it.
     {
         auto settings = SettingsSnap();
         if (settings->highlightCount <= 0 &&
             !settings->previewHighlightEnabled) {
-            Wh_Log(L"Nothing to paint (highlightCount=0, previews off) — "
-                   L"skipping init");
-            return FALSE;
+            Wh_Log(L"Nothing to paint yet (highlightCount=0, previews off)");
         }
     }
 
@@ -79,21 +82,25 @@ void Wh_ModUninit() {
         })) {
         Wh_Log(L"ERROR: UI cleanup did not finish on every dispatcher");
     }
+    size_t leftLayoutWatches = 0;
+    size_t leftRepeaterWatches = 0;
     {
         std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
-        if (!g_layoutWatches.empty()) {
-            Wh_Log(L"ERROR: %zu IconPanel SizeChanged watches not revoked",
-                   g_layoutWatches.size());
-        }
+        leftLayoutWatches = g_layoutWatches.size();
     }
     {
         std::lock_guard<std::mutex> lock(g_repeaterWatchMutex);
         // Entries left here belong to repeaters still alive on a dispatcher
         // the drain did not reach.
-        if (!g_repeaterWatches.empty()) {
-            Wh_Log(L"ERROR: %zu flyout ElementClearing watches not revoked",
-                   g_repeaterWatches.size());
-        }
+        leftRepeaterWatches = g_repeaterWatches.size();
+    }
+    if (leftLayoutWatches) {
+        Wh_Log(L"ERROR: %zu IconPanel SizeChanged watches not revoked",
+               leftLayoutWatches);
+    }
+    if (leftRepeaterWatches) {
+        Wh_Log(L"ERROR: %zu flyout ElementClearing watches not revoked",
+               leftRepeaterWatches);
     }
 
     {
@@ -103,7 +110,22 @@ void Wh_ModUninit() {
         g_haveCurrentDesktop = false;
         g_pendingFocus = {};
     }
+    // The worker has exited; its last-use stretch goes with it.
+    g_inFrontHwnd = nullptr;
+    g_inFrontSince = 0;
     ReleaseVdm();
+    {
+        std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
+        g_windowAppId.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_uncombinedMutex);
+        g_uncombinedWindowsByThread.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_fullPassQueuedMutex);
+        g_fullPassQueuedThreads.clear();
+    }
     {
         std::lock_guard<std::mutex> lock(g_buttonsMutex);
         g_trackedButtons.clear();
@@ -127,90 +149,9 @@ void Wh_ModSettingsChanged() {
 
     LoadSettings(/*userSavedSettings=*/true);
 
-    std::vector<HWND> windowHwnds;
-    {
-        std::lock_guard<std::mutex> lock(g_stateMutex);
-        for (auto& [id, desk] : g_desktopMaps) {
-            (void)id;
-            for (const auto& [hwnd, winfo] : desk.windowFocusMap) {
-                (void)winfo;
-                if (hwnd) {
-                    windowHwnds.push_back(hwnd);
-                }
-            }
-            for (const auto& [hwnd, w] : desk.windowAppFocus) {
-                (void)w;
-                if (hwnd) {
-                    windowHwnds.push_back(hwnd);
-                }
-            }
-        }
-    }
-    std::unordered_map<HWND, std::wstring, HwndHash> windowAppIds;
-    for (HWND hwnd : windowHwnds) {
-        std::wstring id = ExclusionAumid(hwnd);
-        if (!id.empty()) {
-            windowAppIds[hwnd] = std::move(id);
-        }
-    }
-
-    {
-        DeferredLogScope logScope;  // logs after unlock
-        std::lock_guard<std::mutex> lock(g_stateMutex);
-        for (auto& [id, desk] : g_desktopMaps) {
-            (void)id;
-            for (auto it = desk.appFocusMap.begin();
-                 it != desk.appFocusMap.end();) {
-                std::wstring displayUpper = ToUpper(it->second.displayName);
-                if (IsExcludedKey(it->first, displayUpper,
-                                  it->second.appIdUpper,
-                                  it->second.pathUpper)) {
-                    it = desk.appFocusMap.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-            // Window records too, or the next recompute would derive the
-            // excluded app again.
-            for (auto it = desk.windowAppFocus.begin();
-                 it != desk.windowAppFocus.end();) {
-                auto& w = it->second;
-                if (w.appIdUpper.empty()) {
-                    auto found = windowAppIds.find(it->first);
-                    if (found != windowAppIds.end()) {
-                        w.appIdUpper = found->second;
-                    }
-                }
-                if (IsExcludedKey(w.key, ToUpper(w.displayName), w.appIdUpper,
-                                  w.pathUpper)) {
-                    it = desk.windowAppFocus.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-            for (auto it = desk.windowFocusMap.begin();
-                 it != desk.windowFocusMap.end();) {
-                if (it->second.appIdUpper.empty()) {
-                    auto found = windowAppIds.find(it->first);
-                    if (found != windowAppIds.end()) {
-                        it->second.appIdUpper = found->second;
-                    }
-                }
-                std::wstring fileUpper =
-                    ToUpper(FileNameFromPath(it->second.pathUpper));
-                if (IsExcludedKey(it->second.processKey, fileUpper,
-                                  it->second.appIdUpper,
-                                  it->second.pathUpper)) {
-                    it = desk.windowFocusMap.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-            PruneWindowFocusMapLocked(desk);
-            RecomputeRanksForDesktopLocked(desk);
-        }
-    }
-
+    // Newly excluded apps are dropped on the focus worker
+    // (DropExcludedRecords): it owns the recency maps and is the STA
+    // ExclusionAumid's SHGetPropertyStoreForWindow needs (Neon review 1.6).
     PostToHookThread(WM_APP_SETTINGS_CHANGED);
     RequestApplyVisuals();
     RequestApplyPreviewVisuals();

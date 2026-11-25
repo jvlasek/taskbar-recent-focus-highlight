@@ -294,7 +294,7 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     }
     TrackThumbView_UIThread(anyThumb);
 
-    auto repeaterViews = CollectRepeaterThumbnailViews(anyThumb, nullptr);
+    auto repeaterViews = CollectRepeaterThumbnailViews(anyThumb);
     const bool usedRepeater = !repeaterViews.empty();
     auto allViews =
         usedRepeater ? std::move(repeaterViews)

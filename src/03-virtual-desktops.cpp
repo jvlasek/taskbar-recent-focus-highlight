@@ -38,10 +38,12 @@ std::wstring GuidToLogString(const GUID& id) {
 IVirtualDesktopManager* EnsureVdm() {
     // CoCreate on the STA that will use it. UI threads must not create or
     // call this pointer — they read the cached desktop GUID instead.
+    // Off that thread: no pointer at all (an STA pointer must not cross
+    // apartments; Neon review 1.6). No caller does this today.
     if (!OnHookThread()) {
-        std::lock_guard<std::mutex> lock(g_vdmMutex);
-        return g_vdm;
+        return nullptr;
     }
+    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_vdmMutex);
     if (g_vdm) {
         return g_vdm;
@@ -50,7 +52,7 @@ IVirtualDesktopManager* EnsureVdm() {
     HRESULT hr = CoCreateInstance(kClsidVirtualDesktopManager, nullptr,
                                   CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&vdm));
     if (FAILED(hr) || !vdm) {
-        Wh_Log(L"IVirtualDesktopManager create failed %08X", hr);
+        LOG_DEFERRED(L"IVirtualDesktopManager create failed %08X", hr);
         return nullptr;
     }
     g_vdm = vdm;

@@ -124,8 +124,8 @@ missing Calculator foreground WinEvents remains unknown.
   messages to same-process (Explorer) windows and can stall the worker and the
   unload join. Titles are for logs only, never identity.
 - `SHGetPropertyStoreForWindow`, `OpenProcess` / `QueryFullProcessImageName`
-  and the registry read run on the worker (or the Windhawk thread in
-  `Wh_ModSettingsChanged`), never on the taskbar UI thread and never under
-  `g_stateMutex`.
+  and the registry read run on the worker (a settings change too, since
+  0.12.2: `DropExcludedRecords` on `WM_APP_SETTINGS_CHANGED`), never on the
+  taskbar UI thread and never under `g_stateMutex`.
 - `IVirtualDesktopManager` is created, used and released only on the worker
   (registry first, COM only if that fails). The UI reads `g_currentDesktopId`.
