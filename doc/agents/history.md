@@ -73,6 +73,15 @@ Short timeline:
   idle; the log prints ladder / bindings / preview siblings only on change and
   gained `Hidden`, `Decayed … key … last use`, input-desktop name and
   late-tick lines (testing.md).
+- 0.12.2 (Gemini 4 Neon pre-submission review, `reviews/neon.md`; the
+  windhawk-mods submission is now 0.12.2, PR text `doc/pr-0.12.2.md`):
+  accent from `WM_SETTINGCHANGE` / `WM_DWMCOLORIZATIONCOLORCHANGED` instead
+  of `UISettings::ColorValuesChanged`; transient foregrounds keep the
+  last-use stretch; same-app window switch re-confirms; destroyed window in
+  front stamped and folded; signed `GetLastInputInfo` difference; no
+  `Wh_Log` under any mutex; `RememberUiDispatcher` gates; PID 0 fails
+  closed; exclusion sweep on the worker; init no longer fails for "nothing
+  to paint"; smaller one-liners. Not taken: see `reviews/review-response-neon.md`.
 
 ## Review lessons about removed mechanisms
 

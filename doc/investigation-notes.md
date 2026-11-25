@@ -1,13 +1,17 @@
 # What we learned: identities, previews, and regression testing
 
-Updated 2026-10-06. Describes mod **0.11.1**. Historical Calculator harness
-results below were recorded at commit `23fac66`. This is a findings and evidence
-summary, not a claim of
-compatibility with every Explorer build or taskbar theme.
+Updated 2026-11-25 for mod **0.12.2**: the diagram, the table below, "Thread
+and lifetime lessons" and "Source landmarks" describe the current mod. The
+other sections are evidence as recorded (0.11.x); where they name a mechanism
+removed since, a note says so. Historical Calculator harness results were
+recorded at commit `23fac66`. This is a findings and evidence summary, not a
+claim of compatibility with every Explorer build or taskbar theme. The current
+design per topic is in `doc/agents/` (start at `AGENTS.md`).
 
 Follow-up: the [focus hook static audit](focus-hook-static-analysis.md) found a
-distinct XAML thumbnail click route not covered by the current HandleClick
-hook, and candidate native activation notifications. Since 0.11.0, shell
+distinct XAML thumbnail click route not covered by the HandleClick hook of
+the time (removed in 0.11.20 with every taskbar.dll hook), and candidate
+native activation notifications. Since 0.11.0, shell
 activation notifications supplement foreground WinEvents. The missing
 WinEvent's cause remains unknown; HandleClick alone does not cover every route.
 
@@ -23,12 +27,13 @@ shutdown still apply to the paths shown. Its editable source is
 | | Taskbar icons | Flyout previews |
 |---|---|---|
 | Question | Which apps have I used recently? | Which windows in this flyout have I used recently? |
-| Recency key | Full executable path; `APPID:` + AUMID for supported UWP hosts | HWND with stored PID |
+| Recency key | Window record (HWND + PID), folded into `APPID:<Explorer AppId>` of the button listing the window (0.11.33) | HWND with stored PID |
 | Scope | App ranking per virtual desktop | Window history per desktop; ranking among this flyout's siblings |
 | Default minimum focus | 8 seconds | 1 second, independent of app threshold |
 | UI object | `TaskListButton` | `TaskItemThumbnailView` |
-| Identity bridge | Task-item/group HWNDs, AUMID and process-path cache | Thumbnail model/task-item mapping to the presented window |
-| Eligibility | Running button; exact match; configured top N | Multi-window flyout; exact live HWND/PID; configured sibling top N |
+| Identity bridge | Button view model → WindowsUdk `ITaskItem` / `ITaskGroup`: window ids and AppId, captured synchronously on the UI thread | Card view model → `TaskItemThumbnail.ParentItem.WindowId` |
+| Decay | From last use: input while in front (0.12.1) | Same |
+| Eligibility | Running button with a live window; exact AppId; configured top N (Never Combine: per window) | Multi-window flyout (single-window optional); exact live HWND/PID; configured sibling top N |
 
 Both share the focus worker, desktop state, settings, dispatcher infrastructure
 and visual helpers. A window can have preview recency even when its app has not
@@ -42,8 +47,9 @@ creation/attachment and the shell's knowledge of that content can lag behind
 the existence of the frame.
 
 For a thumbnail, we need the **presented window**, matching the window tracked
-by focus. On this build, `CImmersiveTaskItem::GetThumbnailWindow()` provides
-that frame HWND. `GetAppWindow()` serves the app-metadata path and can refer to
+by focus. On this build, `CImmersiveTaskItem::GetThumbnailWindow()` provided
+that frame HWND (private taskbar.dll lookup, removed in 0.11.20; the card's
+view model gives the same window since 0.11.19, below). `GetAppWindow()` serves the app-metadata path and can refer to
 content; it is not an interchangeable preview getter. These are private
 Explorer interfaces, and their interface-pointer projections also differ.
 
@@ -217,42 +223,41 @@ evidence and version-specific coverage.
 
 ## Thread and lifetime lessons
 
-Native UI hooks capture the identity data they can safely obtain there;
-process-path/AUMID work for button matching is queued to the focus worker.
-Only value data crosses that queue. Request serials, HWND/PID and result age
-are checked before using results. A result deadline rejects stale work; it
-does **not** cancel an OS call already running on the worker.
+Button identity is captured synchronously on the UI thread from Explorer's
+own view model (since 0.11.33; the 0.11.1 asynchronous path/AUMID resolver on
+the worker, with its request serials and result deadlines, is gone). The UI
+publishes window → AppId; the worker joins its window records to apps with
+it. Cross-process reads (process path, window AUMID for exclusions, the
+registry) and the virtual-desktop COM object stay on the worker, which is an
+STA; since 0.12.2 that includes the exclusion sweep after a settings change.
+No `Wh_Log` runs while a mutex is held (0.12.2). Full passes are coalesced
+per UI dispatcher (`QueueFullPass`).
 
-In 0.11.1, identity-completion paints are coalesced per UI dispatcher. The
-queued flag clears before painting so a result arriving during the pass can
-queue another; a slow dispatcher retains its independent flag. Rejected
-dispatch clears the flag for retry. Cached results remain available to ordinary
-full passes if an accepted callback never runs.
-
-When a grouped Win32 button changes its sample, cached identity is retained
-during refresh only for a live HWND/PID already captured in the group, from
-the same process as the old sample, and with a non-hosted cached path. Unknown
-members, process changes, hosted apps and pinned-only transitions invalidate
-it. Live grouped close/remaining-window behavior still needs 0.11.1 validation.
+The accent colour arrives as window messages to the worker
+(`WM_SETTINGCHANGE` "ImmersiveColorSet", `WM_DWMCOLORIZATIONCOLORCHANGED`,
+0.12.2), not a WinRT event whose thread-pool callback unload could not wait
+for.
 
 Window-title retrieval is diagnostic and must not introduce a synchronous
 message hang into Explorer. A missing title can remain empty; app identity
 and HWND/PID remain separate from that log text.
 
 Unload first stops/joins the worker, then cleans and drains the recorded UI
-dispatchers. The intentionally unbounded wait avoids returning while callbacks
+dispatchers. Nothing subscribes to an element's events or posts to its
+dispatcher unless that dispatcher was recorded (0.12.2). The intentionally unbounded wait avoids returning while callbacks
 can still execute code from the unloaded DLL. It is a safety tradeoff: a live
 but permanently unresponsive dispatcher can prevent unload from completing.
 
 ## Source landmarks
 
-Search these names in [the single translation unit](../taskbar-recent-focus-highlight.wh.cpp):
+Search these names in `src/` (joined into [the single translation unit](../taskbar-recent-focus-highlight.wh.cpp)):
 
 | Stage | Functions / hooks |
 |---|---|
 | Foreground and shell activation | `HandleShellActivation`, `HandleForegroundNotification`, `HandleForegroundChanged` |
 | App identity and preview history | `ResolveAppIdentity`, `StampWindowRecencyLocked` |
-| Button identity work | `QueueButtonResolve`, `ResolveOneButtonOnFocusThread`, `CollectUdkGroupWindows` |
+| Button identity work | `CaptureButton`, `EnsureButtonIdentity`, `CollectUdkGroupWindows`, `DeriveAppsFromWindowsLocked` |
+| Last use and decay | `NoteForegroundForLastUse`, `RefreshInFrontLastUse`, `OnDecayTimer` |
 | Presented-window lookup | `ResolveHwndFromCardViewModel` |
 | Explicit native click | removed in 0.11.20 (no taskbar.dll hooks) |
 | Bind and paint | `ApplyAllHighlights_UIThread`, `RefreshThumbnailFlyout_UIThread`, `ApplyThumbnailHighlight` |

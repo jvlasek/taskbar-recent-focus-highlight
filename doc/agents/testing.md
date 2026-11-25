@@ -68,6 +68,7 @@ adds an independent foreground observer.
 | `Preview resolve:` / `sibling[` / `unresolved:` | Per-card window (`how=viewmodel`) and why a card did not resolve. `sibling[` lines only when the set, a rank or a failure changed (else `(unchanged)`, 0.12.1) |
 | `HWND recycled` | Preview map dropped a reused handle (PID mismatch) |
 | `transient FG, waiting on` / `gave up waiting through transient … (after Ns)` | Min-focus grace: first line once per wait (no 200 ms repeats since 0.12.1), the second if it expired and the candidate was dropped |
+| `Settings: dropped N records of excluded apps` / `Nothing to paint yet` | 0.12.2: exclusion sweep on the focus thread after a settings change; init with highlightCount 0 and previews off (the mod stays loaded). Since 0.12.2 `Identity state`, `Button identity`, `Button windows` and `Uncombined windows` are written after their lock, so they carry the deferred `(Function)` prefix |
 | `Last use: hwnd=… left, used until Ns ago (app\|preview\|app+preview)` | The window that left the foreground was stamped; `preview` alone = a visit shorter than the app minimum focus (0.12.1) |
 | `Decayed: <name> key=… (last use N.N min ago)` | App record dropped; the age should be ≥ the decay time (+ up to one 30 s tick) |
 | `Hidden (no running button):` / `Shown again (running button):` | App keeps its history but has no slot, or got it back. A burst right after `Desktop switch` is the cleared running grace, until the next full pass |

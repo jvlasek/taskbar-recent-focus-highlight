@@ -1,4 +1,4 @@
-# Taskbar Recent Focus Highlight 0.12.1
+# Taskbar Recent Focus Highlight 0.12.2
 
 Update of the published 0.11.1. Development repository with tests, perf
 results and notes: https://github.com/jvlasek/taskbar-recent-focus-highlight
@@ -34,7 +34,7 @@ native element, and counts recency from when an app was last *used*.
 - **The side bar's halo** (a second, slightly larger translucent rectangle;
   XAML cannot blur it, so it showed as a hard-edged rim when magnified).
 - Symbol count: 26 (Taskbar.View.dll + taskbar.dll) -> 12 (Taskbar.View.dll
-  only). Lines: 8294 -> 8730, with the new features below included.
+  only). Lines: 8294 -> 8891, with the new features below included.
 
 ## Identity rule
 
@@ -65,7 +65,9 @@ without switching lost its highlight while in use. Away from the keyboard
 the input time stops and everything ages out as before. Only a stretch in
 front in which the window passed the minimum focus counts, so a short visit
 cannot move an app up. No new setting; the decay settings' descriptions say
-"since you last used it".
+"since you last used it". Alt+Tab, Start, the taskbar and the lock screen do
+not end that stretch: back on the same window, use keeps counting even when
+Windows sends no new focus event.
 
 ## Explorer processes without a taskbar
 
@@ -80,6 +82,13 @@ The mod's own elements no longer take up layout space: a plate used to ask
 its button for the old size, so with a Taskbar Styler theme that shrinks the
 buttons (BottomDensy) the highlighted ones stayed big. Plates, the side bar
 and the preview overlays now have zero desired size at the same place.
+
+The accent colour is re-read when Windows broadcasts a colour change to the
+focus thread's hidden window (`WM_SETTINGCHANGE` "ImmersiveColorSet",
+`WM_DWMCOLORIZATIONCOLORCHANGED`). There is no WinRT event subscription
+(`UISettings::ColorValuesChanged` ran its handler on a thread-pool thread
+that unload could not wait for). Newly excluded apps are dropped on the
+focus thread, which is an STA. No log line is written while a lock is held.
 
 The log is quieter: the ladder, the button bindings and the preview
 siblings are printed only when they change, and repeating wait lines are
