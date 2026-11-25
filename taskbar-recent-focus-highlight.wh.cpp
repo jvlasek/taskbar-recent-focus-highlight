@@ -8713,11 +8713,12 @@ void LoadSettings(bool userSavedSettings) {
         s.excludedPrograms.insert(ToUpper(program.get()));
     }
 
-    Wh_Log(L"Settings: style=%s color=%s th=%d size=%d%% fillOp=%d "
+    Wh_Log(L"Settings: count=%d style=%s color=%s th=%d size=%d%% fillOp=%d "
            L"previewFillOp=%d decay=%dmin minFocus=%ds promote=%s preview=%d "
            L"previewCount=%d single=%d previewI=%d/%d/%d previewStyle=%s/%s "
            L"previewMin=%ds previewDecay=%dmin excluded=%zu",
-           GlowStyleName(s.glowStyle), EnumToName(kGlowColorNames, s.glowColor),
+           s.highlightCount, GlowStyleName(s.glowStyle),
+           EnumToName(kGlowColorNames, s.glowColor),
            s.glowThickness, s.glowSize, s.glowFillOpacity, s.previewFillOpacity,
            s.decayMinutes, s.minFocusSeconds, PromoteModeName(s.promoteMode),
            s.previewHighlightEnabled ? 1 : 0, s.previewHighlightCount,
