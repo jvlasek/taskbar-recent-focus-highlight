@@ -60,7 +60,7 @@ adds an independent foreground observer.
 | `Preview focus confirmed:` | Window recency |
 | `Current virtual desktop:` / `Desktop switch (<reason>):` | Per-desktop recency; reason = registry, `input desktop: <name>` (`Default` = back on the user desktop, `not accessible (lock / UAC)` = secure desktop; 0.12.1), foreground (watch fallback), decay tick |
 | `Button identity:` | A button's Explorer AppId changed (first capture, reuse) |
-| `Identity state:` | A button's running state changed |
+| `Identity state:` / `Running state read: N running, M not running` | A known button's running state changed. Buttons read for the first time, or again after a desktop / lock switch reset them, are only counted in the `Running state read` summary of the next full pass (0.12.2; before, ~20 `Identity state` lines per lock or unlock) |
 | `Window … belongs to APPID:…` | A window record joined (or changed) its app at a recompute |
 | `Button windows:` / `Uncombined windows` | Never Combine detection |
 | `ApplyAllHighlights:` / `rank list[` / `bind rank` | Full pass. Since 0.12.1 `rank list[` / `bind rank` (and `no ranks — cleared`) are printed only when the ladder or a binding differs from that UI thread's last pass; otherwise the summary ends `(ladder unchanged)`. A `Glow rank` line still follows its `bind rank` line |

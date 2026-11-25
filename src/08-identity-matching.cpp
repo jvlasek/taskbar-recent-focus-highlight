@@ -19,6 +19,17 @@ bool TaskListButton_IsRunning(FrameworkElement taskListButtonElement) {
 }
 
 // IsRunning, plus a short grace so Alt-Tab flicker does not drop glows.
+// Running states read for the first time (new buttons) or again after a
+// desktop / lock switch reset them. Summed per UI thread and logged once by
+// the next full pass: a lock or unlock used to log one "Identity state"
+// line per button (about 20 per switch, capture
+// manual-20261125-211736-720767).
+struct RunningReread {
+    unsigned running = 0;
+    unsigned stopped = 0;
+};
+thread_local RunningReread t_runningReread;
+
 // Virtual-desktop switches clear observedRunning so pinned-not-running icons
 // on another desktop never keep a highlight. Call this on the UI thread
 // before AppAppearsOnTaskbar / rank eligibility.
@@ -35,7 +46,10 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
             return running;
         }
         auto& e = *state;
-        if (running != e.observedRunning) {
+        if (e.runningUnknown) {
+            e.runningUnknown = false;
+            ++(running ? t_runningReread.running : t_runningReread.stopped);
+        } else if (running != e.observedRunning) {
             LOG_DEFERRED(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u appId=%s",
                    id, e.observedRunning, running, e.sampleHwnd, e.samplePid,
                    e.appIdUpper.c_str());

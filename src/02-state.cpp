@@ -253,6 +253,9 @@ struct ButtonState {
     bool uncombined = false;  // own-window button (Never Combine)
     ULONGLONG lastRunningTick = 0;  // last time IsRunning was true (Alt-Tab grace)
     bool observedRunning = false;   // last UI snapshot; not a 400ms heartbeat
+    // No snapshot yet (new button) or reset by a desktop / lock switch: the
+    // next read is counted in the pass summary, not logged per button.
+    bool runningUnknown = true;
     // Last ApplyAllHighlights assignment: -1 unknown, 0 none, >0 1-based rank.
     int lastPaintRank = -1;
     uint32_t lastPaintSettingsGen = 0;

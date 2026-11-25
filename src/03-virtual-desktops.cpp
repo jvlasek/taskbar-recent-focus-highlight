@@ -181,6 +181,7 @@ void ClearButtonRunningGrace() {
     for (auto& [id, e] : g_buttonStates) {
         e.lastRunningTick = 0;
         e.observedRunning = false;
+        e.runningUnknown = true;
     }
 }
 

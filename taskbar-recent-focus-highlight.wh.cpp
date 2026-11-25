@@ -834,6 +834,9 @@ struct ButtonState {
     bool uncombined = false;  // own-window button (Never Combine)
     ULONGLONG lastRunningTick = 0;  // last time IsRunning was true (Alt-Tab grace)
     bool observedRunning = false;   // last UI snapshot; not a 400ms heartbeat
+    // No snapshot yet (new button) or reset by a desktop / lock switch: the
+    // next read is counted in the pass summary, not logged per button.
+    bool runningUnknown = true;
     // Last ApplyAllHighlights assignment: -1 unknown, 0 none, >0 1-based rank.
     int lastPaintRank = -1;
     uint32_t lastPaintSettingsGen = 0;
@@ -1267,6 +1270,7 @@ void ClearButtonRunningGrace() {
     for (auto& [id, e] : g_buttonStates) {
         e.lastRunningTick = 0;
         e.observedRunning = false;
+        e.runningUnknown = true;
     }
 }
 
@@ -2443,6 +2447,17 @@ bool TaskListButton_IsRunning(FrameworkElement taskListButtonElement) {
 }
 
 // IsRunning, plus a short grace so Alt-Tab flicker does not drop glows.
+// Running states read for the first time (new buttons) or again after a
+// desktop / lock switch reset them. Summed per UI thread and logged once by
+// the next full pass: a lock or unlock used to log one "Identity state"
+// line per button (about 20 per switch, capture
+// manual-20261125-211736-720767).
+struct RunningReread {
+    unsigned running = 0;
+    unsigned stopped = 0;
+};
+thread_local RunningReread t_runningReread;
+
 // Virtual-desktop switches clear observedRunning so pinned-not-running icons
 // on another desktop never keep a highlight. Call this on the UI thread
 // before AppAppearsOnTaskbar / rank eligibility.
@@ -2459,7 +2474,10 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
             return running;
         }
         auto& e = *state;
-        if (running != e.observedRunning) {
+        if (e.runningUnknown) {
+            e.runningUnknown = false;
+            ++(running ? t_runningReread.running : t_runningReread.stopped);
+        } else if (running != e.observedRunning) {
             LOG_DEFERRED(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u appId=%s",
                    id, e.observedRunning, running, e.sampleHwnd, e.samplePid,
                    e.appIdUpper.c_str());
@@ -4599,6 +4617,12 @@ void ApplyAllHighlights_UIThread() {
         if (running[bi]) {
             idents[bi] = GetCachedButtonIdentity(live[bi]);
         }
+    }
+    if (t_runningReread.running || t_runningReread.stopped) {
+        Wh_Log(L"Running state read: %u running, %u not running (new "
+               L"buttons, or after a desktop / lock switch)",
+               t_runningReread.running, t_runningReread.stopped);
+        t_runningReread = {};
     }
     // The shown buttons are authoritative for which windows have their own
     // slot: when Never Combine is switched off, no button is uncombined any

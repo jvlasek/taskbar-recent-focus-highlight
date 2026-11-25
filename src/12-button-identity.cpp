@@ -677,6 +677,12 @@ void ApplyAllHighlights_UIThread() {
             idents[bi] = GetCachedButtonIdentity(live[bi]);
         }
     }
+    if (t_runningReread.running || t_runningReread.stopped) {
+        Wh_Log(L"Running state read: %u running, %u not running (new "
+               L"buttons, or after a desktop / lock switch)",
+               t_runningReread.running, t_runningReread.stopped);
+        t_runningReread = {};
+    }
     // The shown buttons are authoritative for which windows have their own
     // slot: when Never Combine is switched off, no button is uncombined any
     // more and per-window ranks merge back into one app rank (0.11.35).
