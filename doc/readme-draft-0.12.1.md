@@ -30,39 +30,28 @@ app that asks for attention keeps Windows' red marks on top.
 
 ## How apps get ranked
 
-- An app counts as used once it has been in front for a few seconds
-  (**Minimum focus time**, default 8). Passing through it with Alt+Tab does
-  not count.
-- Coming back to an app that is still in the list makes it rank 1 right
-  away.
-- An app drops out a while after you last *used* it (**Decay**, default 30
-  minutes). Typing or clicking in it counts as use, so the app you are
-  working in keeps its highlight however long you stay in it. Away from the
-  keyboard, everything ages out.
-- Only running apps are marked; a pinned icon whose app is closed is not.
-- Each virtual desktop has its own list, and every taskbar (multi-monitor)
-  shows the same ranks.
-- Explorer folder windows count like any other app. The taskbar, desktop,
-  Start and input method windows do not.
+- An app counts after **8 s** in front (Minimum focus time); Alt+Tab passing
+  through does not.
+- It drops out **30 min** after you last *used* it (typing or clicking), so
+  the app you work in stays highlighted.
+- Only running apps. One list per virtual desktop, the same on every
+  monitor.
+- Start, Alt+Tab, the taskbar, desktop and lock screen do not count.
 
 ## Previews
 
-When you hover an app with two or more windows, the flyout marks the
-windows you used last in that app: the one you used last is rank 1 even if
-you have used other apps since. Windows have their own, shorter timing
-(Previews → minimum focus 1 s, decay 15 minutes).
-
-Rank 1 and the others are styled separately: a tinted card, a tinted title,
-either of them with an accent border, or a thin bar under the title.
+Flyout window previews are ranked by their last use, for each running app
+independently (own timing: 1 s minimum focus, 15 min decay). Rank 1 and the
+rest have separate styles: tinted card, tinted title (either with an accent
+border), or a bar under the title.
 
 ![Default preview styles: whole plate for rank 1, title plates for ranks 2 and 3](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/flyout-plate-title.png)
 
 ![The "with accent" preview styles](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/flyout-plate-accent-title-accent.png)
 
-Single-window flyouts are left alone unless **Also mark single-window
-previews** is on. If all you want is the active window marked in previews,
-[taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
-is a much lighter mod for exactly that.
+Single-window flyouts only with **Also mark single-window previews**. Just
+the active window marked? Use the much lighter
+[taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight).
 
 ## Settings
 
