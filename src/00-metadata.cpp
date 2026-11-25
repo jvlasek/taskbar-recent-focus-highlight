@@ -71,12 +71,12 @@ the active window marked? Use the much lighter
 
 ## Settings
 
-- **General**: how many apps, minimum focus time, when to skip it on
-  coming back, decay, exclude list.
-- **Taskbar icons**: style, color (system accent or your own), intensity per
-  rank, side bar size, fill, accent border width.
-- **Thumbnail previews**: on/off, how many windows, single-window previews,
-  styles, intensity per rank, their own minimum focus and decay.
+- **Exclude list**: apps never highlighted, on icons or previews.
+- **Taskbar icons**: how many apps, decay, minimum focus time and when to
+  skip it, style, color (system accent or your own), intensity per rank,
+  side bar size, fill, accent border width.
+- **Thumbnail previews**: on/off, how many windows, their own decay and
+  minimum focus time, single-window previews, styles, intensity per rank.
 
 The exclude list takes process names, paths or app IDs. Two buttons of one
 program (Total Commander and its Lister, for example) have different app
@@ -110,40 +110,6 @@ IDs; with the mod log on, each button's ID is shown as
 
 // ==WindhawkModSettings==
 /*
-- highlightCount: 3
-  $name: Number of highlighted apps
-  $description: How many recent apps to highlight on the taskbar (1–6 recommended)
-- minFocusSeconds: 8
-  $name: Minimum focus time (seconds)
-  $description: >-
-    Only count an app as recent if it stays focused at least this long.
-    Filters Alt+Tab noise. (Preview windows use a separate timer under Previews.)
-    See “When to skip min-focus” for re-focus of apps already in the list.
-- promoteMode: immediateTracked
-  $name: When to skip min-focus
-  $description: >-
-    Controls instant promotion when you re-focus an app (confirmed apps still
-    become rank 1 once promoted — this only skips the wait timer).
-
-    Immediate if in recency map (default): an app whose last confirm is still
-    inside the decay window promotes immediately, even if it is not currently
-    highlighted. A confirm past that window waits again.
-
-    Immediate only if highlighted: instant only when the app is already in the
-    top-N highlighted set; rank 4+ and new apps wait the full min-focus time.
-
-    Always wait: every app focus (including re-focus) waits min-focus seconds.
-  $options:
-  - immediateTracked: Immediate if confirm is still inside decay (default)
-  - immediateTopN: Immediate only if already highlighted (top N)
-  - alwaysWait: Always wait min-focus time
-- decayMinutes: 30
-  $name: Decay time (minutes)
-  $description: >-
-    Time since you last used an app (keyboard or mouse input while it was
-    in front) before it drops out of the taskbar highlight list. The app
-    you are working in stays highlighted. (Preview windows use a separate
-    decay under Previews.)
 - excludedPrograms: [""]
   $name: Exclude list
   $description: >-
@@ -158,6 +124,41 @@ IDs; with the mod log on, each button's ID is shown as
 
     Microsoft.WindowsCalculator_8wekyb3d8bbwe!App
 - icons:
+    - highlightCount: 3
+      $name: Number of highlighted apps
+      $description: How many recent apps to highlight on the taskbar (1–6 recommended)
+    - decayMinutes: 30
+      $name: Decay time (minutes)
+      $description: >-
+        Time since you last used an app (keyboard or mouse input while it was
+        in front) before it drops out of the taskbar highlight list. The app
+        you are working in stays highlighted. (Preview windows use a separate
+        decay under Thumbnail previews.)
+    - minFocusSeconds: 8
+      $name: Minimum focus time (seconds)
+      $description: >-
+        Only count an app as recent if it stays focused at least this long.
+        Filters Alt+Tab noise. (Preview windows use a separate timer under
+        Thumbnail previews.)
+        See “When to skip min-focus” for re-focus of apps already in the list.
+    - promoteMode: immediateTracked
+      $name: When to skip min-focus
+      $description: >-
+        Controls instant promotion when you re-focus an app (confirmed apps still
+        become rank 1 once promoted — this only skips the wait timer).
+
+        Immediate if in recency map (default): an app whose last confirm is still
+        inside the decay window promotes immediately, even if it is not currently
+        highlighted. A confirm past that window waits again.
+
+        Immediate only if highlighted: instant only when the app is already in the
+        top-N highlighted set; rank 4+ and new apps wait the full min-focus time.
+
+        Always wait: every app focus (including re-focus) waits min-focus seconds.
+      $options:
+      - immediateTracked: Immediate if confirm is still inside decay (default)
+      - immediateTopN: Immediate only if already highlighted (top N)
+      - alwaysWait: Always wait min-focus time
     - glowStyle: leftBar
       $name: Highlight style
       $description: >-
@@ -215,8 +216,8 @@ IDs; with the mod log on, each button's ID is shown as
       $name: Highlight recent windows
       $description: >-
         When hovering a multi-window taskbar icon, rank that flyout’s thumbnails
-        by window recency and mark the top N. Single-window flyouts: see the
-        next option.
+        by window recency and mark the top N. Single-window flyouts: see
+        "Also mark single-window previews".
     - highlightCount: 3
       $name: Number of highlighted windows
       $description: >-
@@ -224,6 +225,17 @@ IDs; with the mod log on, each button's ID is shown as
         Ranking is local to that flyout: the last focused window of this app is
         rank 1 even if other apps were used more recently. Set to 1 to mark only
         the latest window.
+    - decayMinutes: 15
+      $name: Decay time (minutes)
+      $description: >-
+        Drop a window from preview recency this long after you last used it
+        (0 = never). Separate from app ranking decay.
+    - minFocusSeconds: 1
+      $name: Minimum focus time (seconds)
+      $description: >-
+        How long a window must stay focused before it enters that flyout’s
+        recency list. Separate from app ranking min focus (0 = immediate).
+        Clicking a thumbnail counts like any other focus.
     - singleWindow: false
       $name: Also mark single-window previews
       $description: >-
@@ -285,17 +297,6 @@ IDs; with the mod log on, each button's ID is shown as
         lower rank is tinted more than rank 1). Bar under title uses the full
         accent and ignores this. Independent of Icons → Fill opacity. Per-rank intensity
         still scales the result.
-    - minFocusSeconds: 1
-      $name: Minimum focus (seconds)
-      $description: >-
-        How long a window must stay focused before it enters that flyout’s
-        recency list. Separate from app ranking min focus (0 = immediate).
-        Clicking a thumbnail counts like any other focus.
-    - decayMinutes: 15
-      $name: Decay (minutes)
-      $description: >-
-        Drop a window from preview recency this long after you last used it
-        (0 = never). Separate from app ranking decay.
   $name: Thumbnail previews
 */
 // ==/WindhawkModSettings==

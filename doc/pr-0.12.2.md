@@ -34,7 +34,7 @@ native element, and counts recency from when an app was last *used*.
 - **The side bar's halo** (a second, slightly larger translucent rectangle;
   XAML cannot blur it, so it showed as a hard-edged rim when magnified).
 - Symbol count: 26 (Taskbar.View.dll + taskbar.dll) -> 12 (Taskbar.View.dll
-  only). Lines: 8294 -> 8891, with the new features below included.
+  only). Lines: 8294 -> 8950, with the new features below included.
 
 ## Identity rule
 
@@ -130,6 +130,13 @@ title, Not marked (ranks 2+).
   ranks until the user first saves the settings; from then on the settings
   page applies. The state is kept in mod storage. (Per your note on
   Discord: no migration mechanism, so this is the mod's own.)
+- **Transition (0.12.2):** the app-ranking settings moved from the top
+  level into the Taskbar icons group, so only the exclude list (the one
+  setting for both) stays on top: `highlightCount`, `minFocusSeconds`,
+  `promoteMode`, `decayMinutes` -> `icons.*`. Same mechanism: on a 0.11.1
+  install (recognised by its stored `previews.style`) whose new keys are
+  unset or at their defaults, the old values are used until the user first
+  saves the settings. Both transitions go in 1.0.
 - **Removed, no transition needed:** `icons.glowRoundness` (fixed 28 %),
   `icons.glowLayers` (fixed 2), `icons.sizeBoostRank1..3` (feature removed),
   `requireTaskbarButton` (see above).
@@ -248,6 +255,7 @@ If this pull request updates an existing mod, describe the changes inside the ch
 * taskbar.dll is no longer hooked (12 symbols instead of 26), and preview cards are matched to their windows through Explorer's own card data, improving reliability.
 * New icon styles: Plate (the button's own plate, tinted) and Plate with accent (half tint plus an accent border, the look of Taskbar Active Window Highlight) replace Full and Frame. The side bar lost its halo. On multi-window buttons the plates also tint the stacked edge.
 * Previews: separate styles for rank 1 and ranks 2+, new Title (a plate over the card's title row) and "with accent" variants (after Taskbar Active Window Highlight), and ranks 2+ can be left unmarked. A previously chosen preview style is kept until you save the settings.
+* Settings reorganized: the number of apps, decay, minimum focus time and when to skip it moved into the Taskbar icons group (the exclude list is the only setting left on top). Your previous values keep working, but the settings page shows the defaults: check these and the preview styles, then save once.
 * New option to also mark single-window previews (off by default).
 * Ranks 4 and up fade further instead of repeating rank 3.
 * Icons are matched by Explorer's own app ID, so two buttons of one program (e.g. Total Commander and its Lister) are told apart; the exclude list accepts app IDs too.

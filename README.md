@@ -71,15 +71,15 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 ### General
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Number of highlighted apps | How many recent apps to boost (1–6 recommended) | 3 |
-| Minimum focus time (seconds) | How long a new app must stay focused to enter ranks. Re-focus follows “When to skip min-focus” | 8 |
-| When to skip min-focus | Immediate if in map / only if already top-N / always wait | Immediate if in map |
-| Decay time (minutes) | Drop app from ranks this long after you last used it | 30 |
 | Exclude list | Never highlight (exe, path, or AppId) | (empty) |
 
 ### Taskbar icons
 | Setting | Description | Default |
 |---------|-------------|---------|
+| Number of highlighted apps | How many recent apps to highlight (1–6 recommended) | 3 |
+| Decay time (minutes) | Drop app from ranks this long after you last used it | 30 |
+| Minimum focus time (seconds) | How long a new app must stay focused to enter ranks. Re-focus follows “When to skip min-focus” | 8 |
+| When to skip min-focus | Immediate if in map / only if already top-N / always wait | Immediate if in map |
 | Icon highlight style | Side bar (rotates with the taskbar edge) / Plate / Plate with accent | **Side bar** |
 | Highlight color | Accent / fixed / custom hex (also used for previews) | Accent |
 | Intensity rank 1/2/3 | Per rank (0–100); ranks 4+ fade further from rank 3 | 100 / 70 / 45 |

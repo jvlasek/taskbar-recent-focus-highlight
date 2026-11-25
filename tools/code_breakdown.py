@@ -173,9 +173,8 @@ OVERRIDES = {
         (21, 28, SHARED, A_META),       # README intro + hero screenshot
         (29, 56, APPS, A_META),         # Styles, How apps get ranked
         (57, 71, WINDOWS, A_META),      # Previews
-        (113, 146, APPS, A_META),       # YAML: count, min focus, promote, decay
-        (160, 212, APPS, A_META),       # YAML: icons.*
-        (213, 299, WINDOWS, A_META),    # YAML: previews.*
+        (126, 213, APPS, A_META),       # YAML: icons.* (count, decay, min focus, look)
+        (214, 300, WINDOWS, A_META),    # YAML: previews.*
     ],
     "01": [
         (177, 187, APPS, A_SETTINGS),   # Settings: icon fields
