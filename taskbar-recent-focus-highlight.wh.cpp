@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
-// @description     Visually highlight the most recently focused running apps on the taskbar
+// @description     Highlight the taskbar icons and window previews of the apps you used last
 // @version         0.12.2
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
@@ -73,10 +73,10 @@ the active window marked? Use the much lighter
 
 - **General**: how many apps, minimum focus time, when to skip it on
   coming back, decay, exclude list.
-- **Taskbar icons**: style, color (system accent or your own), strength per
+- **Taskbar icons**: style, color (system accent or your own), intensity per
   rank, side bar size, fill, accent border width.
 - **Thumbnail previews**: on/off, how many windows, single-window previews,
-  styles, strength per rank, their own minimum focus and decay.
+  styles, intensity per rank, their own minimum focus and decay.
 
 The exclude list takes process names, paths or app IDs. Two buttons of one
 program (Total Commander and its Lister, for example) have different app
@@ -130,7 +130,7 @@ IDs; with the mod log on, each button's ID is shown as
     highlighted. A confirm past that window waits again.
 
     Immediate only if highlighted: instant only when the app is already in the
-    top-N glow set; rank 4+ and new apps wait the full min-focus time.
+    top-N highlighted set; rank 4+ and new apps wait the full min-focus time.
 
     Always wait: every app focus (including re-focus) waits min-focus seconds.
   $options:
@@ -172,7 +172,7 @@ IDs; with the mod log on, each button's ID is shown as
       - full: Plate
       - frame: Plate with accent
     - glowColor: accent
-      $name: Glow color
+      $name: Highlight color
       $description: Base color for icon highlights (and previews)
       $options:
       - accent: System accent color
@@ -180,10 +180,10 @@ IDs; with the mod log on, each button's ID is shown as
       - blue: Blue
       - orange: Orange
       - white: White
-      - custom: Custom (see custom glow color)
+      - custom: Custom (see custom highlight color)
     - customGlowColor: "#00C853"
-      $name: Custom glow color
-      $description: Used when glow color is Custom (hex, e.g. #00C853)
+      $name: Custom highlight color
+      $description: Used when highlight color is Custom (hex, e.g. #00C853)
     - glowIntensityRank1: 100
       $name: Intensity rank 1
       $description: Overlay opacity for the most recent app (0–100). Linear — 60 is 60% of rank 1, not 36%.
@@ -268,14 +268,14 @@ IDs; with the mod log on, each button's ID is shown as
         Border width in pixels for the "with accent" styles (1–8).
     - intensityRank1: 100
       $name: Intensity rank 1
-      $description: Strength for the most recent window in the flyout (0–100)
+      $description: Intensity for the most recent window in the flyout (0–100)
     - intensityRank2: 70
       $name: Intensity rank 2
-      $description: Strength for the 2nd most recent window in the flyout (0–100)
+      $description: Intensity for the 2nd most recent window in the flyout (0–100)
     - intensityRank3: 45
       $name: Intensity rank 3
       $description: >-
-        Strength for the 3rd most recent window in the flyout (0–100). Ranks
+        Intensity for the 3rd most recent window in the flyout (0–100). Ranks
         4+ fade further from this value.
     - fillOpacity: 40
       $name: Tint opacity

@@ -16,6 +16,7 @@ General keys stay top-level; icon/preview keys are dotted.
 | General | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
 | General | `decayMinutes` | app decay |
 | General | `excludedPrograms[i]` | uppercase set |
+| Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | UI "Highlight color" / "Custom highlight color" since 0.12.2 (ids kept) |
 | Taskbar icons | `icons.glowStyle` | `leftBar` (Side bar) / `full` (Plate) / `frame` (Plate with accent) — UI names and look changed in 0.12.1, ids kept; legacy `bottomBar` falls back to Side |
 | Taskbar icons | `icons.glowAccentThickness` | Plate with accent border, 1–8 px (0.12.1) |
 | Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | color mode + hex |

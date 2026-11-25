@@ -81,8 +81,8 @@ written. First-time catalog installs get the YAML defaults with no extra step.
 | Setting | Description | Default |
 |---------|-------------|---------|
 | Icon highlight style | Side bar (rotates with the taskbar edge) / Plate / Plate with accent | **Side bar** |
-| Glow color | Accent / fixed / custom hex (also used for previews) | Accent |
-| Intensity rank 1/2/3 | Strength per rank (0–100); ranks 4+ fade further from rank 3 | 100 / 70 / 45 |
+| Highlight color | Accent / fixed / custom hex (also used for previews) | Accent |
+| Intensity rank 1/2/3 | Per rank (0–100); ranks 4+ fade further from rank 3 | 100 / 70 / 45 |
 | Side bar thickness / length | Side bar geometry (px / %) | 3 / 92 |
 | Fill opacity | Side bar and Plate strength; half for Plate with accent | 40 |
 | Accent thickness (px) | Border of Plate with accent (1–8) | 2 |
