@@ -455,10 +455,15 @@ ULONGLONG LastInputTick64(ULONGLONG now) {
     if (!GetLastInputInfo(&lii)) {
         return 0;
     }
-    // dwTime is GetTickCount (32-bit); the difference survives wrap.
-    const ULONGLONG ago = static_cast<DWORD>(static_cast<DWORD>(now) -
-                                              lii.dwTime);
-    return ago < now ? now - ago : 0;
+    // dwTime is GetTickCount (32-bit); the difference survives wrap. Input
+    // after `now` was read (a keystroke between the two calls) makes it
+    // negative: that is "now", not 49.7 days ago (Neon review 1.2).
+    const int32_t ago =
+        static_cast<int32_t>(static_cast<DWORD>(now) - lii.dwTime);
+    if (ago <= 0) {
+        return now;
+    }
+    return static_cast<ULONGLONG>(ago) < now ? now - ago : 0;
 }
 
 // What RefreshLastUseLocked moved (for the log).
@@ -504,8 +509,14 @@ unsigned RefreshLastUseLocked(HWND hwnd, ULONGLONG since, ULONGLONG at) {
     return moved;
 }
 
-// A new foreground (any window, transient ones included): stamp the window
-// that left with its last use, then start the new stretch.
+// A new real foreground: stamp the window that left with its last use, then
+// start the new stretch. Not called for transient windows (Alt+Tab, Start,
+// taskbar, desktop, lock screen): Windows often sends no second foreground
+// event when the user lands back on the same window, and the stretch stayed
+// on the switcher, so the app in use was never refreshed again and decayed
+// while used (Neon review 1.1.1). While a transient window is in front the
+// decay tick refreshes nothing (it is not g_inFrontHwnd); leaving for
+// another app stamps the last input, a switch's own keystrokes included.
 void NoteForegroundForLastUse(HWND hwnd) {
     if (hwnd == g_inFrontHwnd) {
         return;
@@ -551,7 +562,10 @@ void HandleForegroundChanged(HWND hWnd) {
     ProcessImagePathCacheScope pathCacheScope;
 
     hWnd = NormalizeFocusHwnd(hWnd);
-    NoteForegroundForLastUse(hWnd);
+    const bool transient = IsTransientForeground(hWnd);
+    if (!transient) {
+        NoteForegroundForLastUse(hWnd);
+    }
 
     // Normally the registry watch on the focus thread reports switches.
     // Without it, read here, before the transient check: switching to an
@@ -562,7 +576,7 @@ void HandleForegroundChanged(HWND hWnd) {
         OnVirtualDesktopSwitched(L"foreground");
     }
 
-    if (IsTransientForeground(hWnd)) {
+    if (transient) {
         // Alt-Tab frame, taskbar, desktop, IME. Do not cancel min-focus.
         bool ranksNonEmpty = false;
         {
@@ -689,6 +703,11 @@ void HandleForegroundChanged(HWND hWnd) {
             if (hwndChanged) {
                 g_pendingFocus.previewStartTick = now;
                 g_pendingFocus.previewConfirmed = false;
+                // The app confirm stamped the previous window only; confirm
+                // again so this one gets its own record (last use, Never
+                // Combine slot). Its deadline counts from the app's start,
+                // usually already passed (Neon review 1.1.3).
+                g_pendingFocus.appConfirmed = false;
             }
             sameAppPending = true;
         } else {
@@ -861,6 +880,15 @@ void HandleWindowDestroyed(HWND hwnd) {
     bool known = false;
     bool previewChanged = false;
     bool droppedPending = false;
+    // The window in front closed: its last use is now (Neon review 1.1.2).
+    const bool wasInFront = hwnd == g_inFrontHwnd;
+    const ULONGLONG lastUse =
+        wasInFront ? LastInputTick64(GetTickCount64()) : 0;
+    const ULONGLONG inFrontSince = g_inFrontSince;
+    if (wasInFront) {
+        g_inFrontHwnd = nullptr;
+        g_inFrontSince = 0;
+    }
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         for (auto& [id, desk] : g_desktopMaps) {
@@ -869,7 +897,27 @@ void HandleWindowDestroyed(HWND hwnd) {
                 known = true;
                 previewChanged = true;
             }
-            if (desk.windowAppFocus.erase(hwnd)) {
+            if (auto w = desk.windowAppFocus.find(hwnd);
+                w != desk.windowAppFocus.end()) {
+                // Hand the window's recency to its app before the record
+                // goes: the recompute that folds it may not have run since
+                // the last stamp (Neon review 1.1.4). The window is already
+                // destroyed, so no liveness check here.
+                ULONGLONG tick = w->second.tick;
+                // Same rule as RefreshLastUseLocked: confirmed in this
+                // stretch in front.
+                if (wasInFront && lastUse > tick &&
+                    w->second.tick >= inFrontSince) {
+                    tick = lastUse;
+                }
+                if (!w->second.key.empty()) {
+                    auto app = desk.appFocusMap.find(w->second.key);
+                    if (app != desk.appFocusMap.end() &&
+                        tick > app->second.lastConfirmedFocusTick) {
+                        app->second.lastConfirmedFocusTick = tick;
+                    }
+                }
+                desk.windowAppFocus.erase(w);
                 known = true;
             }
             for (const auto& [key, info] : desk.appFocusMap) {

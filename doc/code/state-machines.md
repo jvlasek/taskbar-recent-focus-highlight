@@ -226,12 +226,18 @@ Notes
   (`perWindow`).
 - Re-focus within `decayMinutes` counts as *already tracked*, which lets
   machine 2 skip the wait (default `promoteMode`).
-- `HandleWindowDestroyed` removes the window record at once; the app record
-  stays until decay.
+- `HandleWindowDestroyed` removes the window record at once, first raising
+  its app record to the window's tick (and to the last input if it was the
+  window in front, 0.12.2); the app record stays until decay.
 - Last use (0.12.1): a window record's tick is its confirm time, moved
   forward to the last input while it stays in front (decay tick) and when it
   leaves the foreground — only within a stretch in front in which it was
-  confirmed. Same for the preview record in machine 4.
+  confirmed. Same for the preview record in machine 4. A transient
+  foreground (Alt+Tab, Start, taskbar, desktop, lock screen) does not end the
+  stretch (0.12.2): the decay tick skips while it is in front, and landing
+  back on the same window without a new foreground event resumes it.
+- A same-app window switch after the app confirm clears `appConfirmed`
+  (0.12.2), so the new window is confirmed and gets its own record.
 
 ## 4. Window recency record and flyout card
 

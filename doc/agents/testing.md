@@ -15,6 +15,7 @@ commit.
   list, rank 4+ intensity.
 - `run-preview-identity-tests.py`: card → window resolve.
 - `run-shell-activation-tests.py`: focus notification path.
+- `run-last-use-tests.py`: last use — `GetLastInputInfo` wrap / race, the stretch in front across transient windows, leave stamps, destroyed window in front, same-app re-confirm (0.12.2).
 - `run-icon-order-tests.py`: glow host placement planner and geometry.
 - `run-layout-footprint-tests.py`: overlay chrome has zero desired size (plates, side bar, preview overlays) and unchanged placement.
 - `run-dispatcher-tests.py`: unload drain (Windows + g++ only).
