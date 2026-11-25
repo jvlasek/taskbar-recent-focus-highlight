@@ -225,7 +225,7 @@ rank 1.
 
 ## Testing
 
-Live on Windows 11 26100-era builds through 0.11.2-0.12.1: combined and
+Live on Windows 11 26100-era builds through 0.11.2-0.12.2: combined and
 Never Combine taskbars, multiple virtual desktops (including empty ones and
 switches by clicking another desktop's flashing button), sleep / lock,
 taskbar moved to the left and back, mod disable / enable, settings
