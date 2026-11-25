@@ -103,7 +103,7 @@ and must not guess identity from localized UI strings.
 | No `SetTimer` cross-thread | HWND belongs to the focus thread; debounce never armed | `PostMessage` → `SetTimer` in `WndProc` |
 | No COM under `g_stateMutex` | UI takes that mutex to paint; hung `SHGetPropertyStoreForWindow` freezes the taskbar | Resolve class/AUMID/path **then** lock |
 | VDM on the focus thread only | STA `CoCreate` on one thread, use/release on another | Registry first; VDM fallback on the worker; UI reads cached GUID |
-| Accent / desktop id not per-paint | `UISettings` + registry on every UVS; broadcast never reaches `HWND_MESSAGE` | Cache accent in `std::atomic<uint32_t>` outside `Settings`; `UISettings::ColorValuesChanged` → `PostToHookThread`. Desktop id from switch + decay |
+| Accent / desktop id not per-paint | `UISettings` + registry on every UVS; WinRT event callbacks run on thread-pool threads that unload cannot drain | Cache accent in `std::atomic<uint32_t>` outside `Settings`; refresh on `WM_SETTINGCHANGE("ImmersiveColorSet")` / `WM_DWMCOLORIZATIONCOLORCHANGED` to the worker's top-level window (0.12.2; `ColorValuesChanged` before, when the window was `HWND_MESSAGE`). Desktop id from switch + decay |
 | Identity-map keys need a live weak_ref | Raw `IUnknown*` is reused when Explorer reallocates a button | Erase the entry unless `weak.get() == this button` |
 | Identity-keyed maps, not linear `weak.get()` | Four COM-resolving scans per UVS per button | `unordered_map<IUnknown*, …>`; keep the map, skip paint on unranked |
 | No native collection reordering | Historical clears/paints healed native z-order | Move/remove only the owned host. Use explicit InsertAt even at end so insertion/removal notify deferred bookkeeping |

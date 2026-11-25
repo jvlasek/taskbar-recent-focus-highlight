@@ -7,7 +7,7 @@ states, changed from several functions). Both kinds are drawn the same way
 here; each section says which it is, where the state lives and which thread
 owns it.
 
-Source: v0.11.46 (`src/`). Function names are the anchors: search for them
+Source: v0.12.2 (`src/`; machines 1–14 drawn at 0.11.46 and updated since, 15 added in 0.12.2). Function names are the anchors: search for them
 when the code moves. Domain tags match [code-breakdown.md](code-breakdown.md):
 **apps** = taskbar icon ranks, **windows** = flyout card ranks, **shared** =
 both.
@@ -28,6 +28,7 @@ both.
 | 12 | [Unload drain of one UI dispatcher](#12-unload-drain-of-one-ui-dispatcher) | explicit | shared | `DispatcherOpEnd`, `DrainProof`, `highRan` | Windhawk thread |
 | 13 | [Legacy preview-style transition](#13-legacy-preview-style-transition) | explicit, persisted | windows | mod storage `legacyPreviewStyleState` | Windhawk thread |
 | 14 | [XAML event watches](#14-xaml-event-watches) | implicit | apps + windows | `g_layoutWatches`, `g_repeaterWatches` | UI thread |
+| 15 | [Last-use stretch](#15-last-use-stretch) | implicit | shared | `g_inFrontHwnd`, `g_inFrontSince` | focus worker |
 
 ## How the machines connect
 
@@ -44,6 +45,7 @@ flowchart TB
         MT["2 Min-focus tracks"]
         VD["8 Current desktop"]
         DT["9 Decay timer"]
+        LU["15 Last-use stretch"]
     end
     subgraph Records["Per-desktop records"]
         AR["3 App records"]
@@ -69,6 +71,10 @@ flowchart TB
     VD -->|switch| FP
     DT --> AR
     DT --> WR
+    FC --> LU
+    DT -->|refresh in front| LU
+    LU -->|last input| AR
+    LU -->|last input| WR
     AR -->|RequestApplyVisuals| FP
     WR -->|RequestApplyPreviewVisuals| FR
     FP --> BT
@@ -226,12 +232,18 @@ Notes
   (`perWindow`).
 - Re-focus within `decayMinutes` counts as *already tracked*, which lets
   machine 2 skip the wait (default `promoteMode`).
-- `HandleWindowDestroyed` removes the window record at once; the app record
-  stays until decay.
+- `HandleWindowDestroyed` removes the window record at once, first raising
+  its app record to the window's tick (and to the last input if it was the
+  window in front, 0.12.2); the app record stays until decay.
 - Last use (0.12.1): a window record's tick is its confirm time, moved
   forward to the last input while it stays in front (decay tick) and when it
   leaves the foreground — only within a stretch in front in which it was
-  confirmed. Same for the preview record in machine 4.
+  confirmed. Same for the preview record in machine 4. A transient
+  foreground (Alt+Tab, Start, taskbar, desktop, lock screen) does not end the
+  stretch (0.12.2): the decay tick skips while it is in front, and landing
+  back on the same window without a new foreground event resumes it.
+- A same-app window switch after the app confirm clears `appConfirmed`
+  (0.12.2), so the new window is confirmed and gets its own record.
 
 ## 4. Window recency record and flyout card
 
@@ -393,7 +405,11 @@ differs from the last one on that thread (`static thread_local lastKey`).
 
 **Implicit, shared.** The worker owns the desktop GUID (registry
 `CurrentVirtualDesktop`, `IVirtualDesktopManager` fallback); UI threads only
-read `g_currentDesktopId`.
+read `g_currentDesktopId`. Since 0.11.49 a `RegNotifyChangeKeyValue` watch on
+the `VirtualDesktops` key (`DesktopKeyWatch`, re-armed after each signal)
+reports switches; while it is lost (`g_desktopKeyWatchActive` false) every
+foreground change reads the value. Since 0.12.2 a registry signal no longer
+holds the worker's queued messages back.
 
 ```mermaid
 stateDiagram-v2
@@ -403,7 +419,7 @@ stateDiagram-v2
     state "Known (desktop B)" as B
     [*] --> U
     U --> A : first RefreshCurrentDesktopId<br/>(not reported as a switch)
-    A --> B : EVENT_SYSTEM_DESKTOPSWITCH,<br/>or GUID changed at a foreground change
+    A --> B : registry watch, EVENT_SYSTEM_DESKTOPSWITCH,<br/>decay tick, or GUID changed at a foreground change
     B --> A : switch back (A's records are still there)
     A --> U : unload
     B --> U : unload
@@ -467,7 +483,7 @@ stateDiagram-v2
     Idle --> X : WM_APP_SHUTDOWN + thread WM_APP<br/>(Wh_ModUninit, INFINITE join)
     Full --> X : same
     Deg --> X : same
-    X --> N : DeactivateFocusTracking (hooks, watch,<br/>accent, shell hook), timers killed, VDM released
+    X --> N : DeactivateFocusTracking (hooks, watch,<br/>shell hook), timers killed, VDM released
 ```
 
 Activation posts the current foreground window, so the first candidate does
@@ -491,7 +507,6 @@ stateDiagram-v2
     state "Unloaded" as Done
     state "Not loaded" as NotLoaded
     [*] --> Init : Wh_ModInit, LoadSettings
-    Init --> NotLoaded : nothing to paint<br/>(highlightCount 0 and previews off)
     Init --> NotLoaded : Taskbar.View hooks or worker failed
     Init --> Hooked : Taskbar.View.dll already loaded
     Init --> WaitDll : not loaded yet (LoadLibraryExW hooked)
@@ -503,9 +518,11 @@ stateDiagram-v2
     Unl --> Done : worker stopped, every UI dispatcher drained,<br/>state cleared
 ```
 
-`Wh_ModSettingsChanged` keeps the mod in *Running*: reload settings, drop
-newly excluded records, recompute ranks, re-arm or drop the candidate's
-timers on the worker, repaint. `Running` without `Hooked` paints nothing: ranks wait for the first
+`Wh_ModSettingsChanged` keeps the mod in *Running*: reload settings and
+repaint; on the worker, drop newly excluded records (`DropExcludedRecords`,
+0.12.2) and re-arm or drop the candidate's timers. Nothing to paint
+(highlightCount 0, previews off) is *Running* too since 0.12.2, so a later
+settings change takes effect. `Running` without `Hooked` paints nothing: ranks wait for the first
 `TaskListButton` (`RunOnUiThread` logs "no dispatcher anchor yet").
 
 ## 12. Unload drain of one UI dispatcher
@@ -586,6 +603,37 @@ stateDiagram-v2
 Events are ignored while unloading (and, for `SizeChanged`, during the
 mod's own relayout). A registration that loses a race with another one is revoked at once.
 Entries left after the drain are logged as `ERROR: ... not revoked`.
+Both watches are made only when `RememberUiDispatcher` recorded the
+element's thread (`ElementClearing` since 0.12.2), so the drain visits it.
+
+## 15. Last-use stretch
+
+**Implicit, shared** (0.12.1, fixed in 0.12.2). Which window is "in front"
+for last use, and since when. Focus worker only: `NoteForegroundForLastUse`,
+`RefreshInFrontLastUse` (decay tick), `HandleWindowDestroyed`. Moves the
+ticks of machines 3 and 4 forward; only records confirmed during the stretch
+(`tick >= g_inFrontSince`) move, so a short visit cannot jump ranks.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    state "None" as N
+    state "In front: A (since t)" as A
+    state "Transient window in front, A kept" as T
+    [*] --> N
+    N --> A : real foreground A
+    A --> A : decay tick, A in front:<br/>A's records to last input
+    A --> T : Alt+Tab / Start / taskbar /<br/>desktop / lock screen
+    T --> A : back on A (foreground event or none)
+    T --> A : decay tick sees A in front again
+    A --> N : A destroyed: stamped, folded<br/>into its app, cleared
+    A --> A : real foreground B:<br/>A stamped with last input, stretch = B
+```
+
+Before 0.12.2 a transient window became the stretch; landing back on the
+same window often brings no foreground event, so the app in use was never
+refreshed again and decayed while used (Neon review 1.1.1). Away from the
+keyboard the last input stops, so everything still ages out.
 
 ---
 

@@ -87,7 +87,10 @@ void PublishWindowAppIds(const std::vector<HWND>& windows,
     }
     std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
     for (HWND h : windows) {
-        g_windowAppId[h] = WindowAppIdEntry{appIdUpper, WindowPid(h)};
+        // A window already gone has no PID to guard a recycled handle with.
+        if (const DWORD pid = WindowPid(h)) {
+            g_windowAppId[h] = WindowAppIdEntry{appIdUpper, pid};
+        }
     }
     if (g_windowAppId.size() > 512) {
         for (auto it = g_windowAppId.begin(); it != g_windowAppId.end();) {
@@ -102,7 +105,7 @@ std::wstring LookupWindowAppId(HWND hwnd) {
     if (it == g_windowAppId.end()) {
         return {};
     }
-    if (it->second.pid && WindowPid(hwnd) != it->second.pid) {
+    if (!it->second.pid || WindowPid(hwnd) != it->second.pid) {
         g_windowAppId.erase(it);  // handle recycled into another process
         return {};
     }
@@ -250,6 +253,9 @@ struct ButtonState {
     bool uncombined = false;  // own-window button (Never Combine)
     ULONGLONG lastRunningTick = 0;  // last time IsRunning was true (Alt-Tab grace)
     bool observedRunning = false;   // last UI snapshot; not a 400ms heartbeat
+    // No snapshot yet (new button) or reset by a desktop / lock switch: the
+    // next read is counted in the pass summary, not logged per button.
+    bool runningUnknown = true;
     // Last ApplyAllHighlights assignment: -1 unknown, 0 none, >0 1-based rank.
     int lastPaintRank = -1;
     uint32_t lastPaintSettingsGen = 0;
@@ -392,6 +398,7 @@ bool RememberUiDispatcher(FrameworkElement el) {
         if (!dispatcher || !dispatcher.HasThreadAccess()) {
             return false;
         }
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_dispatchersMutex);
         if (!g_uiDispatchers) {
             return false;
@@ -407,7 +414,8 @@ bool RememberUiDispatcher(FrameworkElement el) {
         if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
                              GetCurrentProcess(), &thread, SYNCHRONIZE,
                              FALSE, 0)) {
-            Wh_Log(L"Cannot capture UI thread: %u", GetLastError());
+            const DWORD error = GetLastError();
+            LOG_DEFERRED(L"Cannot capture UI thread: %u", error);
             return false;
         }
         winrt::handle ownedThread{thread};
@@ -439,6 +447,10 @@ constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
+// Windows sends several accent messages per change (and UISettings can lag
+// the first one): read once, shortly after the last.
+constexpr UINT_PTR kAccentRefreshTimerId = 5;
+constexpr UINT kAccentRefreshDelayMs = 250;
 // Change notification on Explorer's VirtualDesktops registry key (public
 // RegNotifyChangeKeyValue). Windows writes CurrentVirtualDesktop there on a
 // switch, sometimes after the foreground change the switch causes (clicking
@@ -485,6 +497,8 @@ int RankIntensity(const int (&perRank)[3], int rankIdx) {
 constexpr PCWSTR kBackgroundElementName = L"BackgroundElement";
 // Thumbnail preview glow (own named overlays on TaskItemThumbnailView).
 constexpr PCWSTR kThumbGlowElementName = L"WhRecentFocusThumbGlow";
+// Card overlay Border beside BackgroundBorder (14-preview-overlay).
+constexpr wchar_t kThumbCardOverlayName[] = L"WhRecentFocusThumbCard";
 constexpr PCWSTR kThumbGlowLayerNames[] = {
     L"WhRecentFocusThumbGlowL0",
     L"WhRecentFocusThumbGlowL1",
@@ -492,6 +506,3 @@ constexpr PCWSTR kThumbGlowLayerNames[] = {
 // Title-area overlays (separate so plate host can sit full-card).
 constexpr PCWSTR kThumbTitleBgName = L"WhRecentFocusThumbTitleBg";
 constexpr PCWSTR kThumbTitleBarName = L"WhRecentFocusThumbTitleBar";
-// Marker: we tinted native BackgroundBorder. Tag holds the previous Brush
-// (or is empty if the local value was unset) so Taskbar Styler survives clear.
-

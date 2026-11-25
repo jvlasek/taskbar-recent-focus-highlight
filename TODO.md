@@ -234,7 +234,8 @@ first, then the low-risk preview fixes, then identity.
   returns, then reloads the same DLL. So a stuck drain is visible and
   self-heals if the UI thread recovers; a pinned DLL would instead come back
   with stale globals. A failed `Wh_ModInit` (returns FALSE) is silent in the
-  UI: the toggle stays on, `Wh_ModUninit` is not called.
+  UI: the toggle stays on, `Wh_ModUninit` is not called. (Since 0.12.2
+  "nothing to paint" no longer returns FALSE.)
   Possible follow-up: periodic "still waiting on thread N" log while draining.
   2026-11-16 (0.11.25-0.11.27): `tests/run-dispatcher-tests.py` passed on
   Windows (needs g++; fails on Linux by design), and dozens of live

@@ -197,7 +197,12 @@ winrt::com_ptr<IUnknown> GetWindowsUdkTaskItemFromTaskListButton(
     return windowsUdkTaskItem;
 }
 
-void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
+// Returns the button's WindowsUdk TaskGroup with its own reference. The
+// capture flag is reset by a scope guard, so an exception cannot leave
+// ITaskGroup::IsRunning answering false for Explorer and other mods on this
+// thread (Neon review 1.3).
+winrt::com_ptr<IUnknown> GetWindowsUdkTaskGroupFromTaskListButton(
+    UIElement element) {
     if (!TryGetItemFromContainer_TaskListGroupViewModel_Original ||
         !TaskListGroupViewModel_IsMultiWindow_Original) {
         return nullptr;
@@ -208,11 +213,22 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
     if (!groupViewModel) {
         return nullptr;
     }
+    struct CaptureScope {
+        CaptureScope() {
+            g_capturedTaskGroup = nullptr;
+            g_captureTaskGroup = true;
+        }
+        ~CaptureScope() { g_captureTaskGroup = false; }
+    };
+    winrt::com_ptr<IUnknown> group;
+    {
+        CaptureScope capture;
+        TaskListGroupViewModel_IsMultiWindow_Original(
+            (void**)groupViewModel.get() - 1);
+    }
+    // AddRef while the view model (which holds the group) is still alive.
+    group.copy_from(static_cast<IUnknown*>(g_capturedTaskGroup));
     g_capturedTaskGroup = nullptr;
-    g_captureTaskGroup = true;
-    TaskListGroupViewModel_IsMultiWindow_Original((void**)groupViewModel.get() -
-                                                  1);
-    g_captureTaskGroup = false;
     // If the IsMultiWindow -> ITaskGroup::IsRunning path changes in
     // Explorer, no group is ever captured and a grouped app's second window
     // is never ranked. Say so once (Fable review 3.1). Single misses are
@@ -220,7 +236,7 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
     // many misses with no capture at all count.
     static std::atomic<unsigned> captureHits{0}, captureMisses{0};
     static std::atomic<bool> loggedCaptureMiss{false};
-    if (g_capturedTaskGroup) {
+    if (group) {
         ++captureHits;
     } else if (++captureMisses >= 20 && captureHits.load() == 0 &&
                !loggedCaptureMiss.exchange(true)) {
@@ -228,7 +244,7 @@ void* GetWindowsUdkTaskGroupFromTaskListButton(UIElement element) {
                L"IsMultiWindow / ITaskGroup::IsRunning changed?",
                captureMisses.load());
     }
-    return g_capturedTaskGroup;
+    return group;
 }
 
 // Synchronous snapshot of the button's Explorer AppId and window list (UI
@@ -249,7 +265,9 @@ ButtonCapture CaptureButton(FrameworkElement button) {
                 return;
             }
         }
-        groupWindows.push_back(CapturedWindow{h, PidFromHwnd(h)});
+        if (const DWORD windowPid = PidFromHwnd(h)) {
+            groupWindows.push_back(CapturedWindow{h, windowPid});
+        }
     };
     std::vector<HWND> udkWindows;
     try {
@@ -267,9 +285,9 @@ ButtonCapture CaptureButton(FrameworkElement button) {
                 udkWindows.push_back(h);
             }
         }
-        void* windowsUdkTaskGroup =
+        const winrt::com_ptr<IUnknown> udkGroup =
             GetWindowsUdkTaskGroupFromTaskListButton(el);
-        if (windowsUdkTaskGroup) {
+        if (void* windowsUdkTaskGroup = udkGroup.get()) {
             groupAppId = UdkTaskGroupAppId(windowsUdkTaskGroup);
             std::vector<HWND> groupHwnds;
             if (CollectUdkGroupWindows(windowsUdkTaskGroup, groupHwnds)) {
@@ -298,6 +316,7 @@ ButtonCapture CaptureButton(FrameworkElement button) {
         }
         {
             bool changed = false;
+            DeferredLogScope logScope;  // logs after unlock
             std::lock_guard<std::mutex> lock(g_uncombinedMutex);
             if (uncombined) {
                 changed = g_uncombinedWindowsByThread[GetCurrentThreadId()]
@@ -308,7 +327,7 @@ ButtonCapture CaptureButton(FrameworkElement button) {
                               .erase(ownWindow) > 0;
             }
             if (changed) {
-                Wh_Log(L"Button windows: button=%p own=%p -> %s",
+                LOG_DEFERRED(L"Button windows: button=%p own=%p -> %s",
                        data.buttonId, ownWindow,
                        uncombined ? L"uncombined (own slot)" : L"combined");
             }
@@ -361,8 +380,13 @@ std::wstring EnsureButtonIdentity(FrameworkElement button) {
         return {};
     }
     ButtonCapture data = CaptureButton(button);
+    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_buttonStateMutex);
-    auto& e = *FindButtonStateLocked(button, true);
+    ButtonState* state = FindButtonStateLocked(button, true);
+    if (!state) {
+        return {};
+    }
+    auto& e = *state;
     const bool windowsChanged =
         e.groupWindows.size() != data.windows.size() ||
         !std::equal(e.groupWindows.begin(), e.groupWindows.end(),
@@ -371,7 +395,7 @@ std::wstring EnsureButtonIdentity(FrameworkElement button) {
                         return a.hwnd == b.hwnd && a.pid == b.pid;
                     });
     if (e.appIdUpper != data.explorerAppId) {
-        Wh_Log(L"Button identity: button=%p appId=%s (was %s) windows=%zu "
+        LOG_DEFERRED(L"Button identity: button=%p appId=%s (was %s) windows=%zu "
                L"running=%d",
                id, data.explorerAppId.c_str(), e.appIdUpper.c_str(),
                data.windows.size(), data.running);
@@ -653,6 +677,12 @@ void ApplyAllHighlights_UIThread() {
             idents[bi] = GetCachedButtonIdentity(live[bi]);
         }
     }
+    if (t_runningReread.running || t_runningReread.stopped) {
+        Wh_Log(L"Running state read: %u running, %u not running (new "
+               L"buttons, or after a desktop / lock switch)",
+               t_runningReread.running, t_runningReread.stopped);
+        t_runningReread = {};
+    }
     // The shown buttons are authoritative for which windows have their own
     // slot: when Never Combine is switched off, no button is uncombined any
     // more and per-window ranks merge back into one app rank (0.11.35).
@@ -664,10 +694,11 @@ void ApplyAllHighlights_UIThread() {
                 shownUncombined.insert(idents[bi].sampleHwnd);
             }
         }
+        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_uncombinedMutex);
         auto& mine = g_uncombinedWindowsByThread[GetCurrentThreadId()];
         if (shownUncombined != mine) {
-            Wh_Log(L"Uncombined windows (this taskbar): %zu -> %zu",
+            LOG_DEFERRED(L"Uncombined windows (this taskbar): %zu -> %zu",
                    mine.size(), shownUncombined.size());
             mine = std::move(shownUncombined);
         }

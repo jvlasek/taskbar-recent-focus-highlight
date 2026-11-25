@@ -20,7 +20,7 @@ in `identity.md`.
 | Same-PID during app timer | Still the same candidate only if the new foreground window maps to the same Explorer AppId | New window of the app; UWP hosts and TC / Lister share a process |
 | App decay | Default 30 min, **from last use** (0.12.1) | List stays “recent” |
 | Preview decay | Default 15 min, from last use | Separate |
-| Last use (0.12.1) | Decay tick: the confirmed window in front gets `GetLastInputInfo` time; on a foreground change the window that left gets it (`NoteForegroundForLastUse`, `RefreshInFrontLastUse`). Only records confirmed in the current stretch in front (`tick >= g_inFrontSince`) move | "Recently used", not "recently switched to": an app used without switching for longer than the decay lost its highlight while in use (Windows Sandbox, capture manual-20261120-071227). A visit shorter than min focus refreshes nothing, so it cannot jump ranks. Away from the keyboard the input time stops, so everything still ages out; lock screen = shell, refreshes nothing. Watching without input ages out too. Checked on capture manual-20261120-154409-086197 (26 h): 59 decays, none earlier than 30 min after the last confirm, 19 extended by use (up to 53 min after the last switch) |
+| Last use (0.12.1) | Decay tick: the confirmed window in front gets `GetLastInputInfo` time; on a foreground change the window that left gets it (`NoteForegroundForLastUse`, `RefreshInFrontLastUse`). Only records confirmed in the current stretch in front (`tick >= g_inFrontSince`) move. Transient windows (`IsTransientForeground`) do not start a stretch (0.12.2); a destroyed window in front is stamped and folded into its app at once | "Recently used", not "recently switched to": an app used without switching for longer than the decay lost its highlight while in use (Windows Sandbox, capture manual-20261120-071227). A visit shorter than min focus refreshes nothing, so it cannot jump ranks. Away from the keyboard the input time stops, so everything still ages out; lock screen = shell, refreshes nothing; before 0.12.2 Alt+Tab / Start moved the stretch to the switcher and, with no second foreground event on landing back, the app in use decayed (Neon review 1.1.1). Watching without input ages out too. Checked on capture manual-20261120-154409-086197 (26 h): 59 decays, none earlier than 30 min after the last confirm, 19 extended by use (up to 53 min after the last switch) |
 | Exclude list | Path / file / AppId, case-insensitive | Standard Windhawk UX |
 | Shell hosts ignored | SearchHost, StartMenuExperienceHost, ShellExperienceHost, ShellHost, TextInputHost; explorer **except** `CabinetWClass` / `ExploreWClass` | Don’t rank the shell. Folder windows are a real app (same process as the taskbar). AFH/WWAHost **are** ranked via `APPID:` |
 | Highlight count | 0–16 (UI suggests 1–6) | Settings-capped |
@@ -103,6 +103,10 @@ NOACTIVATE extended styles, replacing its message-only window. It registers
 SHELLHOOK before reporting startup. If registration fails it logs the degraded
 mode and keeps foreground WinEvents; no polling fallback is added. Successful
 registrations are removed before destruction, including WinEvent setup failure. WM_CLOSE cannot destroy this worker-owned notification window.
+Being top-level, it also receives the accent broadcasts
+(`WM_SETTINGCHANGE` "ImmersiveColorSet", `WM_DWMCOLORIZATIONCOLORCHANGED`);
+once tracking runs they arm a 250 ms timer that re-reads the accent
+(0.12.2, replaces `UISettings::ColorValuesChanged`).
 
 The 0.10.13 two-second foreground polling recovery and its timer are removed;
 there is no polling fallback in this implementation. Existing minimum-focus timers
@@ -120,8 +124,8 @@ missing Calculator foreground WinEvents remains unknown.
   messages to same-process (Explorer) windows and can stall the worker and the
   unload join. Titles are for logs only, never identity.
 - `SHGetPropertyStoreForWindow`, `OpenProcess` / `QueryFullProcessImageName`
-  and the registry read run on the worker (or the Windhawk thread in
-  `Wh_ModSettingsChanged`), never on the taskbar UI thread and never under
-  `g_stateMutex`.
+  and the registry read run on the worker (a settings change too, since
+  0.12.2: `DropExcludedRecords` on `WM_APP_SETTINGS_CHANGED`), never on the
+  taskbar UI thread and never under `g_stateMutex`.
 - `IVirtualDesktopManager` is created, used and released only on the worker
   (registry first, COM only if that fails). The UI reads `g_currentDesktopId`.

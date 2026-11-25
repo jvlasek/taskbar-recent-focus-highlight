@@ -4,7 +4,7 @@ from pathlib import Path
 
 parts = ['''<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="1440" viewBox="0 0 1480 1440" role="img" aria-labelledby="title description">
 <title id="title">Taskbar Recent Focus Highlight — runtime flow</title>
-<desc id="description">Shared foreground tracking feeds independent app and window recency. Taskbar identity uses an asynchronous metadata cache. Flyout identity captures the presented HWND using GetThumbnailWindow for immersive apps. All XAML painting stays on its UI dispatcher.</desc>
+<desc id="description">Shared foreground tracking feeds per-window recency, folded into apps by Explorer's AppId. Taskbar identity is captured synchronously from each button's view model. Flyout identity reads each card's window from its view model. All XAML painting stays on its UI dispatcher.</desc>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#64748b"/></marker></defs>
 <style>text{font-family:Segoe UI,Arial,sans-serif;fill:#172b43} .heading{font-size:23px;font-weight:700}.body{font-size:18px}.small{font-size:16px;fill:#475569}.tag{font-size:15px;font-weight:700;letter-spacing:1px}.wire{fill:none;stroke:#64748b;stroke-width:2;marker-end:url(#arrow)}</style>
 <rect width="1480" height="1440" fill="#f6f8fc"/>
@@ -23,9 +23,9 @@ def wire(points):
     parts.append(f'<path class="wire" d="{points}"/>')
 
 text(40,46,'Taskbar Recent Focus Highlight','heading')
-text(40,76,'Two recency paths · mod 0.11.1 · architecture checked 2026-10-06','small')
+text(40,76,'Two recency paths · mod 0.12.2 · architecture checked 2026-11-25','small')
 box(40,102,680,110,'Foreground event',[
-    'EVENT_SYSTEM_FOREGROUND → focus thread',
+    'EVENT_SYSTEM_FOREGROUND → focus thread (taskbar process only).',
     'HandleForegroundNotification validates actual foreground.'])
 box(760,102,680,110,'Shell activation notification',[
     'WINDOWACTIVATED / RUDEAPPACTIVATED.',
@@ -34,7 +34,7 @@ wire('M380 212 V234 H650 V252')
 wire('M1100 212 V234 H830 V252')
 box(300,252,880,110,'Shared focus worker · HandleForegroundChanged',[
     'Normalize HWND → ResolveAppIdentity → exclusions + current desktop.',
-    'Separate pending app and preview timers; transient shell focus gets bounded grace.'], '#eef2ff','#a5b4fc')
+    'App + preview min-focus timers; transient shell focus: grace, keeps the last-use stretch.'], '#eef2ff','#a5b4fc')
 
 parts.append('<rect x="24" y="407" width="704" height="804" rx="18" fill="#edf7ff"/>')
 parts.append('<rect x="752" y="407" width="704" height="804" rx="18" fill="#edf9f4"/>')
@@ -44,23 +44,23 @@ wire('M650 362 V390 H380 V458')
 wire('M830 362 V390 H1100 V458')
 box(44,458,660,130,'App recency · focus worker',[
     'App minimum: default 8 s; promotion mode can skip waiting.',
-    'Key = full path, or APPID:AUMID for supported UWP hosts.',
-    'Per-desktop history → eligible app top N + decay.'])
+    'Window record (HWND + PID) → app APPID:<Explorer AppId>.',
+    'Per desktop; decay from last input while in front → top N.'])
 box(776,458,656,130,'Window recency · focus worker',[
     'Preview minimum: default 1 s; tracked/click paths may confirm now.',
     'StampWindowRecencyLocked → HWND + PID + tick / sequence.',
-    'Per-desktop history; independent of taskbar top N.'])
+    'Per desktop, last use too; independent of taskbar top N.'])
 
-text(44,622,'IDENTITY BRIDGE · UI DATA + WORKER METADATA','tag')
-box(44,642,660,135,'TaskListButton → native task item / group',[
-    'UI captures window handles, PIDs and button identity.',
-    'GetWindowFromTaskItem: immersive GetAppWindow for metadata.',
-    'Clicks and full binds request asynchronous identity resolution.'])
+text(44,622,'IDENTITY BRIDGE · EXPLORER APPID','tag')
+box(44,642,660,135,'TaskListButton → WindowsUdk TaskItem / TaskGroup',[
+    'Synchronous capture on the UI thread (CaptureButton).',
+    'ITaskItem.WindowId + AppId; group windows via ITaskGroup.',
+    'Publishes window → AppId for the worker; Never Combine = own slot.'])
 wire('M374 777 V802')
-box(44,802,660,135,'QueueButtonResolve → focus worker → UI cache',[
-    'ResolveOneButtonOnFocusThread: process path / AUMID / class.',
-    'Validate targets; coalesce completion paints per dispatcher.',
-    'Exact HWND / AUMID / path match; missing identity → no glow.'])
+box(44,802,660,135,'Window records → apps · worker',[
+    'DeriveAppsFromWindowsLocked: a window joins the app listing it.',
+    'Running button with a live window required for a slot.',
+    'No AppId / no button → no glow (fail closed).'])
 
 text(776,622,'IDENTITY BRIDGE · EXPLORER VIEW MODEL','tag')
 box(776,642,656,135,'Card view model → presented HWND',[
@@ -81,20 +81,20 @@ text(62,978,'App ranks + exact button match','small')
 text(794,978,'Window history + resolved sibling HWNDs','small')
 box(44,995,660,188,'ApplyAllHighlights_UIThread',[
     'Running buttons only; pinned-only entries do not glow.',
-    'Own WhRecentFocusGlow: Side / Frame / Full.',
+    'Own WhRecentFocusGlow: Side bar / Plate / Plate with accent.',
     'UpdateVisualStates repaints cached rank; full binds refresh identity.',
-    'InsertAt even at end; never reorder native badges or rewrite ZIndex.',
-    'Remove own overlays when unranked; preserve other owners.'])
+    'Zero desired size; never reorder native children or rewrite ZIndex.',
+    'Paint cache skips unchanged repaints; unranked → own overlay removed.'])
 box(776,995,656,188,'Rank within this flyout → paint on UI dispatcher',[
     'Require >1 window card; skip unresolved and snap-group-only cards.',
     'Sort recent siblings → preview top N; no app-rank requirement.',
-    'Title bar / title tint / plate / plate + title tint.',
-    'Plate / outline: own Border above BackgroundBorder (bound geometry).',
+    'Whole plate (± accent) / Title (± accent) / Bar under title.',
+    'Own Border above BackgroundBorder (bound geometry), zero size.',
     'Hover alone does not promote window recency.'])
 
 box(40,1230,1400,90,'No taskbar.dll hooks (0.11.20+)',[
     'Clicking a thumbnail is ordinary focus; identity, windows and previews come from Taskbar.View.dll + public WindowsUdk interfaces.'], '#fff7ed','#fdba74')
-text(40,1352,'THREAD RULE  Native hooks capture live data. The worker handles metadata / recency. XAML changes use the owning UI dispatcher.','small')
+text(40,1352,'THREAD RULE  Hooks capture live data. The worker owns recency, COM metadata and accent (window messages). XAML uses its UI dispatcher.','small')
 text(40,1381,'LIFETIME RULE  Stop and join worker → clean and drain UI dispatchers → unload. Result deadlines do not cancel an OS call.','small')
 text(40,1410,'Read investigation-notes.md for evidence and limits. This diagram omits guard branches; private Explorer hooks are build-dependent.','small')
 parts.append('</svg>')

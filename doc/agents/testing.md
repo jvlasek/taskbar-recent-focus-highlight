@@ -15,6 +15,7 @@ commit.
   list, rank 4+ intensity.
 - `run-preview-identity-tests.py`: card → window resolve.
 - `run-shell-activation-tests.py`: focus notification path.
+- `run-last-use-tests.py`: last use — `GetLastInputInfo` wrap / race, the stretch in front across transient windows, leave stamps, destroyed window in front, same-app re-confirm (0.12.2).
 - `run-icon-order-tests.py`: glow host placement planner and geometry.
 - `run-layout-footprint-tests.py`: overlay chrome has zero desired size (plates, side bar, preview overlays) and unchanged placement.
 - `run-dispatcher-tests.py`: unload drain (Windows + g++ only).
@@ -59,7 +60,7 @@ adds an independent foreground observer.
 | `Preview focus confirmed:` | Window recency |
 | `Current virtual desktop:` / `Desktop switch (<reason>):` | Per-desktop recency; reason = registry, `input desktop: <name>` (`Default` = back on the user desktop, `not accessible (lock / UAC)` = secure desktop; 0.12.1), foreground (watch fallback), decay tick |
 | `Button identity:` | A button's Explorer AppId changed (first capture, reuse) |
-| `Identity state:` | A button's running state changed |
+| `Identity state:` / `Running state read: N running, M not running` | A known button's running state changed. Buttons read for the first time, or again after a desktop / lock switch reset them, are only counted in the `Running state read` summary of the next full pass (0.12.2; before, ~20 `Identity state` lines per lock or unlock) |
 | `Window … belongs to APPID:…` | A window record joined (or changed) its app at a recompute |
 | `Button windows:` / `Uncombined windows` | Never Combine detection |
 | `ApplyAllHighlights:` / `rank list[` / `bind rank` | Full pass. Since 0.12.1 `rank list[` / `bind rank` (and `no ranks — cleared`) are printed only when the ladder or a binding differs from that UI thread's last pass; otherwise the summary ends `(ladder unchanged)`. A `Glow rank` line still follows its `bind rank` line |
@@ -67,6 +68,7 @@ adds an independent foreground observer.
 | `Preview resolve:` / `sibling[` / `unresolved:` | Per-card window (`how=viewmodel`) and why a card did not resolve. `sibling[` lines only when the set, a rank or a failure changed (else `(unchanged)`, 0.12.1) |
 | `HWND recycled` | Preview map dropped a reused handle (PID mismatch) |
 | `transient FG, waiting on` / `gave up waiting through transient … (after Ns)` | Min-focus grace: first line once per wait (no 200 ms repeats since 0.12.1), the second if it expired and the candidate was dropped |
+| `Settings: dropped N records of excluded apps` / `Nothing to paint yet` | 0.12.2: exclusion sweep on the focus thread after a settings change; init with highlightCount 0 and previews off (the mod stays loaded). Since 0.12.2 `Identity state`, `Button identity`, `Button windows` and `Uncombined windows` are written after their lock, so they carry the deferred `(Function)` prefix |
 | `Last use: hwnd=… left, used until Ns ago (app\|preview\|app+preview)` | The window that left the foreground was stamped; `preview` alone = a visit shorter than the app minimum focus (0.12.1) |
 | `Decayed: <name> key=… (last use N.N min ago)` | App record dropped; the age should be ≥ the decay time (+ up to one 30 s tick) |
 | `Hidden (no running button):` / `Shown again (running button):` | App keeps its history but has no slot, or got it back. A burst right after `Desktop switch` is the cleared running grace, until the next full pass |

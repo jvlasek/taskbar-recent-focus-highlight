@@ -126,7 +126,14 @@ activate = function('void ActivateFocusTracking(HWND hwnd) {')
 deactivate = function('void DeactivateFocusTracking(HWND hwnd) {')
 assert 'WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE' in worker and 'HWND_MESSAGE' not in worker
 # A process without a taskbar gets the window and nothing else.
-for call in ('RegisterShellHookWindow', 'SetWinEventHook', 'SubscribeAccentChanges', 'desktopWatch.Open()'):
+# Accent: window messages, no WinRT event (0.12.2); only once tracking runs.
+assert 'ColorValuesChanged(' not in source and 'g_uiSettings' not in source
+wndproc = function('LRESULT CALLBACK HookThreadWndProc(')
+assert 'g_focusTrackingActive && !g_unloading.load() &&\n        AccentChangeMessage(msg, lParam)' in wndproc
+assert 'KillTimer(hWnd, kAccentRefreshTimerId)' in wndproc
+accent = function('bool AccentChangeMessage(')
+assert 'WM_DWMCOLORIZATIONCOLORCHANGED' in accent and 'L"ImmersiveColorSet"' in accent
+for call in ('RegisterShellHookWindow', 'SetWinEventHook', 'desktopWatch.Open()'):
     assert call not in worker, call
     assert call in activate, call
 assert worker.index('g_hookThreadHwnd.store(hwnd') < worker.index('if (g_taskbarViewHooked.load())')

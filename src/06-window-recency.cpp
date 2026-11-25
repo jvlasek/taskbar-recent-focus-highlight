@@ -43,12 +43,15 @@ void StampWindowRecencyLocked(DesktopRecencyState& desk,
         return;
     }
     const DWORD pid = PidFromHwnd(hwnd);
+    if (!pid) {
+        return;  // gone already: nothing could check a recycled handle later
+    }
     auto it = desk.windowFocusMap.find(hwnd);
-    if (it != desk.windowFocusMap.end() && it->second.pid != 0 && pid != 0 &&
+    if (it != desk.windowFocusMap.end() && it->second.pid != 0 &&
         it->second.pid != pid) {
-        Wh_Log(L"HWND recycled, dropping stale preview recency: hwnd=%p "
-               L"oldPid=%u newPid=%u",
-               hwnd, it->second.pid, pid);
+        LOG_DEFERRED(L"HWND recycled, dropping stale preview recency: hwnd=%p "
+                     L"oldPid=%u newPid=%u",
+                     hwnd, it->second.pid, pid);
         desk.windowFocusMap.erase(it);
     }
     WindowFocusInfo& winfo = desk.windowFocusMap[hwnd];

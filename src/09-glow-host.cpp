@@ -141,15 +141,19 @@ void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host) {
     }
 }
 
-bool ButtonHasOurChrome(FrameworkElement button) {
+// iconPanel: GetIconPanel(button), when the caller already has it.
+bool ButtonHasOurChromeIn(FrameworkElement button, FrameworkElement iconPanel) {
     if (!button) {
         return false;
     }
-    auto iconPanel = GetIconPanel(button);
     if (!iconPanel) {
         return FindChildByName(button, kGlowElementName) != nullptr;
     }
     return FindChildByName(iconPanel, kGlowElementName) != nullptr;
+}
+
+bool ButtonHasOurChrome(FrameworkElement button) {
+    return button && ButtonHasOurChromeIn(button, GetIconPanel(button));
 }
 
 void ClearButtonHighlight(FrameworkElement button) {
@@ -162,7 +166,7 @@ void ClearButtonHighlight(FrameworkElement button) {
     // Skip no-op clears on every mouse-over, including overlay sweep.
     // Sweep only removes leftover WhRecentFocusGlow; do not reorder native
     // children on buttons we never painted.
-    if (!ButtonHasOurChrome(button)) {
+    if (!ButtonHasOurChromeIn(button, iconPanelEarly)) {
         SetCachedPaintState(button, 0, SettingsSnap()->generation);
         return;
     }
@@ -475,7 +479,11 @@ void PaintNativeContour(Controls::Grid host,
         double stroke =
             accent ? (std::min)(accentThickness, (std::min)(w, h) * 0.5) : 0;
         b.BorderThickness({stroke, stroke, stroke, stroke});
-        b.BorderBrush(Media::SolidColorBrush{strokeColor});
+        if (accent) {
+            b.BorderBrush(Media::SolidColorBrush{strokeColor});
+        } else {
+            b.ClearValue(Controls::Border::BorderBrushProperty());
+        }
         b.Background(Media::SolidColorBrush{fillColor});
         b.Opacity(rankOpacity);
         b.ClearValue(UIElement::ClipProperty());

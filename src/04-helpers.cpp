@@ -205,13 +205,12 @@ DWORD PidFromHwnd(HWND hwnd) {
     return pid;
 }
 
-// False when the handle was recycled into a different process.
+// False when the handle was recycled into a different process, or when no
+// PID was stored (the window was already gone when it was recorded):
+// unknown is not a match (Neon review 1.5).
 bool HwndMatchesStoredPid(HWND hwnd, DWORD storedPid) {
-    if (!hwnd || !IsWindow(hwnd)) {
+    if (!hwnd || !storedPid || !IsWindow(hwnd)) {
         return false;
-    }
-    if (!storedPid) {
-        return true;
     }
     const DWORD pid = PidFromHwnd(hwnd);
     // pid 0: window is gone / inaccessible — not a match (handle recycle).

@@ -215,10 +215,6 @@ std::vector<FrameworkElement> CollectSiblingThumbnailViews(
     return out;
 }
 
-// Repeater index is the flyout visual order (unlike PositionInSet, which the
-// automation peer may not refresh after a thumbnail reorder).
-// outSourceIndex is parallel to the returned views and holds the ItemsSource
-// index (skips of unrealized elements must not shift GetAt).
 // ---------------------------------------------------------------------------
 // Flyout ItemsRepeater: repaint when a card is removed
 // ---------------------------------------------------------------------------
@@ -241,7 +237,11 @@ std::mutex g_repeaterWatchMutex;
 std::unordered_map<void*, RepeaterClearingWatch> g_repeaterWatches;
 
 void WatchRepeaterElementClearing_UIThread(muxc::ItemsRepeater const& repeater) {
-    if (!repeater || g_unloading.load()) {
+    // Unload revokes the watch on its dispatcher: subscribe only on one the
+    // drain knows (review-lessons "no SizeChanged without a drainable
+    // dispatcher"; Neon review 1.4.1).
+    if (!repeater || g_unloading.load() ||
+        !RememberUiDispatcher(repeater.try_as<FrameworkElement>())) {
         return;
     }
     void* id = InspectableIdentity(repeater);
@@ -352,13 +352,12 @@ void RevokeRepeaterWatchesOnThisDispatcher() {
     }
 }
 
+// The flyout's realized cards in repeater order, which is the flyout's
+// visual order (unlike PositionInSet, which the automation peer may not
+// refresh after a thumbnail reorder).
 std::vector<FrameworkElement> CollectRepeaterThumbnailViews(
-    FrameworkElement thumbView,
-    std::vector<int>* outSourceIndex) {
+    FrameworkElement thumbView) {
     std::vector<FrameworkElement> out;
-    if (outSourceIndex) {
-        outSourceIndex->clear();
-    }
     auto repeaterEl = FindAncestorByClassName(
         thumbView, L"Microsoft.UI.Xaml.Controls.ItemsRepeater");
     if (!repeaterEl) {
@@ -385,9 +384,6 @@ std::vector<FrameworkElement> CollectRepeaterThumbnailViews(
             if (winrt::get_class_name(child) ==
                 L"Taskbar.TaskItemThumbnailView") {
                 out.push_back(child);
-                if (outSourceIndex) {
-                    outSourceIndex->push_back(i);
-                }
             }
         }
     } catch (...) {
@@ -396,10 +392,10 @@ std::vector<FrameworkElement> CollectRepeaterThumbnailViews(
 }
 
 void TrackThumbView_UIThread(FrameworkElement thumbView) {
-    if (!thumbView) {
+    // Untracked without a drainable dispatcher (Neon review 1.4.1).
+    if (!thumbView || !RememberUiDispatcher(thumbView)) {
         return;
     }
-    RememberUiDispatcher(thumbView);
     std::lock_guard<std::mutex> lock(g_thumbViewsMutex);
     for (auto& weak : g_trackedThumbViews) {
         try {
@@ -550,7 +546,9 @@ FrameworkElement FindThumbnailBackgroundBorder(FrameworkElement thumbView) {
                 continue;
             }
             auto cn = winrt::get_class_name(child);
-            if (cn == L"Windows.UI.Xaml.Controls.Border") {
+            // Never our own card overlay (Neon review 1.7.6).
+            if (cn == L"Windows.UI.Xaml.Controls.Border" &&
+                child.Name() != kThumbCardOverlayName) {
                 return child;
             }
         }

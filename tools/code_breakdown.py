@@ -98,7 +98,7 @@ def items(part, domain, area, names):
 items("01", SHARED, A_INFRA, "GetCurrentTime MIDL_INTERFACE WH_WINRT_WINUI2 Xaml kClsidVirtualDesktopManager EnumName EnumToName NameToEnum MinFocusConfirmMode")
 items("01", APPS, A_SETTINGS, "GlowStyle TaskbarEdge BarSide PromoteMode kGlowStyleNames kPromoteModeNames kTaskbarEdgeNames kBarSideNames")
 items("01", WINDOWS, A_SETTINGS, "PreviewStyle kPreviewStyleNames")
-items("01", SHARED, A_COLORS, "GlowColorMode kGlowColorNames kDefaultAccentPacked g_cachedAccent PackColor UnpackColor g_uiSettings g_colorValuesChangedToken")
+items("01", SHARED, A_COLORS, "GlowColorMode kGlowColorNames kDefaultAccentPacked g_cachedAccent PackColor UnpackColor")
 items("01", SHARED, A_CONFIRM, "MinFocusConfirmMode")
 # 02 state
 items("02", SHARED, A_RECENCY, "PendingFocus HwndHash GuidHash GuidEqual DesktopRecencyState g_stateMutex g_desktopMaps g_pendingFocus g_decayTimerArmed kDecayCheckIntervalMs RankIntensity")
@@ -163,6 +163,7 @@ items("18", SHARED, A_FOCUS, "StillPendingForeground HandleForegroundChanged")
 items("18", SHARED, A_RECENCY, "OnDecayTimer HandleWindowDestroyed")
 # 19 worker
 items("19", SHARED, A_FOCUS, "HandleForegroundNotification HandleShellActivation WinEventProc")
+items("19", SHARED, A_LIFECYCLE, "DropExcludedRecords")
 # 20 settings
 items("20", WINDOWS, A_SETTINGS, "kLegacyPreviewStyleState LegacyPreviewStyle ApplyLegacyPreviewStyle")
 

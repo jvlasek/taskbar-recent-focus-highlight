@@ -59,12 +59,11 @@ bool ParseHexColor(const std::wstring& text, winrt::Windows::UI::Color& out) {
     return false;
 }
 
+// Focus thread only, when settings load or Windows reports an accent change
+// (AccentChangeMessage), never per paint.
 winrt::Windows::UI::Color QuerySystemAccentColor() {
     try {
-        // Hook thread only (as Subscribe/Unsubscribe): reuse its UISettings.
-        winrt::Windows::UI::ViewManagement::UISettings uiSettings =
-            g_uiSettings ? *g_uiSettings
-                         : winrt::Windows::UI::ViewManagement::UISettings{};
+        winrt::Windows::UI::ViewManagement::UISettings uiSettings;
         auto c = uiSettings.GetColorValue(
             winrt::Windows::UI::ViewManagement::UIColorType::Accent);
         c.A = 255;
@@ -85,30 +84,21 @@ void RefreshCachedAccent() {
     }
 }
 
-void SubscribeAccentChanges() {
-    if (g_uiSettings) {
-        return;
+// Accent changes arrive as window messages on the focus worker's hidden
+// top-level window (0.12.2, Neon review 2.2.1). Before, a
+// UISettings::ColorValuesChanged handler ran on a WinRT thread-pool thread:
+// revoking it on unload does not wait for a call already running, which could
+// still be in the mod's code after Windhawk unloads it. Broadcasts never
+// reached the old HWND_MESSAGE window; the WS_POPUP window (0.11.0) gets them.
+bool AccentChangeMessage(UINT msg, LPARAM lParam) {
+    if (msg == WM_DWMCOLORIZATIONCOLORCHANGED) {
+        return true;
     }
-    try {
-        g_uiSettings.emplace();
-        g_colorValuesChangedToken = g_uiSettings->ColorValuesChanged(
-            [](auto&&, auto&&) { PostToHookThread(WM_APP_REFRESH_ACCENT); });
-    } catch (...) {
-        g_uiSettings.reset();
-        g_colorValuesChangedToken = {};
-        Wh_Log(L"UISettings ColorValuesChanged subscribe failed");
-    }
-}
-
-void UnsubscribeAccentChanges() {
-    try {
-        if (g_uiSettings) {
-            g_uiSettings->ColorValuesChanged(g_colorValuesChangedToken);
-        }
-    } catch (...) {
-    }
-    g_colorValuesChangedToken = {};
-    g_uiSettings.reset();
+    // lParam is the changed area's name or null; Windows copies the string
+    // for a sender in another process.
+    return msg == WM_SETTINGCHANGE && lParam &&
+           _wcsicmp(reinterpret_cast<PCWSTR>(lParam), L"ImmersiveColorSet") ==
+               0;
 }
 
 winrt::Windows::UI::Color ResolveGlowBaseColor(const Settings& settings) {

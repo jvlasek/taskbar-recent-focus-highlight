@@ -70,6 +70,122 @@ void CALLBACK WinEventProc(HWINEVENTHOOK /*hWinEventHook*/,
     PostToHookThread(WM_APP_FOREGROUND_CHANGED, reinterpret_cast<WPARAM>(hWnd));
 }
 
+// After a settings change: drop the records of newly excluded apps on every
+// desktop. Focus thread (WM_APP_SETTINGS_CHANGED): it owns the maps and is an
+// STA, which ExclusionAumid (SHGetPropertyStoreForWindow) needs. Windhawk's
+// settings thread gives no COM guarantee, and an AUMID read failing there
+// let a newly excluded app keep its highlight (Neon review 1.6; before
+// 0.12.2 this ran in Wh_ModSettingsChanged).
+void DropExcludedRecords() {
+    size_t dropped = 0;
+    std::unordered_set<HWND, HwndHash> windowHwnds;
+    {
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        for (auto& [id, desk] : g_desktopMaps) {
+            (void)id;
+            for (const auto& [hwnd, winfo] : desk.windowFocusMap) {
+                (void)winfo;
+                if (hwnd) {
+                    windowHwnds.insert(hwnd);
+                }
+            }
+            for (const auto& [hwnd, w] : desk.windowAppFocus) {
+                (void)w;
+                if (hwnd) {
+                    windowHwnds.insert(hwnd);
+                }
+            }
+            for (const auto& [key, app] : desk.appFocusMap) {
+                (void)key;
+                if (app.lastHwnd && app.appIdUpper.empty() &&
+                    HwndMatchesStoredPid(app.lastHwnd, app.lastPid)) {
+                    windowHwnds.insert(app.lastHwnd);
+                }
+            }
+        }
+    }
+    std::unordered_map<HWND, std::wstring, HwndHash> windowAppIds;
+    for (HWND hwnd : windowHwnds) {
+        std::wstring id = ExclusionAumid(hwnd);
+        if (!id.empty()) {
+            windowAppIds[hwnd] = std::move(id);
+        }
+    }
+
+    {
+        DeferredLogScope logScope;  // logs after unlock
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        for (auto& [id, desk] : g_desktopMaps) {
+            (void)id;
+            for (auto it = desk.appFocusMap.begin();
+                 it != desk.appFocusMap.end();) {
+                std::wstring displayUpper = ToUpper(it->second.displayName);
+                // No AUMID read at focus time (empty exclude list then):
+                // the last window's, read now.
+                std::wstring appIdUpper = it->second.appIdUpper;
+                if (appIdUpper.empty()) {
+                    auto found = windowAppIds.find(it->second.lastHwnd);
+                    if (found != windowAppIds.end()) {
+                        appIdUpper = found->second;
+                    }
+                }
+                if (IsExcludedKey(it->first, displayUpper, appIdUpper,
+                                  it->second.pathUpper)) {
+                    it = desk.appFocusMap.erase(it);
+                    ++dropped;
+                } else {
+                    ++it;
+                }
+            }
+            // Window records too, or the next recompute would derive the
+            // excluded app again.
+            for (auto it = desk.windowAppFocus.begin();
+                 it != desk.windowAppFocus.end();) {
+                auto& w = it->second;
+                if (w.appIdUpper.empty()) {
+                    auto found = windowAppIds.find(it->first);
+                    if (found != windowAppIds.end()) {
+                        w.appIdUpper = found->second;
+                    }
+                }
+                if (IsExcludedKey(w.key, ToUpper(w.displayName), w.appIdUpper,
+                                  w.pathUpper)) {
+                    it = desk.windowAppFocus.erase(it);
+                    ++dropped;
+                } else {
+                    ++it;
+                }
+            }
+            for (auto it = desk.windowFocusMap.begin();
+                 it != desk.windowFocusMap.end();) {
+                if (it->second.appIdUpper.empty()) {
+                    auto found = windowAppIds.find(it->first);
+                    if (found != windowAppIds.end()) {
+                        it->second.appIdUpper = found->second;
+                    }
+                }
+                std::wstring fileUpper =
+                    ToUpper(FileNameFromPath(it->second.pathUpper));
+                if (IsExcludedKey(it->second.processKey, fileUpper,
+                                  it->second.appIdUpper,
+                                  it->second.pathUpper)) {
+                    it = desk.windowFocusMap.erase(it);
+                    ++dropped;
+                } else {
+                    ++it;
+                }
+            }
+            PruneWindowFocusMapLocked(desk);
+            RecomputeRanksForDesktopLocked(desk);
+        }
+    }
+    if (dropped) {
+        Wh_Log(L"Settings: dropped %zu records of excluded apps", dropped);
+        RequestApplyVisuals();
+        RequestApplyPreviewVisuals();
+    }
+}
+
 LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
                                    UINT msg,
                                    WPARAM wParam,
@@ -77,6 +193,11 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
     if (g_shellHookMessage && msg == g_shellHookMessage) {
         HandleShellActivation(wParam, reinterpret_cast<HWND>(lParam));
         return 0;
+    }
+    if (g_focusTrackingActive && !g_unloading.load() &&
+        AccentChangeMessage(msg, lParam)) {
+        SetTimer(hWnd, kAccentRefreshTimerId, kAccentRefreshDelayMs, nullptr);
+        // Broadcasts: fall through to DefWindowProc.
     }
     switch (msg) {
         case WM_CLOSE:
@@ -107,6 +228,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             RequestApplyPreviewVisuals();
             return 0;
         case WM_APP_SETTINGS_CHANGED: {
+            DropExcludedRecords();
             bool dropPending = false;
             bool keepPending = false;
             PendingFocus pendingSnap;
@@ -158,6 +280,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
 
+            } else if (wParam == kAccentRefreshTimerId) {
+                KillTimer(hWnd, kAccentRefreshTimerId);
+                PostMessage(hWnd, WM_APP_REFRESH_ACCENT, 0, 0);
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
@@ -172,6 +297,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
+            KillTimer(hWnd, kAccentRefreshTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }
@@ -217,7 +343,7 @@ struct DesktopKeyWatch {
 // Focus tracking starts with the taskbar (0.12.1). Windhawk loads the mod into
 // every explorer.exe, also folder-window and COM-server processes that never
 // load Taskbar.View.dll. There the worker keeps only its hidden window and
-// waits: no shell hook, no WinEvents, no accent subscription, no registry
+// waits: no shell hook, no WinEvents, no accent refresh, no registry
 // watch, and no focus logs (capture manual-20261120-154409-086197: seven such
 // processes logged the same focus events as the taskbar process).
 // Started by WM_APP_TASKBAR_READY once the Taskbar.View hooks are in, or at
@@ -225,7 +351,6 @@ struct DesktopKeyWatch {
 // ---------------------------------------------------------------------------
 struct FocusTracking {
     bool shellHookRegistered = false;
-    bool accentSubscribed = false;
     HWINEVENTHOOK foregroundHook = nullptr;
     HWINEVENTHOOK desktopHook = nullptr;
     DesktopKeyWatch desktopWatch;
@@ -253,8 +378,7 @@ void ActivateFocusTracking(HWND hwnd) {
     // Foreground WinEvents
     t.shellHookRegistered = shellHookRegistered;
 
-    SubscribeAccentChanges();
-    t.accentSubscribed = true;
+    // Accent changes: AccentChangeMessage in HookThreadWndProc.
     RefreshCachedAccent();
 
     t.foregroundHook =
@@ -315,10 +439,6 @@ void DeactivateFocusTracking(HWND hwnd) {
     if (t.desktopHook) {
         UnhookWinEvent(t.desktopHook);
         t.desktopHook = nullptr;
-    }
-    if (t.accentSubscribed) {
-        UnsubscribeAccentChanges();
-        t.accentSubscribed = false;
     }
     if (t.shellHookRegistered) {
         DeregisterShellHookWindow(hwnd);
@@ -408,9 +528,9 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
             if (!g_unloading.load() && RefreshCurrentDesktopId()) {
                 OnVirtualDesktopSwitched(L"registry");
             }
-            continue;
-        }
-        if (r != WAIT_OBJECT_0 + handles) {
+            // Fall through to the messages: a burst of registry writes must
+            // not hold WM_APP_SHUTDOWN in the queue (Neon review 3.1).
+        } else if (r != WAIT_OBJECT_0 + handles) {
             Wh_Log(L"Focus thread wait failed: %u", GetLastError());
             break;
         }
@@ -441,6 +561,7 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
 }
 
 bool StartWinEventHookThread() {
+    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_winEventHookThreadMutex);
     if (g_winEventHookThread && HookThreadWindow()) {
         return true;
@@ -449,8 +570,9 @@ bool StartWinEventHookThread() {
         g_hookThreadReadyEvent =
             CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (!g_hookThreadReadyEvent) {
-            Wh_Log(L"CreateEventW failed for hook-thread ready: %u",
-                   GetLastError());
+            const DWORD error = GetLastError();
+            LOG_DEFERRED(L"CreateEventW failed for hook-thread ready: %u",
+                         error);
             return false;
         }
     } else {
@@ -459,7 +581,8 @@ bool StartWinEventHookThread() {
     HANDLE hThread =
         CreateThread(nullptr, 0, WinEventHookThread, nullptr, 0, nullptr);
     if (!hThread) {
-        Wh_Log(L"CreateThread failed: %u", GetLastError());
+        const DWORD error = GetLastError();
+        LOG_DEFERRED(L"CreateThread failed: %u", error);
         if (g_hookThreadReadyEvent) {
             CloseHandle(g_hookThreadReadyEvent);
             g_hookThreadReadyEvent = nullptr;
@@ -469,7 +592,7 @@ bool StartWinEventHookThread() {
     g_winEventHookThread = hThread;
     WaitForSingleObject(g_hookThreadReadyEvent, INFINITE);
     if (!HookThreadWindow()) {
-        Wh_Log(L"Focus thread failed to create the message window");
+        LOG_DEFERRED(L"Focus thread failed to create the message window");
         WaitForSingleObject(hThread, INFINITE);
         CloseHandle(hThread);
         g_winEventHookThread = nullptr;
@@ -479,7 +602,7 @@ bool StartWinEventHookThread() {
         }
         return false;
     }
-    Wh_Log(L"WinEvent hook thread started");
+    LOG_DEFERRED(L"WinEvent hook thread started");
     return true;
 }
 

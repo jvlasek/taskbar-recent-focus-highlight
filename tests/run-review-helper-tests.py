@@ -22,6 +22,7 @@ using DWORD = unsigned long;
 using HMODULE = void*;
 using LPCWSTR = const wchar_t*;
 std::atomic<bool> g_taskbarViewHookAttempted{false};
+std::atomic<bool> g_unloading{false};
 std::atomic<int> attempts{0}, applied{0}, readyPosts{0};
 std::atomic<bool> g_taskbarViewHooked{false};
 using UINT = unsigned;
@@ -94,4 +95,27 @@ assert 'watching flyout repeater' not in source
 thumb = body('void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {')
 assert '(rankOneBased > 1 && isAccent(settings->previewTopStyle))' in thumb
 assert thumb.count('tintSetting * 2.55') == 3 and 'fillOpacitySetting * 2.55' not in thumb
-print('PASS: concurrent hook attempts, failed-attempt suppression, nested cache release, repeated-pass log lines suppressed')
+# No Wh_Log while a mutex is held (0.12.2, Neon review 1.7.5): inside a lock
+# scope only LOG_DEFERRED, under a DeferredLogScope declared before the lock.
+import re
+lines = source.split('\n')
+held = []
+for i, line in enumerate(lines):
+    m = re.search(r'(lock_guard|unique_lock|scoped_lock)<[^>]*>\s*\w+\((\w+)\)', line)
+    if not m:
+        continue
+    depth = 0
+    for j in range(i + 1, len(lines)):
+        depth += lines[j].count('{') - lines[j].count('}')
+        if depth < 0:
+            break
+        if re.search(r'\bWh_Log\(', lines[j]):
+            held.append(f'line {j + 1} under {m.group(2)}: {lines[j].strip()}')
+assert not held, '\n'.join(held)
+# Functions that require g_stateMutex log only deferred.
+locked_defs = list(re.finditer(r'\n[\w:<>&*, ]+?\b(\w+Locked)\([^;{]*\)\s*\{', source))
+assert len(locked_defs) >= 8
+for m in locked_defs:
+    end = source.index('\n}', m.end())
+    assert 'Wh_Log(' not in source[m.end():end], m.group(1)
+print('PASS: concurrent hook attempts, failed-attempt suppression, nested cache release, repeated-pass log lines suppressed, no Wh_Log under a lock')
