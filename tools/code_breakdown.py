@@ -170,14 +170,12 @@ items("20", WINDOWS, A_SETTINGS, "kLegacyPreviewStyleState LegacyPreviewStyle Ap
 # Line ranges inside mixed items: part -> [(first, last, domain, area)].
 OVERRIDES = {
     "00": [
-        (21, 30, SHARED, A_META),       # README intro + screenshots
-        (31, 46, APPS, A_META),         # "What you see": icons
-        (47, 61, WINDOWS, A_META),      # flyout ladder, styles
-        (77, 82, APPS, A_META),         # notes: Styler, AppId matching
-        (83, 89, WINDOWS, A_META),      # notes: card view model, doc tabs
-        (110, 141, APPS, A_META),       # YAML: count, min focus, promote, decay
-        (155, 205, APPS, A_META),       # YAML: icons.*
-        (206, 286, WINDOWS, A_META),    # YAML: previews.*
+        (21, 28, SHARED, A_META),       # README intro + hero screenshot
+        (29, 56, APPS, A_META),         # Styles, How apps get ranked
+        (57, 71, WINDOWS, A_META),      # Previews
+        (113, 146, APPS, A_META),       # YAML: count, min focus, promote, decay
+        (160, 212, APPS, A_META),       # YAML: icons.*
+        (213, 299, WINDOWS, A_META),    # YAML: previews.*
     ],
     "01": [
         (177, 187, APPS, A_SETTINGS),   # Settings: icon fields

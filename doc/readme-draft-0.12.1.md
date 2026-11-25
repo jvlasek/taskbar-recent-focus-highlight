@@ -1,6 +1,7 @@
 <!-- Draft of the in-mod README (==WindhawkModReadme==), restructured
-     2026-11-22. Not in the mod yet: mark it up, then it replaces the README
-     block in src/00-metadata.cpp. Notes for review at the bottom. -->
+     2026-11-22, reviewed 2026-11-25. Moved into src/00-metadata.cpp on
+     2026-11-26 (0.12.2): edit it there from now on. Notes for review at the
+     bottom (the UI renames are still open). -->
 
 # Taskbar Recent Focus Highlight
 

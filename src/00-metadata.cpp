@@ -20,116 +20,91 @@
 /*
 # Taskbar Recent Focus Highlight
 
-Highlights the taskbar icons of the apps you were just working in, so you
+Highlights the taskbar icons of the few apps you work in at once, so you
 find them again on a crowded taskbar. Inside a multi-window preview flyout,
 it ranks that app's windows the same way.
 
 ![A crowded taskbar with the three most recently used apps marked, and the open flyout ranking that app's windows](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/hero.png)
 
-## What you see
+## Styles
 
-After an app stays focused for the **minimum focus time** (default 8 seconds),
-it joins a per-virtual-desktop recency list. The top N **running** taskbar
-buttons on the current desktop get a highlight:
+The most recently used app is marked strongest, the next ones fainter.
+Three styles to choose from:
 
-- **Side bar** (default) — a bar beside the icon (left on a bottom/top
-  taskbar, under the icon on a left/right taskbar)
+- **Side bar** (default): a bar beside the icon.
 
   ![Side bar](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/icons-side-bar.png)
-- **Plate** — the button's own rounded plate, tinted in the highlight color
+- **Plate**: the button's own rounded plate, tinted in the highlight color.
 
   ![Plate](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/icons-plate.png)
-- **Plate with accent** — the same plate at half the tint, with an accent
-  border
+- **Plate with accent**: the same plate, lighter, with an accent border.
 
   ![Plate with accent](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/icons-plate-with-accent.png)
 
-On a button with several windows the plates also tint Windows' stacked
-edge. An app that asks for attention keeps Windows' red marks on top.
+On a button with several windows the plates also tint its stacked edge. An
+app that asks for attention keeps Windows' red marks on top.
 
-Rank 1 is strongest; ranks 2 and 3 use the intensities you set, and ranks
-4+ fade further from rank 3.
-Pinned icons that are not running on this desktop are never highlighted.
-A new app is added only after the minimum focus time. Re-focus of an app
-already in the list follows “When to skip min-focus” (default: it becomes
-rank 1 immediately). A short Alt+Tab that never settles does not add a new
-app. Each virtual desktop keeps its own list.
+## How apps get ranked
 
-An app drops out of the list a set time (**Decay**, default 30 minutes)
-after you last *used* it: keyboard or mouse input while it was in front
-counts, so the app you are working in keeps its highlight however long you
-stay in it. Away from the keyboard everything ages out from your last input.
+- An app counts after **8 s** in front (Minimum focus time); Alt+Tab passing
+  through does not.
+- It drops out **30 min** after you last *used* it (typing or clicking), so
+  the app you work in stays highlighted.
+- Only running apps. One list per virtual desktop, the same on every
+  monitor.
+- Start, Alt+Tab, the taskbar, desktop and lock screen do not count.
 
-When you hover a combined icon and the flyout shows **two or more** windows,
-that flyout gets its own recency ladder (independent of icon ranks). The
-last focused window of that app is rank 1 in the flyout even if you used
-other apps more recently. Single-window flyouts are left alone unless
-**Also mark single-window previews** is on; then the card is marked as rank 1
-while its window is recent, so it reads as "used within the preview decay".
+## Previews
 
-Preview styles: rank 1 and ranks 2+ are set separately (default: whole-card
-plate for rank 1, title plate for ranks 2+); either can also have an accent
-border, or be a thin bar under the title; ranks 2+ can be left unmarked.
+Flyout window previews are ranked by their last use, for each running app
+independently (own timing: 1 s minimum focus, 15 min decay). Rank 1 and the
+rest have separate styles: tinted card, tinted title (either with an accent
+border), or a bar under the title.
 
 ![Default preview styles: whole plate for rank 1, title plates for ranks 2 and 3](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/flyout-plate-title.png)
 
 ![The "with accent" preview styles](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/flyout-plate-accent-title-accent.png)
 
-If you only want the active window highlighted in previews,
-[taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight)
-is a much lighter mod for exactly that.
+Single-window flyouts only with **Also mark single-window previews**. Just
+the active window marked? Use the much lighter
+[taskbar-active-window-highlight](https://windhawk.net/mods/taskbar-active-window-highlight).
 
-## Settings (short)
+## Settings
 
-- **General** — how many apps, min-focus wait, when to skip the wait on
-  re-focus, decay, exclude list
-- **Icons** — style, color (including system accent), per-rank intensity,
-  side bar thickness / length, fill opacity, accent thickness
-- **Previews** — on/off, how many windows, single-window previews, styles,
-  intensities, separate min-focus and decay
+- **General**: how many apps, minimum focus time, when to skip it on
+  coming back, decay, exclude list.
+- **Taskbar icons**: style, color (system accent or your own), strength per
+  rank, side bar size, fill, accent border width.
+- **Thumbnail previews**: on/off, how many windows, single-window previews,
+  styles, strength per rank, their own minimum focus and decay.
 
-All of those are in the Windhawk settings panel. Disable the mod in Windhawk
-to clear highlights.
+The exclude list takes process names, paths or app IDs. Two buttons of one
+program (Total Commander and its Lister, for example) have different app
+IDs; with the mod log on, each button's ID is shown as
+`Button identity: ... appId=`.
 
-## Limitations
+## Compatibility and limitations
 
-- **SOLIDWORKS** and other apps that show their open documents as separate
-  preview cards (one card per document, one real window) manage those
-  previews themselves: Explorer links the cards to no window, and switching
-  documents is not a window focus change, so their previews are not marked.
-  Their taskbar icon is ranked normally.
-- When the mod is enabled while Explorer is already running, the ranks show
-  up after the first taskbar button changes (hover or a window switch).
+- Works with Windows 11 Taskbar Styler. The mod only adds its own elements:
+  it changes nothing Windows draws, takes no space, stays visible on hover
+  and follows themes that resize the buttons.
+- Icons are matched by the app ID Explorer itself groups buttons by. A
+  window without a taskbar button is never ranked.
+- **SOLIDWORKS** and other apps that show each open document as its own
+  preview card manage those previews themselves, so their previews are not
+  marked. Their taskbar icon is ranked normally.
+- Enabled while Explorer is already running, the ranks appear after the
+  first taskbar button changes (hover or a window switch).
 
-## Notes
+## Credits
 
-- Works with Windows 11 Taskbar Styler: the mod draws its own elements,
-  changes no property of the native ones and takes no layout space, so the
-  highlights stay visible on hover and follow themes that resize the
-  buttons.
-- An icon is matched by the application ID Explorer itself groups taskbar
-  buttons by, not by its label or process name. A window that has no taskbar
-  button is never ranked.
-- Preview cards match through Explorer's own card view model (the window the
-  card shows). If that is unavailable, the card is left unmarked rather than
-  guessed from its title.
-- File Explorer folder windows (`CabinetWClass`) are ranked like other apps.
-  The taskbar, desktop, Start, and IME stay ignored.
-- Multi-monitor: the same rank is applied on every taskbar that shows that
-  app.
-- All mod log lines are plain `Wh_Log` output: they appear only when the
-  mod's logging (Advanced tab) is set to **Mod logs** or **Detailed debug
-  logs**, and nothing is logged with **None**. There is no extra in-mod
-  debug toggle.
-- Button → task group capture is adapted from
-  [taskbar-volume-control-per-app](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-volume-control-per-app.wh.cpp);
-  button windows and preview cards use the public WindowsUdk task
-  interfaces, as in
-  [taskbar-active-window-highlight](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-active-window-highlight.wh.cpp),
-  whose look (a tinted plate with an accent border) is also where the
-  "with accent" styles come from;
-  the flyout `ItemsRepeater` handling follows
-  [taskbar-thumbnail-reorder](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-thumbnail-reorder.wh.cpp).
+- [taskbar-active-window-highlight](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-active-window-highlight.wh.cpp):
+  reading button windows and preview cards through Explorer's own task
+  interfaces, and the "with accent" look.
+- [taskbar-volume-control-per-app](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-volume-control-per-app.wh.cpp):
+  finding a taskbar button's task group.
+- [taskbar-thumbnail-reorder](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-thumbnail-reorder.wh.cpp):
+  handling the preview flyout.
 */
 // ==/WindhawkModReadme==
 
