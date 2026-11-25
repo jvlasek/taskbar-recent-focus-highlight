@@ -103,6 +103,10 @@ NOACTIVATE extended styles, replacing its message-only window. It registers
 SHELLHOOK before reporting startup. If registration fails it logs the degraded
 mode and keeps foreground WinEvents; no polling fallback is added. Successful
 registrations are removed before destruction, including WinEvent setup failure. WM_CLOSE cannot destroy this worker-owned notification window.
+Being top-level, it also receives the accent broadcasts
+(`WM_SETTINGCHANGE` "ImmersiveColorSet", `WM_DWMCOLORIZATIONCOLORCHANGED`);
+once tracking runs they arm a 250 ms timer that re-reads the accent
+(0.12.2, replaces `UISettings::ColorValuesChanged`).
 
 The 0.10.13 two-second foreground polling recovery and its timer are removed;
 there is no polling fallback in this implementation. Existing minimum-focus timers

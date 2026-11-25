@@ -78,6 +78,11 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
         HandleShellActivation(wParam, reinterpret_cast<HWND>(lParam));
         return 0;
     }
+    if (g_focusTrackingActive && !g_unloading.load() &&
+        AccentChangeMessage(msg, lParam)) {
+        SetTimer(hWnd, kAccentRefreshTimerId, kAccentRefreshDelayMs, nullptr);
+        // Broadcasts: fall through to DefWindowProc.
+    }
     switch (msg) {
         case WM_CLOSE:
             // This hidden notification window is owned by worker shutdown.
@@ -158,6 +163,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
 
+            } else if (wParam == kAccentRefreshTimerId) {
+                KillTimer(hWnd, kAccentRefreshTimerId);
+                PostMessage(hWnd, WM_APP_REFRESH_ACCENT, 0, 0);
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
@@ -172,6 +180,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
+            KillTimer(hWnd, kAccentRefreshTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }
@@ -217,7 +226,7 @@ struct DesktopKeyWatch {
 // Focus tracking starts with the taskbar (0.12.1). Windhawk loads the mod into
 // every explorer.exe, also folder-window and COM-server processes that never
 // load Taskbar.View.dll. There the worker keeps only its hidden window and
-// waits: no shell hook, no WinEvents, no accent subscription, no registry
+// waits: no shell hook, no WinEvents, no accent refresh, no registry
 // watch, and no focus logs (capture manual-20261120-154409-086197: seven such
 // processes logged the same focus events as the taskbar process).
 // Started by WM_APP_TASKBAR_READY once the Taskbar.View hooks are in, or at
@@ -225,7 +234,6 @@ struct DesktopKeyWatch {
 // ---------------------------------------------------------------------------
 struct FocusTracking {
     bool shellHookRegistered = false;
-    bool accentSubscribed = false;
     HWINEVENTHOOK foregroundHook = nullptr;
     HWINEVENTHOOK desktopHook = nullptr;
     DesktopKeyWatch desktopWatch;
@@ -253,8 +261,7 @@ void ActivateFocusTracking(HWND hwnd) {
     // Foreground WinEvents
     t.shellHookRegistered = shellHookRegistered;
 
-    SubscribeAccentChanges();
-    t.accentSubscribed = true;
+    // Accent changes: AccentChangeMessage in HookThreadWndProc.
     RefreshCachedAccent();
 
     t.foregroundHook =
@@ -315,10 +322,6 @@ void DeactivateFocusTracking(HWND hwnd) {
     if (t.desktopHook) {
         UnhookWinEvent(t.desktopHook);
         t.desktopHook = nullptr;
-    }
-    if (t.accentSubscribed) {
-        UnsubscribeAccentChanges();
-        t.accentSubscribed = false;
     }
     if (t.shellHookRegistered) {
         DeregisterShellHookWindow(hwnd);

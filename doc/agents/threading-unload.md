@@ -68,8 +68,7 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
 | `g_layoutWatches` (`SizeChanged`), `g_repeaterWatches` (`ElementClearing`) | `g_layoutWatchMutex`, `g_repeaterWatchMutex` | UI. Registered only if `RememberUiDispatcher` recorded the thread; revoked on that dispatcher at unload |
 | `g_uiDispatchers` | `g_dispatchersMutex` | `[[clang::no_destroy]] optional<vector<shared_ptr<UiDispatcher>>>`: dispatcher plus a real `SYNCHRONIZE` thread handle captured on the UI thread. `reset()` in Uninit |
 | `g_settingsPtr` (`SettingsSnap`) | `g_settingsMutex` | Whole immutable object published by `LoadSettings` (`generation` bumped). Never mutate in place |
-| `g_cachedAccent` | atomic packed ARGB | Written on the worker (`ColorValuesChanged` is posted there). Not inside `Settings` |
-| `g_uiSettings` | `[[clang::no_destroy]] optional` | Subscribed and revoked on the worker, before its window is destroyed |
+| `g_cachedAccent` | atomic packed ARGB | Written on the worker: settings load, and `WM_SETTINGCHANGE("ImmersiveColorSet")` / `WM_DWMCOLORIZATIONCOLORCHANGED` to its window (250 ms timer, 0.12.2). Not inside `Settings`. No WinRT event subscription (a thread-pool callback cannot be drained on unload) |
 | `g_vdm` | `g_vdmMutex` | Created, used and released on the worker only |
 | `g_hookThreadHwnd`, `g_hookThreadId` | atomics | Worker writes; others `PostMessage`. `SetTimer` / `KillTimer` only on the worker |
 | `g_taskbarViewHooked` | atomic | Set once the Taskbar.View hooks succeed (init or `LoadLibraryExW`); read by the worker at start |

@@ -229,7 +229,7 @@ void PublishSettings(Settings s) {
     g_settingsPtr = std::move(next);
 }
 
-// Accent is not inside Settings: ColorValuesChanged must not republish a
+// Accent is not inside Settings: an accent change must not republish a
 // stale snapshot over a concurrent LoadSettings. Packed ARGB.
 constexpr uint32_t kDefaultAccentPacked = 0xFF0078D7u;  // #0078D7
 std::atomic<uint32_t> g_cachedAccent{kDefaultAccentPacked};
@@ -244,11 +244,6 @@ winrt::Windows::UI::Color UnpackColor(uint32_t v) {
     return {static_cast<uint8_t>(v >> 24), static_cast<uint8_t>(v >> 16),
             static_cast<uint8_t>(v >> 8), static_cast<uint8_t>(v)};
 }
-
-[[clang::no_destroy]] std::optional<
-    winrt::Windows::UI::ViewManagement::UISettings>
-    g_uiSettings;
-winrt::event_token g_colorValuesChangedToken{};
 
 // WM_TIMER may be a leftover from a previous candidate (KillTimer does not
 // flush a message already queued). Immediate confirm skips the deadline.

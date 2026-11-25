@@ -556,7 +556,7 @@ void PublishSettings(Settings s) {
     g_settingsPtr = std::move(next);
 }
 
-// Accent is not inside Settings: ColorValuesChanged must not republish a
+// Accent is not inside Settings: an accent change must not republish a
 // stale snapshot over a concurrent LoadSettings. Packed ARGB.
 constexpr uint32_t kDefaultAccentPacked = 0xFF0078D7u;  // #0078D7
 std::atomic<uint32_t> g_cachedAccent{kDefaultAccentPacked};
@@ -571,11 +571,6 @@ winrt::Windows::UI::Color UnpackColor(uint32_t v) {
     return {static_cast<uint8_t>(v >> 24), static_cast<uint8_t>(v >> 16),
             static_cast<uint8_t>(v >> 8), static_cast<uint8_t>(v)};
 }
-
-[[clang::no_destroy]] std::optional<
-    winrt::Windows::UI::ViewManagement::UISettings>
-    g_uiSettings;
-winrt::event_token g_colorValuesChangedToken{};
 
 // WM_TIMER may be a leftover from a previous candidate (KillTimer does not
 // flush a message already queued). Immediate confirm skips the deadline.
@@ -1025,6 +1020,10 @@ constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
+// Windows sends several accent messages per change (and UISettings can lag
+// the first one): read once, shortly after the last.
+constexpr UINT_PTR kAccentRefreshTimerId = 5;
+constexpr UINT kAccentRefreshDelayMs = 250;
 // Change notification on Explorer's VirtualDesktops registry key (public
 // RegNotifyChangeKeyValue). Windows writes CurrentVirtualDesktop there on a
 // switch, sometimes after the foreground change the switch causes (clicking
@@ -2318,12 +2317,11 @@ bool ParseHexColor(const std::wstring& text, winrt::Windows::UI::Color& out) {
     return false;
 }
 
+// Focus thread only, when settings load or Windows reports an accent change
+// (AccentChangeMessage), never per paint.
 winrt::Windows::UI::Color QuerySystemAccentColor() {
     try {
-        // Hook thread only (as Subscribe/Unsubscribe): reuse its UISettings.
-        winrt::Windows::UI::ViewManagement::UISettings uiSettings =
-            g_uiSettings ? *g_uiSettings
-                         : winrt::Windows::UI::ViewManagement::UISettings{};
+        winrt::Windows::UI::ViewManagement::UISettings uiSettings;
         auto c = uiSettings.GetColorValue(
             winrt::Windows::UI::ViewManagement::UIColorType::Accent);
         c.A = 255;
@@ -2344,30 +2342,21 @@ void RefreshCachedAccent() {
     }
 }
 
-void SubscribeAccentChanges() {
-    if (g_uiSettings) {
-        return;
+// Accent changes arrive as window messages on the focus worker's hidden
+// top-level window (0.12.2, Neon review 2.2.1). Before, a
+// UISettings::ColorValuesChanged handler ran on a WinRT thread-pool thread:
+// revoking it on unload does not wait for a call already running, which could
+// still be in the mod's code after Windhawk unloads it. Broadcasts never
+// reached the old HWND_MESSAGE window; the WS_POPUP window (0.11.0) gets them.
+bool AccentChangeMessage(UINT msg, LPARAM lParam) {
+    if (msg == WM_DWMCOLORIZATIONCOLORCHANGED) {
+        return true;
     }
-    try {
-        g_uiSettings.emplace();
-        g_colorValuesChangedToken = g_uiSettings->ColorValuesChanged(
-            [](auto&&, auto&&) { PostToHookThread(WM_APP_REFRESH_ACCENT); });
-    } catch (...) {
-        g_uiSettings.reset();
-        g_colorValuesChangedToken = {};
-        Wh_Log(L"UISettings ColorValuesChanged subscribe failed");
-    }
-}
-
-void UnsubscribeAccentChanges() {
-    try {
-        if (g_uiSettings) {
-            g_uiSettings->ColorValuesChanged(g_colorValuesChangedToken);
-        }
-    } catch (...) {
-    }
-    g_colorValuesChangedToken = {};
-    g_uiSettings.reset();
+    // lParam is the changed area's name or null; Windows copies the string
+    // for a sender in another process.
+    return msg == WM_SETTINGCHANGE && lParam &&
+           _wcsicmp(reinterpret_cast<PCWSTR>(lParam), L"ImmersiveColorSet") ==
+               0;
 }
 
 winrt::Windows::UI::Color ResolveGlowBaseColor(const Settings& settings) {
@@ -7917,6 +7906,11 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
         HandleShellActivation(wParam, reinterpret_cast<HWND>(lParam));
         return 0;
     }
+    if (g_focusTrackingActive && !g_unloading.load() &&
+        AccentChangeMessage(msg, lParam)) {
+        SetTimer(hWnd, kAccentRefreshTimerId, kAccentRefreshDelayMs, nullptr);
+        // Broadcasts: fall through to DefWindowProc.
+    }
     switch (msg) {
         case WM_CLOSE:
             // This hidden notification window is owned by worker shutdown.
@@ -7997,6 +7991,9 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             } else if (wParam == kDecayTimerId) {
                 OnDecayTimer();
 
+            } else if (wParam == kAccentRefreshTimerId) {
+                KillTimer(hWnd, kAccentRefreshTimerId);
+                PostMessage(hWnd, WM_APP_REFRESH_ACCENT, 0, 0);
             } else if (wParam == kFullRebindTimerId) {
                 KillTimer(hWnd, kFullRebindTimerId);
                 g_fullRebindTimerArmed = false;
@@ -8011,6 +8008,7 @@ LRESULT CALLBACK HookThreadWndProc(HWND hWnd,
             KillTimer(hWnd, kPreviewMinFocusTimerId);
             KillTimer(hWnd, kDecayTimerId);
             KillTimer(hWnd, kFullRebindTimerId);
+            KillTimer(hWnd, kAccentRefreshTimerId);
             g_fullRebindTimerArmed = false;
             return 0;
     }
@@ -8056,7 +8054,7 @@ struct DesktopKeyWatch {
 // Focus tracking starts with the taskbar (0.12.1). Windhawk loads the mod into
 // every explorer.exe, also folder-window and COM-server processes that never
 // load Taskbar.View.dll. There the worker keeps only its hidden window and
-// waits: no shell hook, no WinEvents, no accent subscription, no registry
+// waits: no shell hook, no WinEvents, no accent refresh, no registry
 // watch, and no focus logs (capture manual-20261120-154409-086197: seven such
 // processes logged the same focus events as the taskbar process).
 // Started by WM_APP_TASKBAR_READY once the Taskbar.View hooks are in, or at
@@ -8064,7 +8062,6 @@ struct DesktopKeyWatch {
 // ---------------------------------------------------------------------------
 struct FocusTracking {
     bool shellHookRegistered = false;
-    bool accentSubscribed = false;
     HWINEVENTHOOK foregroundHook = nullptr;
     HWINEVENTHOOK desktopHook = nullptr;
     DesktopKeyWatch desktopWatch;
@@ -8092,8 +8089,7 @@ void ActivateFocusTracking(HWND hwnd) {
     // Foreground WinEvents
     t.shellHookRegistered = shellHookRegistered;
 
-    SubscribeAccentChanges();
-    t.accentSubscribed = true;
+    // Accent changes: AccentChangeMessage in HookThreadWndProc.
     RefreshCachedAccent();
 
     t.foregroundHook =
@@ -8154,10 +8150,6 @@ void DeactivateFocusTracking(HWND hwnd) {
     if (t.desktopHook) {
         UnhookWinEvent(t.desktopHook);
         t.desktopHook = nullptr;
-    }
-    if (t.accentSubscribed) {
-        UnsubscribeAccentChanges();
-        t.accentSubscribed = false;
     }
     if (t.shellHookRegistered) {
         DeregisterShellHookWindow(hwnd);

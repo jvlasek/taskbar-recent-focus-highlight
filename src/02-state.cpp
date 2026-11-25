@@ -439,6 +439,10 @@ constexpr UINT_PTR kMinFocusTimerId = 1;
 constexpr UINT_PTR kDecayTimerId = 2;
 constexpr UINT_PTR kPreviewMinFocusTimerId = 3;
 constexpr UINT_PTR kFullRebindTimerId = 4;
+// Windows sends several accent messages per change (and UISettings can lag
+// the first one): read once, shortly after the last.
+constexpr UINT_PTR kAccentRefreshTimerId = 5;
+constexpr UINT kAccentRefreshDelayMs = 250;
 // Change notification on Explorer's VirtualDesktops registry key (public
 // RegNotifyChangeKeyValue). Windows writes CurrentVirtualDesktop there on a
 // switch, sometimes after the foreground change the switch causes (clicking

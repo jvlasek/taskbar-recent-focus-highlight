@@ -467,7 +467,7 @@ stateDiagram-v2
     Idle --> X : WM_APP_SHUTDOWN + thread WM_APP<br/>(Wh_ModUninit, INFINITE join)
     Full --> X : same
     Deg --> X : same
-    X --> N : DeactivateFocusTracking (hooks, watch,<br/>accent, shell hook), timers killed, VDM released
+    X --> N : DeactivateFocusTracking (hooks, watch,<br/>shell hook), timers killed, VDM released
 ```
 
 Activation posts the current foreground window, so the first candidate does
