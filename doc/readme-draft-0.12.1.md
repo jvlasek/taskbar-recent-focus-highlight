@@ -4,8 +4,8 @@
 
 # Taskbar Recent Focus Highlight
 
-Highlights the taskbar icons of the apps you switch between, so you find
-them again on a crowded taskbar. Inside a multi-window preview flyout,
+Highlights the taskbar icons of the few apps you work in at once, so you
+find them again on a crowded taskbar. Inside a multi-window preview flyout,
 it ranks that app's windows the same way.
 
 ![A crowded taskbar with the three most recently used apps marked, and the open flyout ranking that app's windows](https://raw.githubusercontent.com/jvlasek/taskbar-recent-focus-highlight/10ce8381849664bb9a73e1530bf889528e38b812/screenshots/0.12.1/hero.png)
