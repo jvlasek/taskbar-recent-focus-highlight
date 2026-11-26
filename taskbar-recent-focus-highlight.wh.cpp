@@ -195,7 +195,7 @@ IDs; with the mod log on, each button's ID is shown as
       $name: Fill opacity
       $description: >-
         0–100. Side bar and Plate strength; half of it for Plate with accent.
-        (Thumbnail tints use Previews → Tint opacity.)
+        (Thumbnail tints use Thumbnail previews → Tint opacity.)
     - glowAccentThickness: 2
       $name: Accent thickness (px)
       $description: Border width for Plate with accent (1–8).
