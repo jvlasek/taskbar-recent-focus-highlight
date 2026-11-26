@@ -230,9 +230,7 @@ int32_t WINAPI TaskItemThumbnailView_put_ThumbnailSource_Hook(void* pThis,
 
 using HoverFlyoutModel_TargetItemKey_t = void(WINAPI*)(void* pThis,
                                                        void* param1);
-extern // Per UI thread; emptied by ReleaseUiThreadLocals_UIThread at unload.
-thread_local std::wstring t_lastFlyoutKey;
-HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
+extern HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
 void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1);
 
 bool HookTaskbarViewDllSymbols(HMODULE module) {
@@ -330,6 +328,8 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
     return true;
 }
 
+// Per UI thread; emptied by ReleaseUiThreadLocals_UIThread at unload.
+thread_local std::wstring t_lastFlyoutKey;
 HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
 void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
     // Flyout retargeted to another button: clear and repaint (below).
