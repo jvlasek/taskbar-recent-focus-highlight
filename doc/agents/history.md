@@ -82,10 +82,6 @@ Short timeline:
   `Wh_Log` under any mutex; `RememberUiDispatcher` gates; PID 0 fails
   closed; exclusion sweep on the worker; init no longer fails for "nothing
   to paint"; smaller one-liners. Not taken: see `reviews/review-response-neon.md`.
-  Then: in-mod README replaced by the reviewed draft; catalog description
-  "apps you used last"; "Highlight color"; app-ranking settings moved into
-  the Taskbar icons group with a second 0.11 transition (Jakub: 63 users,
-  fix it now rather than haul it; both transitions go in 1.0).
 
 ## Review lessons about removed mechanisms
 
