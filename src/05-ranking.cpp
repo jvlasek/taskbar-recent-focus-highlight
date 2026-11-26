@@ -6,7 +6,7 @@
 // Explorer AppId and still lists a live window of it. Ranks without one keep
 // their history but take no slot. observedRunning is the last UI IsRunning
 // snapshot; it can stay set for a button Explorer parked without a final
-// state update, so a live window is required too (Fable review 2.1).
+// state update, so a live window is required too.
 // Grace covers Alt-Tab flicker, not a heartbeat. No weak.get() here.
 bool AppAppearsOnTaskbar(const std::wstring& key) {
     const std::wstring wantAppId = AppIdFromAppKey(key);
@@ -57,8 +57,8 @@ void DeriveAppsFromWindowsLocked(DesktopRecencyState& desk,
         const std::wstring key =
             appId.empty() ? std::wstring{} : std::wstring(L"APPID:") + appId;
         if (key != w.key && !key.empty()) {
-            LOG_DEFERRED(L"Window %p (%s) belongs to %s", hwnd,
-                         w.displayName.c_str(), key.c_str());
+            Wh_Log(L"Window %p (%s) belongs to %s", hwnd,
+                   w.displayName.c_str(), key.c_str());
         }
         w.key = key;
         if (!key.empty()) {
@@ -106,10 +106,10 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
             // its Lister windows are both TOTALCMD64.EXE).
             const ULONGLONG idleTenths =
                 (now - info.lastConfirmedFocusTick) / 6000;
-            LOG_DEFERRED(L"Decayed: %s key=%s (last use %llu.%llu min ago)",
-                         info.displayName.c_str(), info.key.c_str(),
-                         static_cast<unsigned long long>(idleTenths / 10),
-                         static_cast<unsigned long long>(idleTenths % 10));
+            Wh_Log(L"Decayed: %s key=%s (last use %llu.%llu min ago)",
+                   info.displayName.c_str(), info.key.c_str(),
+                   static_cast<unsigned long long>(idleTenths / 10),
+                   static_cast<unsigned long long>(idleTenths % 10));
             it = desk.appFocusMap.erase(it);
             continue;
         }
@@ -122,11 +122,11 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
         if (hidden != info.hiddenNoButton) {
             info.hiddenNoButton = hidden;
             if (hidden) {
-                LOG_DEFERRED(L"Hidden (no running button): %s key=%s",
-                             info.displayName.c_str(), info.key.c_str());
+                Wh_Log(L"Hidden (no running button): %s key=%s",
+                       info.displayName.c_str(), info.key.c_str());
             } else {
-                LOG_DEFERRED(L"Shown again (running button): %s",
-                             info.displayName.c_str());
+                Wh_Log(L"Shown again (running button): %s",
+                       info.displayName.c_str());
             }
         }
         if (hidden) {

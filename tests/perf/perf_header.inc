@@ -106,6 +106,43 @@ inline void Report(bool sinceLoad) {
 inline thread_local int t_depth = 0;
 inline thread_local int t_lockDepth = 0;  // TimedLocks held by this thread
 inline thread_local bool t_isWorker = false;  // set by any Worker scope
+// Normal perf builds: the mod's Wh_Log calls become PERF_LOG. A line logged
+// while this thread holds a timed lock is queued and written when its last
+// timed lock is released, so log I/O (Mod logs on) is not counted as lock
+// hold. Quiet builds make every mod log a no-op instead.
+inline thread_local std::vector<std::wstring> t_pendingLogs;
+inline void DeferLog(const char* fn, const wchar_t* fmt, ...) {
+    std::wstring f(fmt);
+#ifndef _WIN32
+    for (size_t p = 0; (p = f.find(L"%s", p)) != std::wstring::npos; p += 3)
+        f.replace(p, 2, L"%ls");
+#endif
+    wchar_t b[1024];
+    va_list ap;
+    va_start(ap, fmt);
+#ifdef _WIN32
+    _vsnwprintf(b, 1023, f.c_str(), ap);
+    b[1023] = L'\0';
+#else
+    vswprintf(b, 1024, f.c_str(), ap);
+#endif
+    va_end(ap);
+    std::wstring line = L"(";
+    for (; *fn; ++fn) line += static_cast<wchar_t>(*fn);
+    line += L") ";
+    line += b;
+    t_pendingLogs.push_back(std::move(line));
+}
+inline void FlushPendingLogs() {
+    if (t_lockDepth != 0 || t_pendingLogs.empty()) {
+        return;
+    }
+    std::vector<std::wstring> lines;
+    lines.swap(t_pendingLogs);
+    for (const auto& line : lines) {
+        Wh_Log(L"%s", line.c_str());
+    }
+}
 // The interval report is printed only by a thread outside every timed scope
 // and lock: printing ~35 lines to a listening debugger takes 13-19 ms, and
 // before 2026-11-17 that time showed up as lock holds / scope maxima of
@@ -184,10 +221,19 @@ struct TimedLock {
         Record(buttonPath ? (worker ? WorkerButtonLockHold : UIButtonLockHold)
                           : (worker ? WorkerStateLockHold : UIStateLockHold),
                acquired, end, false);
+        FlushPendingLogs();
     }
     TimedLock(const TimedLock&) = delete;
     TimedLock& operator=(const TimedLock&) = delete;
 };
 }  // namespace perf
+#define PERF_LOG(...)                                \
+    do {                                             \
+        if (perf::t_lockDepth != 0) {                \
+            perf::DeferLog(__func__, __VA_ARGS__);   \
+        } else {                                     \
+            Wh_Log(__VA_ARGS__);                     \
+        }                                            \
+    } while (0)
 #define PERF_SCOPE(slot) perf::Scope perfScope_##slot(perf::slot)
 // ======================= end of PERF BUILD header ==========================

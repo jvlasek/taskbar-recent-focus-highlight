@@ -46,9 +46,8 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
         }
         {
             // Skip an unchanged repaint. Explorer re-runs the button's
-            // visual states on every title change (IrfanView paging images:
-            // 8-16 a second, capture manual-20261120-150148); until the
-            // plates had this cache each run repainted them. The plates also
+            // visual states on every title change (an image viewer paging
+            // images: 8-16 a second). The plates also
             // compare Windows' shapes, which a window-count or hover change
             // alters without changing the panel size.
             auto painted = GetCachedPaintState(button);
@@ -104,7 +103,7 @@ void ApplyButtonHighlight(FrameworkElement button, int rankOneBased) {
 
         if (t <= 0.0) {
             // With the plate signature, or Plate styles at intensity 0 missed
-            // the cache on every UpdateVisualStates (Neon review 1.7.1).
+            // the cache on every UpdateVisualStates.
             SetCachedPaintState(button, rankOneBased, settings->generation,
                                 edge, boxWi, boxHi,
                                 plateStyle && plateShapes.ok
@@ -168,7 +167,7 @@ void PruneTrackedButtons_UIThread() {
 // AppAppearsOnTaskbar runs off this thread and must not weak.get().
 // Weak refs are resolved outside g_buttonStateMutex: resolving touches every
 // cached XAML object, and after an idle period (pages trimmed) that once held
-// the lock for 14 ms while the worker may need it (perf run 2026-11-17).
+// the lock for 14 ms while the worker may need it.
 void PruneDeadButtonStates_UIThread() {
     std::vector<std::pair<void*, winrt::weak_ref<FrameworkElement>>> entries;
     {

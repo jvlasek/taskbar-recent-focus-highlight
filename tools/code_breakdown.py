@@ -95,7 +95,7 @@ def items(part, domain, area, names):
 
 
 # 01 includes + settings
-items("01", SHARED, A_INFRA, "GetCurrentTime MIDL_INTERFACE WH_WINRT_WINUI2 Xaml kClsidVirtualDesktopManager EnumName EnumToName NameToEnum MinFocusConfirmMode")
+items("01", SHARED, A_INFRA, "GetCurrentTime WH_WINRT_WINUI2 Xaml kClsidVirtualDesktopManager EnumName EnumToName NameToEnum MinFocusConfirmMode")
 items("01", APPS, A_SETTINGS, "GlowStyle TaskbarEdge BarSide PromoteMode kGlowStyleNames kPromoteModeNames kTaskbarEdgeNames kBarSideNames")
 items("01", WINDOWS, A_SETTINGS, "PreviewStyle kPreviewStyleNames")
 items("01", SHARED, A_COLORS, "GlowColorMode kGlowColorNames kDefaultAccentPacked g_cachedAccent PackColor UnpackColor")
@@ -117,7 +117,7 @@ items("02", APPS, A_CONFIRM, "kMinFocusTimerId")
 items("02", WINDOWS, A_CONFIRM, "kPreviewMinFocusTimerId")
 items("02", SHARED, A_CONFIRM, "kTransientRetryPollMs")
 items("02", APPS, A_ICONPAINT, "kGlowElementName kGlowBarName kGlowContourName kGlowStackName kBackgroundElementName")
-items("02", WINDOWS, A_CARDPAINT, "kThumbGlowElementName kThumbGlowLayerNames kThumbTitleBgName kThumbTitleBarName")
+items("02", WINDOWS, A_CARDPAINT, "kThumbGlowElementName kThumbGlowPlateName kThumbTitleBgName kThumbTitleBarName")
 # 03 virtual desktops (also hosts a few icon-layout globals)
 items("03", APPS, A_ICONPAINT, "IconPanelLayoutWatch g_layoutWatchMutex g_layoutWatches g_iconPanelRelayoutDepth")
 items("03", APPS, A_DISPATCH, "g_lastFullRefreshTick")
@@ -173,8 +173,8 @@ OVERRIDES = {
         (21, 28, SHARED, A_META),       # README intro + hero screenshot
         (29, 56, APPS, A_META),         # Styles, How apps get ranked
         (57, 71, WINDOWS, A_META),      # Previews
-        (126, 213, APPS, A_META),       # YAML: icons.* (count, decay, min focus, look)
-        (214, 300, WINDOWS, A_META),    # YAML: previews.*
+        (114, 198, APPS, A_META),       # YAML: Taskbar: count, decay, min focus, promote; icons.*
+        (199, 285, WINDOWS, A_META),    # YAML: previews.*
     ],
     "01": [
         (177, 187, APPS, A_SETTINGS),   # Settings: icon fields

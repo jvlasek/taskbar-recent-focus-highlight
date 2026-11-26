@@ -1,12 +1,12 @@
 // ---------------------------------------------------------------------------
-// Card overlay (Plate / Outline preview styles, 0.11.16)
+// Card overlay (Whole plate / Whole plate with accent)
 // ---------------------------------------------------------------------------
 // Our own Border, inserted right above the card's BackgroundBorder and bound
 // to its geometry (size, margin, alignment, rounded corners), so it follows
 // Taskbar Styler themes without measuring. Same construction as
-// taskbar-active-window-highlight (EphremTil17, GPL-3.0). Before 0.11.16 the
-// plate recoloured BackgroundBorder itself, and the card's hover state
-// replaced that brush (rank-1 plate vanished on hover). The overlay sits
+// taskbar-active-window-highlight (EphremTil17, GPL-3.0). Recolouring
+// BackgroundBorder itself does not work: the card's hover state replaces
+// that brush. The overlay sits
 // above BackgroundBorder and below the title/thumbnail, so hover changes the
 // background underneath and still shows through a partial fill.
 
@@ -190,8 +190,6 @@ Controls::Grid EnsureThumbOverlayHost(Controls::Panel panel) {
                   VerticalAlignment="Stretch">
                 <Rectangle Name="WhRecentFocusThumbGlowL0"
                            IsHitTestVisible="False" Visibility="Collapsed"/>
-                <Rectangle Name="WhRecentFocusThumbGlowL1"
-                           IsHitTestVisible="False" Visibility="Collapsed"/>
                 <Border Name="WhRecentFocusThumbTitleBg"
                         IsHitTestVisible="False" Visibility="Collapsed"/>
                 <Rectangle Name="WhRecentFocusThumbTitleBar"
@@ -217,7 +215,7 @@ Controls::Grid EnsureThumbOverlayHost(Controls::Panel panel) {
     host.VerticalAlignment(VerticalAlignment::Stretch);
     host.IsHitTestVisible(false);
     ClearOurHostClip(host);
-    // Under the card content, right above its background (0.11.17): a title
+    // Under the card content, right above its background: a title
     // wash on top of the title made the text look dim at higher tint
     // opacity. Front only if this template has no BackgroundBorder here.
     if (!PlaceAboveCardBackground(panel, host)) {
@@ -269,8 +267,8 @@ void HideThumbOverlayChildren(Controls::Grid host) {
     if (!host) {
         return;
     }
-    for (auto name : {kThumbGlowLayerNames[0], kThumbGlowLayerNames[1],
-                      kThumbTitleBgName, kThumbTitleBarName}) {
+    for (auto name : {kThumbGlowPlateName, kThumbTitleBgName,
+                      kThumbTitleBarName}) {
         if (auto el = FindChildByName(host, name)) {
             try {
                 el.Visibility(Visibility::Collapsed);
@@ -388,7 +386,7 @@ FrameworkElement PickLiveFlyoutThumbOnThisDispatcher() {
 
 void SchedulePreviewFlyoutRefresh(FrameworkElement dispatcherAnchor) {
     // Only on this thread's dispatcher, and one the unload drain knows: the
-    // pending flag below is per thread (Neon review 1.4.1 / 3.2).
+    // pending flag below is per thread.
     if (!dispatcherAnchor || g_unloading.load() ||
         !RememberUiDispatcher(dispatcherAnchor)) {
         return;

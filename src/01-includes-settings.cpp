@@ -41,22 +41,8 @@
 
 using namespace winrt::Windows::UI::Xaml;
 
-// Public IVirtualDesktopManager (Win10+). Defined here so we do not depend on
-// a particular SDK header / uuid.lib export of the CLSID.
-#ifndef __IVirtualDesktopManager_INTERFACE_DEFINED__
-#define __IVirtualDesktopManager_INTERFACE_DEFINED__
-MIDL_INTERFACE("a5cd92ff-29be-454c-8d04-d82879fb3f1b")
-IVirtualDesktopManager : public IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE IsWindowOnCurrentVirtualDesktop(
-        HWND topLevelWindow,
-        BOOL* onCurrentDesktop) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetWindowDesktopId(HWND topLevelWindow,
-                                                         GUID* desktopId) = 0;
-    virtual HRESULT STDMETHODCALLTYPE MoveWindowToDesktop(HWND topLevelWindow,
-                                                          REFGUID desktopId) = 0;
-};
-#endif
-
+// IVirtualDesktopManager comes from <shobjidl.h>. The CLSID is spelled out
+// so the build does not depend on a uuid library exporting it.
 // AA509086-5CA9-4C25-8F95-589D3C07B48A
 static const CLSID kClsidVirtualDesktopManager = {
     0xaa509086,
@@ -77,8 +63,7 @@ enum class GlowColorMode {
     Custom,
 };
 
-// 0.12.1: Frame / Full became Plate with accent / Plate (flush with the
-// native plate); the setting ids `frame` / `full` are kept.
+// Setting ids `frame` / `full` are older names of Plate with accent / Plate.
 enum class GlowStyle {
     PlateAccent,  // id `frame`: native plate, half fill, accent border
     Plate,        // id `full`: native plate, full Fill opacity
@@ -114,7 +99,7 @@ enum class PreviewStyle {
     Plate,      // tint whole preview card (hover-like plate)
     TitleBar,   // thin bar under the title, above the thumbnail image
     Outline,    // plate plus an accent border (card overlay)
-    TitleOutline,  // title plate plus an accent border (0.12.1)
+    TitleOutline,  // title plate plus an accent border
     None,       // not marked (ranks 2+ only)
 };
 
@@ -198,8 +183,7 @@ struct Settings {
     int previewIntensity[3] = {100, 70, 45};
     int previewMinFocusSeconds = 1;
     int previewDecayMinutes = 15;
-    // Rank 1 and ranks 2+ are styled separately (0.11.16; replaced the
-    // fixed "hybrid" option: rank 1 plate, ranks 2+ title tint = defaults).
+    // Rank 1 and ranks 2+ are styled separately.
     PreviewStyle previewTopStyle = PreviewStyle::Plate;
     PreviewStyle previewRestStyle = PreviewStyle::TitleBg;
     int previewOutlineThickness = 2;

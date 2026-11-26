@@ -7,11 +7,10 @@ BOOL Wh_ModInit() {
 
     g_unloading = false;
     LoadSettings(/*userSavedSettings=*/false);
-    // highlightCount=0 with previews off used to return FALSE here. Windhawk
-    // shows nothing for a failed init and then does not call
-    // Wh_ModSettingsChanged, so turning a highlight back on did nothing
-    // until the mod was toggled (Neon review 1.8.2). Now the mod loads and
-    // paints nothing until a setting asks for it.
+    // Nothing to paint (highlightCount=0, previews off) is not a failed init:
+    // Windhawk shows nothing for a failed init and then does not call
+    // Wh_ModSettingsChanged, so turning a highlight back on would do nothing
+    // until the mod was toggled.
     {
         auto settings = SettingsSnap();
         if (settings->highlightCount <= 0 &&
@@ -35,7 +34,7 @@ BOOL Wh_ModInit() {
                                    LoadLibraryExW_Hook,
                                    &LoadLibraryExW_Original);
 
-    // No taskbar.dll hooks since 0.11.20: button identity, windows, previews
+    // No taskbar.dll hooks: button identity, windows, previews
     // and focus all come from Taskbar.View.dll and public WindowsUdk
     // interfaces.
     if (HMODULE taskbarViewModule = GetTaskbarViewModuleHandle()) {
@@ -66,6 +65,17 @@ void Wh_ModAfterInit() {
     // process is known to host the taskbar.
 }
 
+// Heap-owning thread_locals of a UI thread. Their destructors would run only
+// at that thread's exit, long after the module is unloaded, so each disable
+// or update leaked them. Runs in the unload cleanup on each UI thread.
+void ReleaseUiThreadLocals_UIThread() {
+    std::unordered_set<void*>().swap(t_seededRepeaters);
+    std::wstring().swap(t_lastLadderLog);
+    std::wstring().swap(t_lastResolveLog);
+    std::wstring().swap(t_lastFlyoutKey);
+    std::wstring().swap(g_imagePathCache);
+}
+
 void Wh_ModUninit() {
     Wh_Log(L">");
     g_unloading = true;
@@ -79,6 +89,7 @@ void Wh_ModUninit() {
             ClearAllThumbnailHighlights_UIThread();
             RevokeIconPanelLayoutWatchesOnThisDispatcher();
             RevokeRepeaterWatchesOnThisDispatcher();
+            ReleaseUiThreadLocals_UIThread();
         })) {
         Wh_Log(L"ERROR: UI cleanup did not finish on every dispatcher");
     }
@@ -110,10 +121,10 @@ void Wh_ModUninit() {
         g_haveCurrentDesktop = false;
         g_pendingFocus = {};
     }
-    // The worker has exited; its last-use stretch goes with it.
+    // The worker has exited (and released the VDM); its last-use stretch
+    // goes with it.
     g_inFrontHwnd = nullptr;
     g_inFrontSince = 0;
-    ReleaseVdm();
     {
         std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
         g_windowAppId.clear();
@@ -151,7 +162,7 @@ void Wh_ModSettingsChanged() {
 
     // Newly excluded apps are dropped on the focus worker
     // (DropExcludedRecords): it owns the recency maps and is the STA
-    // ExclusionAumid's SHGetPropertyStoreForWindow needs (Neon review 1.6).
+    // ExclusionAumid's SHGetPropertyStoreForWindow needs.
     PostToHookThread(WM_APP_SETTINGS_CHANGED);
     RequestApplyVisuals();
     RequestApplyPreviewVisuals();

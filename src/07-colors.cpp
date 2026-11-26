@@ -85,11 +85,10 @@ void RefreshCachedAccent() {
 }
 
 // Accent changes arrive as window messages on the focus worker's hidden
-// top-level window (0.12.2, Neon review 2.2.1). Before, a
-// UISettings::ColorValuesChanged handler ran on a WinRT thread-pool thread:
-// revoking it on unload does not wait for a call already running, which could
-// still be in the mod's code after Windhawk unloads it. Broadcasts never
-// reached the old HWND_MESSAGE window; the WS_POPUP window (0.11.0) gets them.
+// top-level window. Not UISettings::ColorValuesChanged: its handler runs on
+// a WinRT thread-pool thread, and revoking it on unload does not wait for a
+// call already running, which could still be in the mod's code after
+// Windhawk unloads it.
 bool AccentChangeMessage(UINT msg, LPARAM lParam) {
     if (msg == WM_DWMCOLORIZATIONCOLORCHANGED) {
         return true;

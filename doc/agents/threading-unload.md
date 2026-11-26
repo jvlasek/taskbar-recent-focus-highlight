@@ -80,11 +80,14 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
 reverse, and never publish settings while holding `g_stateMutex`.
 
 **Not under a lock:** XAML calls, `Dispatcher` calls, COM and cross-process
-reads (`SHGetPropertyStoreForWindow`, `GetProcessImagePath`), and `Wh_Log`
-(0.12.2: any mutex, not only `g_stateMutex`). Resolve first, then lock and
-assign. The UI thread takes `g_stateMutex` to paint. Inside a lock log with
-`LOG_DEFERRED` under a `DeferredLogScope` declared before the lock; read
-`GetLastError()` into a local first. `run-review-helper-tests.py` checks it.
+reads (`SHGetPropertyStoreForWindow`, `GetProcessImagePath`). Resolve first,
+then lock and assign. The UI thread takes `g_stateMutex` to paint. `Wh_Log`
+under a lock is fine: with logging off it does nothing, and the mod logs
+only state changes there. 0.12.2 deferred such lines with a
+`DeferredLogScope` / `LOG_DEFERRED` layer; 0.12.3 removed it (windhawk-mods
+review: it formatted and allocated even with logging off). Only the perf
+build defers them (`PERF_LOG`, flushed when the last timed lock of the
+thread is released), so normal perf runs do not count log I/O as lock hold.
 
 ## Rules
 
@@ -105,7 +108,14 @@ assign. The UI thread takes `g_stateMutex` to paint. Inside a lock log with
    stale class points into an unmapped image).
 6. `StartWinEventHookThread` returns only after the worker signalled its ready
    event, so the shutdown post cannot be lost.
-7. try/catch around XAML in hooks; a hook must never throw into Explorer.
+7. try/catch around XAML in hooks; a hook must never throw into Explorer
+   (`TaskListButton_UpdateVisualStates_Hook` wraps everything after the
+   original call since 0.12.3).
+12. No heap-owning `thread_local` inside a function on a UI thread. Declare it
+    at namespace scope and empty it in `ReleaseUiThreadLocals_UIThread` (the
+    unload cleanup on that thread): a thread_local destructor runs only at
+    thread exit, after the module is gone, so it leaked on every unload
+    (0.12.3, AI review).
 8. No WinRT event subscription whose handler can run on a thread-pool thread
    (`UISettings::ColorValuesChanged` until 0.12.2): revoking it does not wait
    for a call already running. Use a window message to the worker instead.
@@ -141,6 +151,12 @@ Drain rules:
   `GetResults() == true`) or the UI thread's retained handle is signalled.
   A rejected post, a High completion, a failed status read, a canceled or
   errored operation, or elapsed time is not proof.
+- After the Low sentinel ran, wait until its thread is back in its message
+  loop (`WaitUntilUiThreadLeftModCode`, 0.12.3): `SendMessageTimeout(WM_NULL)`
+  to a window of that thread, repeated until handled or the thread exits.
+  `Completed` wakes the waiter from inside our delegate, before the delegate
+  and the sentinel have returned and been released (windhawk-mods AI review,
+  PR #7977). No window found: logged, one 20 ms pause.
 - `Completed` is the barrier, not a signal from inside the callback. If the
   event or the subscription fails, poll the same operation while watching the
   thread handle. Never drop an operation because its status cannot be read.

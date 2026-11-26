@@ -68,7 +68,7 @@ FrameworkElement FindRunningIndicator(FrameworkElement iconPanel) {
 
 // Native pill is a 2–4px strip. Taskbar Styler themes restyle RunningIndicator
 // into a full-cell acrylic hover plate that would cover a side bar sitting
-// under it (UWPSpy: 39×38 acrylic on PointerOver vs #00FFFFFF at rest).
+// under it.
 bool RunningIndicatorLooksLikeHoverPlate(FrameworkElement ri,
                                          FrameworkElement iconPanel) {
     if (!ri || !iconPanel) {
@@ -123,8 +123,7 @@ void EnsureGlowHostZOrder(Controls::Panel panel, UIElement host) {
             bool above = name == L"OverlayIcon" ||
                          name == L"MultiWindowElement" ||
                          name == L"ProgressIndicator";
-            // Every style sits behind the glyph (0.12.1: the frame, now
-            // Plate with accent, used to be drawn above it).
+            // Every style sits behind the glyph.
             if (name == L"Icon" || name == L"DefaultIcon")
                 above = true;
             if (running && !RunningIndicatorLooksLikeHoverPlate(fe, panelFe))
@@ -317,7 +316,7 @@ bool ReadNativeGlowShape(FrameworkElement element,
                        // fallback.
     }
 }
-// What the plates copy from Windows' button, read once per paint (0.12.1):
+// What the plates copy from Windows' button, read once per paint:
 // the plate (a Styler hover plate or BackgroundElement, else the content
 // box) and, on a multi-window button, the MultiWindowElement sliver. Also
 // the signature of all of it for the paint cache.
@@ -428,9 +427,7 @@ void PaintNativeContour(Controls::Grid host,
     NativeGlowShape const& shape = shapes.main;
 
     // Plate with accent: accent border (accent thickness) and half the fill,
-    // as the preview "with accent" styles. Until 0.12.1 Frame was a 230-alpha
-    // stroke of the side bar's thickness with no fill (read as a focus ring),
-    // and Full 60 % of Fill opacity (paler than Windows' own plates).
+    // as the preview "with accent" styles.
     const bool accent = style == GlowStyle::PlateAccent;
     auto strokeColor = color;
     strokeColor.A = 255;
@@ -469,7 +466,7 @@ void PaintNativeContour(Controls::Grid host,
         // also subtracts the size, so the desired size is 0 and the plate
         // never sizes the button. With plain margins a plate kept the old
         // BackgroundElement size and held its button big after a Taskbar
-        // Styler theme shrank the others (BottomDensy, 2026-11-21); the next
+        // Styler theme shrank the others; the next
         // repaint read the held size, so the plate cache kept it.
         b.Margin(ZeroDesiredMargin(w, h, dx, dy));
         b.CornerRadius({InsetGlowRadius(s.corners.TopLeft, 0, w, h),
@@ -491,18 +488,18 @@ void PaintNativeContour(Controls::Grid host,
         return b;
     };
 
-    // Flush with the native plate (0.12.1), so it reads as the button's own
-    // plate lit up. Until 0.12.1 Frame / Full sat at Size % (92) inside it.
+    // Flush with the native plate, so it reads as the button's own
+    // plate lit up.
     if (!paint(kGlowContourName, shape, std::nullopt))
         return;
 
-    // Multi-window button (0.12.1): Windows narrows BackgroundElement by a
+    // Multi-window button: Windows narrows BackgroundElement by a
     // right margin of 4 and draws MultiWindowElement (Border, Width 16, right-
     // aligned, above the background) so a sliver sticks out: "(O))". Our
     // plate copies only the background, which left a faint native ")" next to
     // a tinted "(O)". Copy the sliver as well, under our plate, clipped to the
     // part right of the background so the tint does not double where they
-    // overlap. UWPSpy dump: tests/uwspy/captures/multiwin-20261119-212700.
+    // overlap.
     bool stacked = false;
     if (shapes.hasStack) {
         NativeGlowShape const& stack = shapes.stack;

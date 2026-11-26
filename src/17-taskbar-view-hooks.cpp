@@ -36,7 +36,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
     // belongs to another process. PID only — do not OpenProcess from
     // UpdateVisualStates.
     // A grouped button whose sample window closed while siblings remain is
-    // re-captured and re-ranked inline, without a visible off/on (Fable 2.2).
+    // re-captured and re-ranked inline, without a visible off/on.
     auto sampleDead = [](const ButtonIdentity& ident) {
         return ident.sampleHwnd &&
                (!IsWindow(ident.sampleHwnd) ||
@@ -106,7 +106,7 @@ void RefreshButtonHighlight(FrameworkElement button) {
 // The anchor only selects the dispatcher. The queued bind still runs if
 // that button is destroyed before Low priority.
 void ScheduleRefreshAllHighlights(FrameworkElement dispatcherAnchor) {
-    // Only on a dispatcher the unload drain knows (Neon review 1.4.1).
+    // Only on a dispatcher the unload drain knows.
     if (!dispatcherAnchor || g_unloading.load() ||
         !RememberUiDispatcher(dispatcherAnchor)) {
         return;
@@ -152,15 +152,19 @@ void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {
         return;
     }
 
-    TrackButton_UIThread(button);
-    const bool seeded = SeedButtonsFromRepeater_UIThread(button);
-    RefreshButtonHighlight(button);
-    // Only an unknown rank (-1) or a pending sweep needs a full pass. Our
-    // overlays are own elements that Explorer's hover states do not reset,
-    // so a ranked button no longer re-binds every sibling (Fable review 5).
-    const int rank = GetCachedPaintState(button).rank;
-    if (seeded || rank < 0 || g_pendingOverlaySweep.load()) {
-        ScheduleRefreshAllHighlights(button);
+    // Nothing may throw into Explorer's frames.
+    try {
+        TrackButton_UIThread(button);
+        const bool seeded = SeedButtonsFromRepeater_UIThread(button);
+        RefreshButtonHighlight(button);
+        // Only an unknown rank (-1) or a pending sweep needs a full pass. Our
+        // overlays are own elements that Explorer's hover states do not
+        // reset, so a ranked button does not re-bind every sibling.
+        const int rank = GetCachedPaintState(button).rank;
+        if (seeded || rank < 0 || g_pendingOverlaySweep.load()) {
+            ScheduleRefreshAllHighlights(button);
+        }
+    } catch (...) {
     }
 }
 
@@ -304,7 +308,7 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
         return false;
     }
     // Button identity (TaskListButton -> view model -> WindowsUdk TaskItem /
-    // TaskGroup) lives here; before 0.11.20 this flag waited for taskbar.dll.
+    // TaskGroup) lives here.
     g_taskbandResolveReady = true;
 
     Wh_Log(L"Preview resolve: view model %s, rebind repaint %s",
@@ -324,6 +328,8 @@ bool HookTaskbarViewDllSymbols(HMODULE module) {
     return true;
 }
 
+// Per UI thread; emptied by ReleaseUiThreadLocals_UIThread at unload.
+thread_local std::wstring t_lastFlyoutKey;
 HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
 void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
     // Flyout retargeted to another button: clear and repaint (below).
@@ -336,20 +342,19 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
     // previous app's views.
     try {
         // Explorer sets the same key repeatedly while one button's flyout
-        // stays open; clearing every tracked card each time was the cost
-        // (Fable review 5). Only a different button needs the clear.
-        static thread_local std::wstring lastKey;
+        // stays open; clearing every tracked card each time was the cost.
+        // Only a different button needs the clear.
         std::wstring key;
         if (param1) {
             key = reinterpret_cast<const winrt::hstring*>(param1)->c_str();
         }
         // An empty key (flyout closing) clears once, and has no cards to
-        // paint (Neon review 1.7.8).
+        // paint.
         const bool empty = key.empty();
-        if (empty ? !lastKey.empty() : key != lastKey) {
+        if (empty ? !t_lastFlyoutKey.empty() : key != t_lastFlyoutKey) {
             ClearAllThumbnailHighlights_UIThread();
         }
-        lastKey = std::move(key);
+        t_lastFlyoutKey = std::move(key);
         if (empty) {
             return;
         }

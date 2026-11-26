@@ -29,7 +29,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         const double thickness = static_cast<double>(
             (std::max)(2, (std::min)(8, settings->glowThickness)));
         // Fallback plate (card without BackgroundBorder) corner roundness:
-        // the former icons.glowRoundness default (setting removed in 0.11.38).
+        // 28 %.
         constexpr double roundnessFrac = 0.28;
         // Preview plate / titleBg use dedicated opacity (not taskbar fill).
         const int fillOpacitySetting =
@@ -44,11 +44,9 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         PreviewStyle paintStyle = style;
 
         // Tint base. An accent style halves it so its same-colour border
-        // still reads (0.11.38). One tint level per flyout (0.12.1): with an
+        // still reads. One tint level per flyout: with an
         // accent style at rank 1, ranks 2+ in a non-accent style are halved
-        // too. Before, a rank-2 Title plate (Tint 40, intensity 85: 34 %)
-        // was tinted more than the rank-1 Whole plate with accent (20 %),
-        // against the ladder; the accent styles themselves are unchanged.
+        // too, so no lower rank is tinted more than rank 1.
         auto isAccent = [](PreviewStyle s) {
             return s == PreviewStyle::Outline ||
                    s == PreviewStyle::TitleOutline;
@@ -125,7 +123,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             if (!painted) {
                 Controls::Grid host = EnsureThumbOverlayHost(panel);
                 HideThumbOverlayChildren(host);
-                if (auto plate = FindChildByName(host, kThumbGlowLayerNames[0])
+                if (auto plate = FindChildByName(host, kThumbGlowPlateName)
                                      .try_as<Shapes::Rectangle>()) {
                     const int plateA =
                         static_cast<int>(tintSetting * 2.55 + 0.5);
@@ -153,12 +151,10 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
 
         if (paintStyle == PreviewStyle::TitleBg ||
             paintStyle == PreviewStyle::TitleOutline) {
-            // Title / title with accent (0.12.1): a plate over the title row,
+            // Title / title with accent: a plate over the title row,
             // 4px in from the card's BackgroundBorder (left, top, right) with
             // the card's corner radius, ending under the title with the gap
-            // above the title mirrored below it. Before 0.12.1 the title tint
-            // sat 8px in from the panel with 4px corners and uneven gaps
-            // (thin tint left of the icon). The accent variant adds an
+            // above the title mirrored below it. The accent variant adds an
             // accent border and halves the tint, as Outline does for the card.
             const bool outline = paintStyle == PreviewStyle::TitleOutline;
             const double stroke =
@@ -287,6 +283,9 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         Wh_Log(L"ApplyThumbnailHighlight error %08X", hr);
     }
 }
+
+// Per UI thread; emptied by ReleaseUiThreadLocals_UIThread at unload.
+thread_local std::wstring t_lastResolveLog;
 
 void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     if (!anyThumb) {
@@ -340,9 +339,8 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     // HWND per card (this flyout only — not a global window ladder): the
     // card's own view model, ParentItem.WindowId (Explorer's binding). Per
     // card; cannot shift when cards are removed or recycled. A card without
-    // one stays unmarked. (Before 0.11.19 also a DataContext/ctor-map pass and
-    // a repeater-index + captured Thumbnails pass; the first never matched
-    // on 26100-era builds, the second shifted after a card was closed.)
+    // one stays unmarked. Repeater order is no identity: it shifts when a card
+    // is closed.
     struct Scored {
         FrameworkElement view{nullptr};
         HWND hwnd = nullptr;
@@ -414,15 +412,13 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
             (std::min)(order.size(), static_cast<size_t>(limit));
         // Siblings are listed only when the set, a rank or a resolve failure
         // differs from this UI thread's last resolve: reopening the same
-        // flyout repeated about 2,100 sibling lines in a day (capture
-        // manual-20261120-154409-086197).
+        // flyout would repeat them every time.
         std::wstring sig = std::to_wstring(limit);
         for (const auto& s : scored) {
             sig += L"|" + std::to_wstring(reinterpret_cast<uintptr_t>(s.hwnd)) +
                    L"," + std::to_wstring(s.rank) + L"," +
                    std::to_wstring(static_cast<int>(s.fail));
         }
-        thread_local std::wstring t_lastResolveLog;
         const bool changed = sig != t_lastResolveLog;
         if (changed) {
             t_lastResolveLog = sig;
@@ -484,8 +480,8 @@ void RequestApplyPreviewVisuals() {
     }
     // Same as RequestApplyVisuals: if no dispatcher yet, wait for the first
     // TaskListButton / thumbnail OnApplyTemplate. Do not PostMessage to this
-    // focus thread — the WM_APP_REQUEST_PREVIEW_APPLY handler used to call
-    // this again, which spun at 100% CPU and starved WM_TIMER.
+    // focus thread: a handler calling this again spins at 100 % CPU and
+    // starves WM_TIMER.
     RunOnUiThread([]() {
         FrameworkElement el = PickLiveFlyoutThumbOnThisDispatcher();
         if (el) {

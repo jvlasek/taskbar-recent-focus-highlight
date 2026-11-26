@@ -1,6 +1,5 @@
-// TryRunAsync: do not static_cast the operation object to bool (always true).
-// Some SDKs return IAsyncOperation<bool> (GetResults = queued); others
-// IAsyncAction (Status Error/Canceled = not queued).
+// TryRunAsync returns IAsyncOperation<bool> (GetResults = queued). Do not
+// static_cast the operation object to bool (always true).
 bool DispatcherOpWasQueued(
     winrt::Windows::Foundation::IAsyncOperation<bool> const& op) {
     if (!op) {
@@ -18,15 +17,6 @@ bool DispatcherOpWasQueued(
         return false;
     }
     return true;
-}
-
-bool DispatcherOpWasQueued(winrt::Windows::Foundation::IAsyncAction const& op) {
-    if (!op) {
-        return false;
-    }
-    auto const st = op.Status();
-    return st != winrt::Windows::Foundation::AsyncStatus::Error &&
-           st != winrt::Windows::Foundation::AsyncStatus::Canceled;
 }
 
 bool DispatcherTryRun(
@@ -137,6 +127,49 @@ std::vector<std::shared_ptr<UiDispatcher>> CollectUiDispatchers() {
 
 enum class DrainProof { SentinelRan, ThreadExited };
 
+BOOL CALLBACK TakeFirstThreadWindow(HWND hwnd, LPARAM out) {
+    *reinterpret_cast<HWND*>(out) = hwnd;
+    return FALSE;
+}
+
+// The sentinel ran, but its thread is still on its way out of mod code: the
+// Completed delegate calls SetEvent (which wakes the waiter) before it
+// returns, and the delegate and the sentinel are then released, all code in
+// this module. A message sent to a window of that thread is handled only
+// back in its message loop, after all of that. Unbounded like the rest of
+// the drain, but ends if the thread exits.
+void WaitUntilUiThreadLeftModCode(const UiDispatcher& ui) {
+    if (GetCurrentThreadId() == ui.threadId) {
+        return;  // drained on this thread: nothing of it is still running
+    }
+    bool loggedNoWindow = false;
+    for (;;) {
+        if (UiThreadExited(ui)) {
+            return;
+        }
+        HWND hwnd = nullptr;
+        EnumThreadWindows(ui.threadId, TakeFirstThreadWindow,
+                          reinterpret_cast<LPARAM>(&hwnd));
+        if (!hwnd) {
+            // A XAML UI thread owns windows. If none is found, there is no
+            // barrier to send; the brief wait below is all that is left.
+            if (!loggedNoWindow) {
+                Wh_Log(L"UI drain: thread %u has no window for the return "
+                       L"barrier", ui.threadId);
+                loggedNoWindow = true;
+            }
+            PauseDispatcherAttempt(ui);
+            return;
+        }
+        DWORD_PTR result = 0;
+        if (SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_NORMAL, 100,
+                                &result)) {
+            return;
+        }
+        // Timed out (thread busy) or the window just went away: try again.
+    }
+}
+
 DrainProof DrainOneUiDispatcher(
     const UiDispatcher& ui,
     const winrt::Windows::UI::Core::DispatchedHandler& handler,
@@ -166,6 +199,7 @@ DrainProof DrainOneUiDispatcher(
         }
         if (end == DispatcherOpEnd::Ran) {
             if (highRan) {
+                WaitUntilUiThreadLeftModCode(ui);
                 return DrainProof::SentinelRan;
             }
             highRan = true;
@@ -241,7 +275,7 @@ bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler) {
 
 
 // One queued full pass per UI thread: worker requests (RequestApplyVisuals)
-// and UI requests (ScheduleRefreshAllHighlights) coalesce (Fable review 5).
+// and UI requests (ScheduleRefreshAllHighlights) coalesce.
 // The flag is cleared when the pass starts, so a request made during a pass
 // queues the next one.
 std::mutex g_fullPassQueuedMutex;
@@ -307,13 +341,12 @@ void RequestApplyVisuals() {
     }
     if (!any) {
         // Buttons not tracked yet — will apply on next UpdateVisualStates.
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         const auto& ranks = CurrentDeskLocked().rankedApps;
-        LOG_DEFERRED(L"Ranks ready (%zu) — waiting for TaskListButton hooks",
+        Wh_Log(L"Ranks ready (%zu) — waiting for TaskListButton hooks",
                ranks.size());
         for (size_t i = 0; i < ranks.size(); i++) {
-            LOG_DEFERRED(L"  Rank %zu: %s", i + 1, ranks[i].displayName.c_str());
+            Wh_Log(L"  Rank %zu: %s", i + 1, ranks[i].displayName.c_str());
         }
     }
 }

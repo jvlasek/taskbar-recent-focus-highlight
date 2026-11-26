@@ -74,7 +74,7 @@ Short timeline:
   gained `Hidden`, `Decayed … key … last use`, input-desktop name and
   late-tick lines (testing.md).
 - 0.12.2 (Gemini 4 Neon pre-submission review, `reviews/neon.md`; the
-  windhawk-mods submission is now 0.12.2, PR text `doc/pr-0.12.2.md`):
+  windhawk-mods submission 0.12.2, PR text then `doc/pr-0.12.2.md`, now `doc/pr-0.12.3.md`):
   accent from `WM_SETTINGCHANGE` / `WM_DWMCOLORIZATIONCOLORCHANGED` instead
   of `UISettings::ColorValuesChanged`; transient foregrounds keep the
   last-use stretch; same-app window switch re-confirms; destroyed window in
@@ -83,9 +83,19 @@ Short timeline:
   closed; exclusion sweep on the worker; init no longer fails for "nothing
   to paint"; smaller one-liners. Not taken: see `reviews/review-response-neon.md`.
   Then: in-mod README replaced by the reviewed draft; catalog description
-  "apps you used last"; "Highlight color"; app-ranking settings moved into
-  the Taskbar icons group with a second 0.11 transition (Jakub: 63 users,
-  fix it now rather than haul it; both transitions go in 1.0).
+  "apps you used last"; "Highlight color"; the app-ranking settings moved
+  into the Taskbar icons group with a second transition (undone in 0.12.3).
+- 0.12.3 (windhawk-mods PR #7977, AI review; `reviews/review-response-pr7977.md`):
+  the settings move is undone (must-fix: the page shows defaults and the
+  first save drops the old values; Windhawk has no migration), the page is
+  ordered and labelled instead; unload waits until the taskbar thread is
+  back in its message loop after the sentinel
+  (`WaitUntilUiThreadLeftModCode`, WM_NULL barrier; must-fix); heap
+  thread_locals released on unload; try/catch around the UpdateVisualStates
+  hook body; dead code removed; comments without review / capture /
+  version references; plainer setting texts; `DeferredLogScope` /
+  `LOG_DEFERRED` removed from the mod (plain `Wh_Log`; the perf build
+  defers lines under timed locks with `PERF_LOG`).
 
 ## Review lessons about removed mechanisms
 

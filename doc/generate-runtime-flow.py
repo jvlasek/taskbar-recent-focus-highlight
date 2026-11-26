@@ -23,7 +23,7 @@ def wire(points):
     parts.append(f'<path class="wire" d="{points}"/>')
 
 text(40,46,'Taskbar Recent Focus Highlight','heading')
-text(40,76,'Two recency paths · mod 0.12.2 · architecture checked 2026-11-25','small')
+text(40,76,'Two recency paths · mod 0.12.3 · architecture checked 2026-11-26','small')
 box(40,102,680,110,'Foreground event',[
     'EVENT_SYSTEM_FOREGROUND → focus thread (taskbar process only).',
     'HandleForegroundNotification validates actual foreground.'])

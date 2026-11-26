@@ -7,7 +7,7 @@ states, changed from several functions). Both kinds are drawn the same way
 here; each section says which it is, where the state lives and which thread
 owns it.
 
-Source: v0.12.2 (`src/`; machines 1–14 drawn at 0.11.46 and updated since, 15 added in 0.12.2). Function names are the anchors: search for them
+Source: v0.12.3 (`src/`; machines 1–14 drawn at 0.11.46 and updated since, 15 added in 0.12.2). Function names are the anchors: search for them
 when the code moves. Domain tags match [code-breakdown.md](code-breakdown.md):
 **apps** = taskbar icon ranks, **windows** = flyout card ranks, **shared** =
 both.

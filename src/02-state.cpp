@@ -62,8 +62,8 @@ struct HwndHash {
 
 // Explorer's AppId per taskbar window, from the button captures (UI
 // thread); read by the focus worker to key app recency. Upper case. Stored
-// with the window's PID so a recycled handle does not inherit an AppId
-// (Fable review 2.4). Pruned of dead windows when it grows, and on
+// with the window's PID so a recycled handle does not inherit an AppId.
+// Pruned of dead windows when it grows, and on
 // HSHELL_WINDOWDESTROYED.
 struct WindowAppIdEntry {
     std::wstring appIdUpper;
@@ -135,8 +135,8 @@ struct GuidEqual {
 };
 
 // App + window recency for one virtual desktop (session-wide, not per-monitor).
-// App-level (min-focus) confirmation of one window: the recency record
-// (Fable review 4.3, 0.11.46). The app is not stored with it: each rank
+// App-level (min-focus) confirmation of one window: the recency record.
+// The app is not stored with it: each rank
 // recompute looks the window up in Explorer's window -> AppId map, so a
 // window no captured button lists yet is simply not ranked yet (no
 // provisional keys), and a window whose AppId changes follows it. The same
@@ -169,49 +169,6 @@ struct DesktopRecencyState {
 
 std::mutex g_stateMutex;
 
-// Log lines produced while g_stateMutex is held are queued per thread and
-// written once the outermost DeferredLogScope ends, prefixed with the
-// function that produced them (Wh_Log's own prefix shows the destructor). Declare the scope before
-// the lock so it is destroyed after it: Wh_Log is OutputDebugString plus
-// file I/O, and the UI thread waits on this lock. Without a scope, logs
-// directly.
-thread_local std::vector<std::wstring> t_deferredLogs;
-thread_local int t_deferredLogDepth = 0;
-
-struct DeferredLogScope {
-    DeferredLogScope() { ++t_deferredLogDepth; }
-    ~DeferredLogScope() {
-        if (--t_deferredLogDepth != 0 || t_deferredLogs.empty()) {
-            return;
-        }
-        std::vector<std::wstring> lines;
-        lines.swap(t_deferredLogs);
-        for (const auto& line : lines) {
-            Wh_Log(L"%s", line.c_str());
-        }
-    }
-    DeferredLogScope(const DeferredLogScope&) = delete;
-    DeferredLogScope& operator=(const DeferredLogScope&) = delete;
-};
-
-#define LOG_DEFERRED(...)                                              \
-    do {                                                               \
-        if (t_deferredLogDepth == 0) {                                 \
-            Wh_Log(__VA_ARGS__);                                       \
-        } else {                                                       \
-            wchar_t deferredLogBuf_[1024];                             \
-            const int deferredLogPre_ = _snwprintf_s(                  \
-                deferredLogBuf_, _countof(deferredLogBuf_), _TRUNCATE, \
-                L"(%S) ", __func__);                                   \
-            if (deferredLogPre_ > 0) {                                 \
-                _snwprintf_s(deferredLogBuf_ + deferredLogPre_,        \
-                             _countof(deferredLogBuf_) -               \
-                                 deferredLogPre_,                      \
-                             _TRUNCATE, __VA_ARGS__);                  \
-            }                                                          \
-            t_deferredLogs.emplace_back(deferredLogBuf_);              \
-        }                                                              \
-    } while (0)
 std::unordered_map<GUID, DesktopRecencyState, GuidHash, GuidEqual> g_desktopMaps;
 GUID g_currentDesktopId{};
 bool g_haveCurrentDesktop = false;
@@ -398,7 +355,6 @@ bool RememberUiDispatcher(FrameworkElement el) {
         if (!dispatcher || !dispatcher.HasThreadAccess()) {
             return false;
         }
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_dispatchersMutex);
         if (!g_uiDispatchers) {
             return false;
@@ -415,7 +371,7 @@ bool RememberUiDispatcher(FrameworkElement el) {
                              GetCurrentProcess(), &thread, SYNCHRONIZE,
                              FALSE, 0)) {
             const DWORD error = GetLastError();
-            LOG_DEFERRED(L"Cannot capture UI thread: %u", error);
+            Wh_Log(L"Cannot capture UI thread: %u", error);
             return false;
         }
         winrt::handle ownedThread{thread};
@@ -454,7 +410,7 @@ constexpr UINT kAccentRefreshDelayMs = 250;
 // Change notification on Explorer's VirtualDesktops registry key (public
 // RegNotifyChangeKeyValue). Windows writes CurrentVirtualDesktop there on a
 // switch, sometimes after the foreground change the switch causes (clicking
-// a flashing button of another desktop, 2026-11-18), so the write itself is
+// a flashing button of another desktop), so the write itself is
 // the signal. Hook thread only. When the watch could not be set up, every
 // foreground change re-reads the value instead.
 bool g_desktopKeyWatchActive = false;
@@ -470,19 +426,18 @@ constexpr ULONGLONG kTransientRetryPollMs = 200;
 
 // All glow layers live on our overlay (never BackgroundElement — hover/active
 // storyboards own that and constantly wipe our styles). The mod writes no
-// property of a native element (the icon size boost went in 0.11.38).
+// property of a native element.
 constexpr PCWSTR kGlowElementName = L"WhRecentFocusGlow";
-// The side bar. Until 0.12.1 a second, 2px larger rectangle at low alpha
-// (L1) acted as a halo; XAML cannot blur it, so it showed as a hard rim.
+// The side bar.
 constexpr PCWSTR kGlowBarName = L"WhRecentFocusGlowBar";
 // Plate / Plate with accent: our copy of BackgroundElement, and of the
-// MultiWindowElement sliver on a multi-window button (0.12.1).
+// MultiWindowElement sliver on a multi-window button.
 constexpr PCWSTR kGlowContourName = L"WhRecentFocusContour";
 constexpr PCWSTR kGlowStackName = L"WhRecentFocusContourStack";
 
 // Intensity for a 0-based rank: the three configured values, then each
 // further rank fades by a quarter (floor 10 %, never above rank 3) so ranks
-// 4+ stay distinguishable (0.11.38; they used to repeat rank 3).
+// 4+ stay distinguishable.
 int RankIntensity(const int (&perRank)[3], int rankIdx) {
     if (rankIdx < 3) {
         return perRank[rankIdx < 0 ? 0 : rankIdx];
@@ -499,10 +454,7 @@ constexpr PCWSTR kBackgroundElementName = L"BackgroundElement";
 constexpr PCWSTR kThumbGlowElementName = L"WhRecentFocusThumbGlow";
 // Card overlay Border beside BackgroundBorder (14-preview-overlay).
 constexpr wchar_t kThumbCardOverlayName[] = L"WhRecentFocusThumbCard";
-constexpr PCWSTR kThumbGlowLayerNames[] = {
-    L"WhRecentFocusThumbGlowL0",
-    L"WhRecentFocusThumbGlowL1",
-};
+constexpr PCWSTR kThumbGlowPlateName = L"WhRecentFocusThumbGlowL0";
 // Title-area overlays (separate so plate host can sit full-card).
 constexpr PCWSTR kThumbTitleBgName = L"WhRecentFocusThumbTitleBg";
 constexpr PCWSTR kThumbTitleBarName = L"WhRecentFocusThumbTitleBar";

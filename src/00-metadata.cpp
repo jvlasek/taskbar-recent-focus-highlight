@@ -2,7 +2,7 @@
 // @id              taskbar-recent-focus-highlight
 // @name            Taskbar Recent Focus Highlight
 // @description     Highlight the taskbar icons and window previews of the apps you used last
-// @version         0.12.2
+// @version         0.12.3
 // @author          Jakub Vlášek
 // @github          https://github.com/jvlasek
 // @include         explorer.exe
@@ -71,12 +71,13 @@ the active window marked? Use the much lighter
 
 ## Settings
 
-- **Exclude list**: apps never highlighted, on icons or previews.
-- **Taskbar icons**: how many apps, decay, minimum focus time and when to
-  skip it, style, color (system accent or your own), intensity per rank,
-  side bar size, fill, accent border width.
+- **Taskbar** (first four): how many apps, decay, minimum focus time,
+  coming back to an app.
+- **Taskbar icons**: style, color (system accent or your own), intensity per
+  rank, side bar size, fill, accent border width.
 - **Thumbnail previews**: on/off, how many windows, their own decay and
   minimum focus time, single-window previews, styles, intensity per rank.
+- **Exclude list** (last): apps never highlighted, on icons or previews.
 
 The exclude list takes process names, paths or app IDs. Two buttons of one
 program (Total Commander and its Lister, for example) have different app
@@ -93,6 +94,10 @@ IDs; with the mod log on, each button's ID is shown as
 - **SOLIDWORKS** and other apps that show each open document as its own
   preview card manage those previews themselves, so their previews are not
   marked. Their taskbar icon is ranked normally.
+- "Use" is keyboard or mouse input anywhere while the app is in front.
+  Watching a long video or reading without touching anything is not use,
+  so such an app drops out after the decay time; mouse movement on another
+  monitor still counts for the app in front.
 - Enabled while Explorer is already running, the ranks appear after the
   first taskbar button changes (hover or a window switch).
 
@@ -110,55 +115,39 @@ IDs; with the mod log on, each button's ID is shown as
 
 // ==WindhawkModSettings==
 /*
-- excludedPrograms: [""]
-  $name: Exclude list
+- highlightCount: 3
+  $name: "Taskbar: number of highlighted apps"
+  $description: How many recently used apps to highlight on the taskbar (1–6 recommended)
+- decayMinutes: 30
+  $name: "Taskbar: decay time (minutes)"
   $description: >-
-    Apps that should never be highlighted (icons or previews). Entries can be
-    process names, paths or application IDs (Explorer's AppId of a taskbar
-    button is shown in the mod log as "Button identity: ... appId=", which
-    also tells apart two buttons of one exe), for example:
+    An app drops out this long after you last used it (keyboard or mouse
+    input while it was in front), so the app you work in stays highlighted.
+    Window previews have their own decay under Thumbnail previews.
+- minFocusSeconds: 8
+  $name: "Taskbar: minimum focus time (seconds)"
+  $description: >-
+    An app counts as used only after it stays in front this long, so passing
+    through it with Alt+Tab does not count. Window previews have their own
+    minimum under Thumbnail previews.
+- promoteMode: immediateTracked
+  $name: "Taskbar: coming back to an app"
+  $description: >-
+    Whether an app you switch back to becomes rank 1 at once or waits the
+    minimum focus time again.
 
-    mspaint.exe
+    At once if still in the list (default): at once when you used the app
+    within the decay time, even if it is not highlighted right now.
 
-    C:\Windows\System32\notepad.exe
+    At once only if highlighted: at once only when the app is highlighted
+    right now; others wait.
 
-    Microsoft.WindowsCalculator_8wekyb3d8bbwe!App
+    Always wait: every switch waits the minimum focus time.
+  $options:
+  - immediateTracked: At once if still in the list (default)
+  - immediateTopN: At once only if highlighted
+  - alwaysWait: Always wait
 - icons:
-    - highlightCount: 3
-      $name: Number of highlighted apps
-      $description: How many recent apps to highlight on the taskbar (1–6 recommended)
-    - decayMinutes: 30
-      $name: Decay time (minutes)
-      $description: >-
-        Time since you last used an app (keyboard or mouse input while it was
-        in front) before it drops out of the taskbar highlight list. The app
-        you are working in stays highlighted. (Preview windows use a separate
-        decay under Thumbnail previews.)
-    - minFocusSeconds: 8
-      $name: Minimum focus time (seconds)
-      $description: >-
-        Only count an app as recent if it stays focused at least this long.
-        Filters Alt+Tab noise. (Preview windows use a separate timer under
-        Thumbnail previews.)
-        See “When to skip min-focus” for re-focus of apps already in the list.
-    - promoteMode: immediateTracked
-      $name: When to skip min-focus
-      $description: >-
-        Controls instant promotion when you re-focus an app (confirmed apps still
-        become rank 1 once promoted — this only skips the wait timer).
-
-        Immediate if in recency map (default): an app whose last confirm is still
-        inside the decay window promotes immediately, even if it is not currently
-        highlighted. A confirm past that window waits again.
-
-        Immediate only if highlighted: instant only when the app is already in the
-        top-N highlighted set; rank 4+ and new apps wait the full min-focus time.
-
-        Always wait: every app focus (including re-focus) waits min-focus seconds.
-      $options:
-      - immediateTracked: Immediate if confirm is still inside decay (default)
-      - immediateTopN: Immediate only if already highlighted (top N)
-      - alwaysWait: Always wait min-focus time
     - glowStyle: leftBar
       $name: Highlight style
       $description: >-
@@ -216,8 +205,8 @@ IDs; with the mod log on, each button's ID is shown as
       $name: Highlight recent windows
       $description: >-
         When hovering a multi-window taskbar icon, rank that flyout’s thumbnails
-        by window recency and mark the top N. Single-window flyouts: see
-        "Also mark single-window previews".
+        by when you last used them and mark the top N. Single-window flyouts:
+        see "Also mark single-window previews".
     - highlightCount: 3
       $name: Number of highlighted windows
       $description: >-
@@ -228,19 +217,19 @@ IDs; with the mod log on, each button's ID is shown as
     - decayMinutes: 15
       $name: Decay time (minutes)
       $description: >-
-        Drop a window from preview recency this long after you last used it
-        (0 = never). Separate from app ranking decay.
+        A window's preview drops out this long after you last used it
+        (0 = never). Separate from the taskbar's decay time.
     - minFocusSeconds: 1
       $name: Minimum focus time (seconds)
       $description: >-
-        How long a window must stay focused before it enters that flyout’s
-        recency list. Separate from app ranking min focus (0 = immediate).
-        Clicking a thumbnail counts like any other focus.
+        How long a window must stay in front before its preview is ranked
+        (0 = at once). Separate from the taskbar's minimum focus time.
+        Clicking a thumbnail counts like any other switch.
     - singleWindow: false
       $name: Also mark single-window previews
       $description: >-
         Mark the preview of an app with only one window too, as rank 1 while
-        that window is recent (Preview minimum focus / Decay below), the same
+        that window is recent (the preview minimum focus and decay above), the same
         way the latest window of a multi-window flyout is marked. For a single
         window the mark therefore means "used within the preview decay";
         lower the decay to tighten it.
@@ -253,8 +242,8 @@ IDs; with the mod log on, each button's ID is shown as
         card. Whole plate with accent = tinted card with an accent border (the
         look of Taskbar Active Window Highlight). Title = a tinted plate over
         the title row. Title with accent = the same with an accent border.
-        Bar under title = thin line under the title (thickness follows Icons →
-        Side bar thickness). The plates follow the card's rounded corners and stay
+        Bar under title = thin line under the title (thickness follows Taskbar
+        icons → Side bar thickness). The plates follow the card's rounded corners and stay
         visible on hover.
       $options:
       - plate: Whole plate
@@ -295,9 +284,22 @@ IDs; with the mod log on, each button's ID is shown as
         0–100. Strength of the Whole plate and Title tint (half of it for the
         "with accent" styles, and for ranks 2+ when rank 1 uses one, so no
         lower rank is tinted more than rank 1). Bar under title uses the full
-        accent and ignores this. Independent of Icons → Fill opacity. Per-rank intensity
+        accent and ignores this. Independent of Taskbar icons → Fill opacity. Per-rank intensity
         still scales the result.
   $name: Thumbnail previews
+- excludedPrograms: [""]
+  $name: Exclude list
+  $description: >-
+    Apps that should never be highlighted (icons or previews). Entries can be
+    process names, paths or application IDs (Explorer's AppId of a taskbar
+    button is shown in the mod log as "Button identity: ... appId=", which
+    also tells apart two buttons of one exe), for example:
+
+    mspaint.exe
+
+    C:\Windows\System32\notepad.exe
+
+    Microsoft.WindowsCalculator_8wekyb3d8bbwe!App
 */
 // ==/WindhawkModSettings==
 

@@ -1,6 +1,6 @@
 # What we learned: identities, previews, and regression testing
 
-Updated 2026-11-25 for mod **0.12.2**: the diagram, the table below, "Thread
+Updated 2026-11-26 for mod **0.12.3**: the diagram, the table below, "Thread
 and lifetime lessons" and "Source landmarks" describe the current mod. The
 other sections are evidence as recorded (0.11.x); where they name a mechanism
 removed since, a note says so. Historical Calculator harness results were

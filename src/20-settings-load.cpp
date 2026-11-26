@@ -2,18 +2,17 @@
 // Settings load
 // ---------------------------------------------------------------------------
 
-// Settings transition 0.11 -> 0.12 (remove a release or two after 0.12.0).
-// 0.11.1 had one preview style for all ranks, `previews.style`
-// (plateTitle = default hybrid, plate, titleBg, titleBar). 0.11.16 split it
-// into `previews.topStyle` + `previews.restStyle`. Windhawk keeps the old
-// stored value and has no migration mechanism (m417z, Discord 2026-11-16), so
+// Settings transition from 0.11.1 (remove in 1.0). 0.11.1 had one preview
+// style for all ranks, `previews.style` (plateTitle = default hybrid,
+// plate, titleBg, titleBar), now `previews.topStyle` +
+// `previews.restStyle`. Windhawk keeps the old
+// stored value and has no migration mechanism, so
 // a user who had picked a non-default style would silently get the new
 // defaults. When both new keys are unset or still at their defaults, use the
 // old choice for both ranks until the user first saves settings: from then on
 // the settings page is what they see. A mod cannot write its own settings, so
 // the state lives in mod storage: 0 = not checked yet, 1 = legacy style in
-// use, 2 = done. Older dev-only values (e.g. "ring") and the old default map
-// to nothing.
+// use, 2 = done. Other values and the old default map to nothing.
 constexpr wchar_t kLegacyPreviewStyleState[] = L"legacyPreviewStyleState";
 
 bool LegacyPreviewStyle(PreviewStyle& out) {
@@ -74,73 +73,15 @@ E EnumSetting(PCWSTR name, const EnumName<E> (&table)[N], E fallback) {
     return fallback;
 }
 
-// Settings transition 0.11 -> 0.12, part 2 (0.12.2; remove with the
-// previews.style one, planned for 1.0). The app-ranking settings moved from
-// the top level into the Taskbar icons group, so their ids changed:
-// highlightCount, minFocusSeconds, promoteMode, decayMinutes ->
-// icons.<same>. The settings page shows the new keys at their defaults, so
-// the old values are used until the user first saves settings, like the
-// preview style above. Only a 0.11 install has old values stored:
-// previews.style existed only there and Windhawk stores every key of a mod's
-// settings together, so its presence gates the transition (without stored
-// settings the old values were the defaults anyway). Mod storage
-// "legacyAppSettingsState": 0 = not checked yet, 1 = old values in use,
-// 2 = done.
-constexpr wchar_t kLegacyAppSettingsState[] = L"legacyAppSettingsState";
-
-void ApplyLegacyAppSettings(Settings& s, bool userSavedSettings) {
-    int state = Wh_GetIntValue(kLegacyAppSettingsState, 0);
-    if (state == 2) {
-        return;
-    }
-    if (userSavedSettings) {
-        if (state == 1) {
-            Wh_Log(L"Settings: 0.11 app settings no longer applied (settings "
-                   L"saved)");
-        }
-        Wh_SetIntValue(kLegacyAppSettingsState, 2);
-        return;
-    }
-    if (state == 0) {
-        auto oldStyle = WindhawkUtils::StringSetting::make(L"previews.style");
-        auto newPromote =
-            WindhawkUtils::StringSetting::make(L"icons.promoteMode");
-        // Unset reads as 0 / empty; otherwise the defaults of 0.12.2.
-        const int count = Wh_GetIntSetting(L"icons.highlightCount");
-        const int minFocus = Wh_GetIntSetting(L"icons.minFocusSeconds");
-        const int decay = Wh_GetIntSetting(L"icons.decayMinutes");
-        const bool newAtDefaults =
-            (count == 0 || count == 3) && (minFocus == 0 || minFocus == 8) &&
-            (decay == 0 || decay == 30) &&
-            (!*newPromote.get() ||
-             wcscmp(newPromote.get(), L"immediateTracked") == 0);
-        state = (*oldStyle.get() && newAtDefaults) ? 1 : 2;
-        Wh_SetIntValue(kLegacyAppSettingsState, state);
-    }
-    if (state == 1) {
-        constexpr int kNoMax = 1 << 30;
-        s.highlightCount = ClampedIntSetting(L"highlightCount", 0, 16);
-        s.minFocusSeconds = ClampedIntSetting(L"minFocusSeconds", 0, kNoMax);
-        s.promoteMode = EnumSetting(L"promoteMode", kPromoteModeNames,
-                                    PromoteMode::ImmediateTracked);
-        s.decayMinutes = ClampedIntSetting(L"decayMinutes", 0, kNoMax);
-        Wh_Log(L"Settings: using the 0.11 app settings (count=%d minFocus=%ds "
-               L"promote=%s decay=%dmin) until settings are saved",
-               s.highlightCount, s.minFocusSeconds,
-               PromoteModeName(s.promoteMode), s.decayMinutes);
-    }
-}
-
 void LoadSettings(bool userSavedSettings) {
     Settings s;
     constexpr int kNoMax = 1 << 30;
 
-    s.highlightCount = ClampedIntSetting(L"icons.highlightCount", 0, 16);
-    s.minFocusSeconds = ClampedIntSetting(L"icons.minFocusSeconds", 0, kNoMax);
-    s.promoteMode = EnumSetting(L"icons.promoteMode", kPromoteModeNames,
+    s.highlightCount = ClampedIntSetting(L"highlightCount", 0, 16);
+    s.minFocusSeconds = ClampedIntSetting(L"minFocusSeconds", 0, kNoMax);
+    s.promoteMode = EnumSetting(L"promoteMode", kPromoteModeNames,
                                 PromoteMode::ImmediateTracked);
-    s.decayMinutes = ClampedIntSetting(L"icons.decayMinutes", 0, kNoMax);
-    ApplyLegacyAppSettings(s, userSavedSettings);
+    s.decayMinutes = ClampedIntSetting(L"decayMinutes", 0, kNoMax);
 
     s.glowStyle =
         EnumSetting(L"icons.glowStyle", kGlowStyleNames, GlowStyle::LeftBar);

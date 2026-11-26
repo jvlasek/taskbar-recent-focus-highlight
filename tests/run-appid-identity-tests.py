@@ -111,8 +111,6 @@ struct DesktopRecencyState {
     std::unordered_map<HWND, WindowAppFocus, HwndHash> windowAppFocus;
     std::unordered_map<std::wstring, AppFocusInfo> appFocusMap;
 };
-#define LOG_DEFERRED(...) ((void)0)
-struct DeferredLogScope {};
 std::unordered_map<HWND, WindowAppIdEntry, HwndHash> g_windowAppId;
 std::unordered_map<void*, ButtonState> g_buttonStates;
 ButtonCapture g_nextCapture;

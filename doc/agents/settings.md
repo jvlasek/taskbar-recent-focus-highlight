@@ -7,15 +7,19 @@ YAML keys map to `LoadSettings()`, which fills a local `Settings` then
 `SettingsSnap()`.
 Nested YAML groups (compact-start-menu / accent-color-sync shape) render as
 real groups in the Windhawk UI. `$group` is still rejected by the schema.
-Only the exclude list (for icons and previews) is top-level since 0.12.2;
-icon/preview keys are dotted.
+The app-ranking keys and the exclude list stay top-level (ids from 0.11.1);
+icon/preview keys are dotted. Position is free, so the page shows the four
+"Taskbar:" settings first, then the groups, then the exclude list (0.12.3).
+Moving a key into a group was tried in 0.12.2 and reverted: Windhawk has no
+migration, the page would show the default and the first save drop the old
+value (windhawk-mods AI review, PR #7977).
 
 | Group | Setting key | Field |
 |-------|-------------|--------|
-| Taskbar icons | `icons.highlightCount` (top-level `highlightCount` until 0.12.1) | `Settings::highlightCount` |
-| Taskbar icons | `icons.minFocusSeconds` (top-level `minFocusSeconds` until 0.12.1) | `Settings::minFocusSeconds` |
-| Taskbar icons | `icons.promoteMode` (top-level `promoteMode` until 0.12.1) | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
-| Taskbar icons | `icons.decayMinutes` (top-level `decayMinutes` until 0.12.1) | app decay |
+| Taskbar (top level) | `highlightCount` | `Settings::highlightCount` |
+| Taskbar (top level) | `minFocusSeconds` | `Settings::minFocusSeconds` |
+| Taskbar (top level) | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
+| Taskbar (top level) | `decayMinutes` | app decay |
 | General | `excludedPrograms[i]` | uppercase set |
 | Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | UI "Highlight color" / "Custom highlight color" since 0.12.2 (ids kept) |
 | Taskbar icons | `icons.glowStyle` | `leftBar` (Side bar) / `full` (Plate) / `frame` (Plate with accent) — UI names and look changed in 0.12.1, ids kept; legacy `bottomBar` falls back to Side |
@@ -54,15 +58,9 @@ meaning of a stored setting:
   changelog / PR description.
 - Purely additive keys need nothing if their default keeps the old behavior.
 
-Current transitions (both 0.11 -> 0.12, to be removed in 1.0):
-- `previews.style` -> `previews.topStyle` + `previews.restStyle`
-  (`ApplyLegacyPreviewStyle`; mod storage key `legacyPreviewStyleState`: 0
-  unchecked, 1 legacy in use, 2 done).
-- 0.12.2: `highlightCount`, `minFocusSeconds`, `promoteMode`, `decayMinutes`
-  -> `icons.*` (`ApplyLegacyAppSettings`; `legacyAppSettingsState`, same
-  values). Gated on a stored `previews.style` (exists only on a 0.11
-  install) and the new keys unset or at their defaults.
-  `tests/run-settings-transition-tests.py`.
+Current transition: 0.11 -> 0.12, `previews.style` -> `previews.topStyle` +
+`previews.restStyle` (`ApplyLegacyPreviewStyle`; mod storage key
+`legacyPreviewStyleState`: 0 unchecked, 1 legacy in use, 2 done).
 
 There is no in-mod `enabled` or `glowDebugLog` setting. Disable the mod in
 Windhawk to turn highlighting off. Verbose bind / preview-resolve lines use
