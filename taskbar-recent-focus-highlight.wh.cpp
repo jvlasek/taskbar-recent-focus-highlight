@@ -342,22 +342,8 @@ IDs; with the mod log on, each button's ID is shown as
 
 using namespace winrt::Windows::UI::Xaml;
 
-// Public IVirtualDesktopManager (Win10+). Defined here so we do not depend on
-// a particular SDK header / uuid.lib export of the CLSID.
-#ifndef __IVirtualDesktopManager_INTERFACE_DEFINED__
-#define __IVirtualDesktopManager_INTERFACE_DEFINED__
-MIDL_INTERFACE("a5cd92ff-29be-454c-8d04-d82879fb3f1b")
-IVirtualDesktopManager : public IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE IsWindowOnCurrentVirtualDesktop(
-        HWND topLevelWindow,
-        BOOL* onCurrentDesktop) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetWindowDesktopId(HWND topLevelWindow,
-                                                         GUID* desktopId) = 0;
-    virtual HRESULT STDMETHODCALLTYPE MoveWindowToDesktop(HWND topLevelWindow,
-                                                          REFGUID desktopId) = 0;
-};
-#endif
-
+// IVirtualDesktopManager comes from <shobjidl.h>. The CLSID is spelled out
+// so the build does not depend on a uuid library exporting it.
 // AA509086-5CA9-4C25-8F95-589D3C07B48A
 static const CLSID kClsidVirtualDesktopManager = {
     0xaa509086,
@@ -1054,10 +1040,7 @@ constexpr PCWSTR kBackgroundElementName = L"BackgroundElement";
 constexpr PCWSTR kThumbGlowElementName = L"WhRecentFocusThumbGlow";
 // Card overlay Border beside BackgroundBorder (14-preview-overlay).
 constexpr wchar_t kThumbCardOverlayName[] = L"WhRecentFocusThumbCard";
-constexpr PCWSTR kThumbGlowLayerNames[] = {
-    L"WhRecentFocusThumbGlowL0",
-    L"WhRecentFocusThumbGlowL1",
-};
+constexpr PCWSTR kThumbGlowPlateName = L"WhRecentFocusThumbGlowL0";
 // Title-area overlays (separate so plate host can sit full-card).
 constexpr PCWSTR kThumbTitleBgName = L"WhRecentFocusThumbTitleBg";
 constexpr PCWSTR kThumbTitleBarName = L"WhRecentFocusThumbTitleBar";
@@ -4489,11 +4472,16 @@ int SeedRepeater_UIThread(
     return tracked;
 }
 
+// Per UI thread. Heap-owning thread_locals are emptied by the unload
+// cleanup on their thread (ReleaseUiThreadLocals_UIThread): their
+// destructors would run only at thread exit, after the module is gone.
+thread_local std::unordered_set<void*> t_seededRepeaters;
+thread_local std::wstring t_lastLadderLog;
+
 bool SeedButtonsFromRepeater_UIThread(FrameworkElement const& button) {
-    static thread_local std::unordered_set<void*> seededRepeaters;
     auto repeater = ButtonRepeater(button);
     if (!repeater ||
-        !seededRepeaters.insert(InspectableIdentity(repeater)).second) {
+        !t_seededRepeaters.insert(InspectableIdentity(repeater)).second) {
         return false;
     }
     const int tracked = SeedRepeater_UIThread(repeater);
@@ -4661,7 +4649,6 @@ void ApplyAllHighlights_UIThread() {
                       boundNames[bi] + L"," + buttonAppIds[bi];
         }
     }
-    thread_local std::wstring t_lastLadderLog;
     const bool ladderChanged = ladder != t_lastLadderLog;
     if (ladderChanged) {
         t_lastLadderLog = ladder;
@@ -5487,8 +5474,6 @@ Controls::Grid EnsureThumbOverlayHost(Controls::Panel panel) {
                   VerticalAlignment="Stretch">
                 <Rectangle Name="WhRecentFocusThumbGlowL0"
                            IsHitTestVisible="False" Visibility="Collapsed"/>
-                <Rectangle Name="WhRecentFocusThumbGlowL1"
-                           IsHitTestVisible="False" Visibility="Collapsed"/>
                 <Border Name="WhRecentFocusThumbTitleBg"
                         IsHitTestVisible="False" Visibility="Collapsed"/>
                 <Rectangle Name="WhRecentFocusThumbTitleBar"
@@ -5566,8 +5551,8 @@ void HideThumbOverlayChildren(Controls::Grid host) {
     if (!host) {
         return;
     }
-    for (auto name : {kThumbGlowLayerNames[0], kThumbGlowLayerNames[1],
-                      kThumbTitleBgName, kThumbTitleBarName}) {
+    for (auto name : {kThumbGlowPlateName, kThumbTitleBgName,
+                      kThumbTitleBarName}) {
         if (auto el = FindChildByName(host, name)) {
             try {
                 el.Visibility(Visibility::Collapsed);
@@ -5883,7 +5868,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             if (!painted) {
                 Controls::Grid host = EnsureThumbOverlayHost(panel);
                 HideThumbOverlayChildren(host);
-                if (auto plate = FindChildByName(host, kThumbGlowLayerNames[0])
+                if (auto plate = FindChildByName(host, kThumbGlowPlateName)
                                      .try_as<Shapes::Rectangle>()) {
                     const int plateA =
                         static_cast<int>(tintSetting * 2.55 + 0.5);
@@ -6045,6 +6030,9 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         Wh_Log(L"ApplyThumbnailHighlight error %08X", hr);
     }
 }
+
+// Per UI thread; emptied by ReleaseUiThreadLocals_UIThread at unload.
+thread_local std::wstring t_lastResolveLog;
 
 void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     if (!anyThumb) {
@@ -6180,7 +6168,6 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
                    L"," + std::to_wstring(s.rank) + L"," +
                    std::to_wstring(static_cast<int>(s.fail));
         }
-        thread_local std::wstring t_lastResolveLog;
         const bool changed = sig != t_lastResolveLog;
         if (changed) {
             t_lastResolveLog = sig;
@@ -6255,9 +6242,8 @@ void RequestApplyPreviewVisuals() {
 // Expected at startup before any TaskListButton is seen — log once, not per call.
 std::atomic<bool> g_loggedNoDispatcherAnchor{false};
 
-// TryRunAsync: do not static_cast the operation object to bool (always true).
-// Some SDKs return IAsyncOperation<bool> (GetResults = queued); others
-// IAsyncAction (Status Error/Canceled = not queued).
+// TryRunAsync returns IAsyncOperation<bool> (GetResults = queued). Do not
+// static_cast the operation object to bool (always true).
 bool DispatcherOpWasQueued(
     winrt::Windows::Foundation::IAsyncOperation<bool> const& op) {
     if (!op) {
@@ -6275,15 +6261,6 @@ bool DispatcherOpWasQueued(
         return false;
     }
     return true;
-}
-
-bool DispatcherOpWasQueued(winrt::Windows::Foundation::IAsyncAction const& op) {
-    if (!op) {
-        return false;
-    }
-    auto const st = op.Status();
-    return st != winrt::Windows::Foundation::AsyncStatus::Error &&
-           st != winrt::Windows::Foundation::AsyncStatus::Canceled;
 }
 
 bool DispatcherTryRun(
@@ -6780,15 +6757,19 @@ void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {
         return;
     }
 
-    TrackButton_UIThread(button);
-    const bool seeded = SeedButtonsFromRepeater_UIThread(button);
-    RefreshButtonHighlight(button);
-    // Only an unknown rank (-1) or a pending sweep needs a full pass. Our
-    // overlays are own elements that Explorer's hover states do not reset,
-    // so a ranked button no longer re-binds every sibling (Fable review 5).
-    const int rank = GetCachedPaintState(button).rank;
-    if (seeded || rank < 0 || g_pendingOverlaySweep.load()) {
-        ScheduleRefreshAllHighlights(button);
+    // Nothing may throw into Explorer's frames.
+    try {
+        TrackButton_UIThread(button);
+        const bool seeded = SeedButtonsFromRepeater_UIThread(button);
+        RefreshButtonHighlight(button);
+        // Only an unknown rank (-1) or a pending sweep needs a full pass. Our
+        // overlays are own elements that Explorer's hover states do not
+        // reset, so a ranked button does not re-bind every sibling.
+        const int rank = GetCachedPaintState(button).rank;
+        if (seeded || rank < 0 || g_pendingOverlaySweep.load()) {
+            ScheduleRefreshAllHighlights(button);
+        }
+    } catch (...) {
     }
 }
 
@@ -6854,7 +6835,9 @@ int32_t WINAPI TaskItemThumbnailView_put_ThumbnailSource_Hook(void* pThis,
 
 using HoverFlyoutModel_TargetItemKey_t = void(WINAPI*)(void* pThis,
                                                        void* param1);
-extern HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
+extern // Per UI thread; emptied by ReleaseUiThreadLocals_UIThread at unload.
+thread_local std::wstring t_lastFlyoutKey;
+HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
 void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1);
 
 bool HookTaskbarViewDllSymbols(HMODULE module) {
@@ -6966,7 +6949,6 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
         // Explorer sets the same key repeatedly while one button's flyout
         // stays open; clearing every tracked card each time was the cost
         // (Fable review 5). Only a different button needs the clear.
-        static thread_local std::wstring lastKey;
         std::wstring key;
         if (param1) {
             key = reinterpret_cast<const winrt::hstring*>(param1)->c_str();
@@ -6974,10 +6956,10 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
         // An empty key (flyout closing) clears once, and has no cards to
         // paint (Neon review 1.7.8).
         const bool empty = key.empty();
-        if (empty ? !lastKey.empty() : key != lastKey) {
+        if (empty ? !t_lastFlyoutKey.empty() : key != t_lastFlyoutKey) {
             ClearAllThumbnailHighlights_UIThread();
         }
-        lastKey = std::move(key);
+        t_lastFlyoutKey = std::move(key);
         if (empty) {
             return;
         }
@@ -8842,6 +8824,18 @@ void Wh_ModAfterInit() {
     // process is known to host the taskbar.
 }
 
+// Heap-owning thread_locals of a UI thread. Their destructors would run only
+// at that thread's exit, long after the module is unloaded, so each disable
+// or update leaked them. Runs in the unload cleanup on each UI thread.
+void ReleaseUiThreadLocals_UIThread() {
+    std::unordered_set<void*>().swap(t_seededRepeaters);
+    std::wstring().swap(t_lastLadderLog);
+    std::wstring().swap(t_lastResolveLog);
+    std::wstring().swap(t_lastFlyoutKey);
+    std::wstring().swap(g_imagePathCache);
+    std::vector<std::wstring>().swap(t_deferredLogs);
+}
+
 void Wh_ModUninit() {
     Wh_Log(L">");
     g_unloading = true;
@@ -8855,6 +8849,7 @@ void Wh_ModUninit() {
             ClearAllThumbnailHighlights_UIThread();
             RevokeIconPanelLayoutWatchesOnThisDispatcher();
             RevokeRepeaterWatchesOnThisDispatcher();
+            ReleaseUiThreadLocals_UIThread();
         })) {
         Wh_Log(L"ERROR: UI cleanup did not finish on every dispatcher");
     }
@@ -8886,10 +8881,10 @@ void Wh_ModUninit() {
         g_haveCurrentDesktop = false;
         g_pendingFocus = {};
     }
-    // The worker has exited; its last-use stretch goes with it.
+    // The worker has exited (and released the VDM); its last-use stretch
+    // goes with it.
     g_inFrontHwnd = nullptr;
     g_inFrontSince = 0;
-    ReleaseVdm();
     {
         std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
         g_windowAppId.clear();

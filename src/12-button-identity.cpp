@@ -574,11 +574,16 @@ int SeedRepeater_UIThread(
     return tracked;
 }
 
+// Per UI thread. Heap-owning thread_locals are emptied by the unload
+// cleanup on their thread (ReleaseUiThreadLocals_UIThread): their
+// destructors would run only at thread exit, after the module is gone.
+thread_local std::unordered_set<void*> t_seededRepeaters;
+thread_local std::wstring t_lastLadderLog;
+
 bool SeedButtonsFromRepeater_UIThread(FrameworkElement const& button) {
-    static thread_local std::unordered_set<void*> seededRepeaters;
     auto repeater = ButtonRepeater(button);
     if (!repeater ||
-        !seededRepeaters.insert(InspectableIdentity(repeater)).second) {
+        !t_seededRepeaters.insert(InspectableIdentity(repeater)).second) {
         return false;
     }
     const int tracked = SeedRepeater_UIThread(repeater);
@@ -746,7 +751,6 @@ void ApplyAllHighlights_UIThread() {
                       boundNames[bi] + L"," + buttonAppIds[bi];
         }
     }
-    thread_local std::wstring t_lastLadderLog;
     const bool ladderChanged = ladder != t_lastLadderLog;
     if (ladderChanged) {
         t_lastLadderLog = ladder;

@@ -499,10 +499,7 @@ constexpr PCWSTR kBackgroundElementName = L"BackgroundElement";
 constexpr PCWSTR kThumbGlowElementName = L"WhRecentFocusThumbGlow";
 // Card overlay Border beside BackgroundBorder (14-preview-overlay).
 constexpr wchar_t kThumbCardOverlayName[] = L"WhRecentFocusThumbCard";
-constexpr PCWSTR kThumbGlowLayerNames[] = {
-    L"WhRecentFocusThumbGlowL0",
-    L"WhRecentFocusThumbGlowL1",
-};
+constexpr PCWSTR kThumbGlowPlateName = L"WhRecentFocusThumbGlowL0";
 // Title-area overlays (separate so plate host can sit full-card).
 constexpr PCWSTR kThumbTitleBgName = L"WhRecentFocusThumbTitleBg";
 constexpr PCWSTR kThumbTitleBarName = L"WhRecentFocusThumbTitleBar";

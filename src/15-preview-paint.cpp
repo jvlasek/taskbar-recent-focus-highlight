@@ -125,7 +125,7 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
             if (!painted) {
                 Controls::Grid host = EnsureThumbOverlayHost(panel);
                 HideThumbOverlayChildren(host);
-                if (auto plate = FindChildByName(host, kThumbGlowLayerNames[0])
+                if (auto plate = FindChildByName(host, kThumbGlowPlateName)
                                      .try_as<Shapes::Rectangle>()) {
                     const int plateA =
                         static_cast<int>(tintSetting * 2.55 + 0.5);
@@ -287,6 +287,9 @@ void ApplyThumbnailHighlight(FrameworkElement thumbView, int rankOneBased) {
         Wh_Log(L"ApplyThumbnailHighlight error %08X", hr);
     }
 }
+
+// Per UI thread; emptied by ReleaseUiThreadLocals_UIThread at unload.
+thread_local std::wstring t_lastResolveLog;
 
 void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
     if (!anyThumb) {
@@ -422,7 +425,6 @@ void RefreshThumbnailFlyout_UIThread(FrameworkElement anyThumb) {
                    L"," + std::to_wstring(s.rank) + L"," +
                    std::to_wstring(static_cast<int>(s.fail));
         }
-        thread_local std::wstring t_lastResolveLog;
         const bool changed = sig != t_lastResolveLog;
         if (changed) {
             t_lastResolveLog = sig;

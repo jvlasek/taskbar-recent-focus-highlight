@@ -66,6 +66,18 @@ void Wh_ModAfterInit() {
     // process is known to host the taskbar.
 }
 
+// Heap-owning thread_locals of a UI thread. Their destructors would run only
+// at that thread's exit, long after the module is unloaded, so each disable
+// or update leaked them. Runs in the unload cleanup on each UI thread.
+void ReleaseUiThreadLocals_UIThread() {
+    std::unordered_set<void*>().swap(t_seededRepeaters);
+    std::wstring().swap(t_lastLadderLog);
+    std::wstring().swap(t_lastResolveLog);
+    std::wstring().swap(t_lastFlyoutKey);
+    std::wstring().swap(g_imagePathCache);
+    std::vector<std::wstring>().swap(t_deferredLogs);
+}
+
 void Wh_ModUninit() {
     Wh_Log(L">");
     g_unloading = true;
@@ -79,6 +91,7 @@ void Wh_ModUninit() {
             ClearAllThumbnailHighlights_UIThread();
             RevokeIconPanelLayoutWatchesOnThisDispatcher();
             RevokeRepeaterWatchesOnThisDispatcher();
+            ReleaseUiThreadLocals_UIThread();
         })) {
         Wh_Log(L"ERROR: UI cleanup did not finish on every dispatcher");
     }
@@ -110,10 +123,10 @@ void Wh_ModUninit() {
         g_haveCurrentDesktop = false;
         g_pendingFocus = {};
     }
-    // The worker has exited; its last-use stretch goes with it.
+    // The worker has exited (and released the VDM); its last-use stretch
+    // goes with it.
     g_inFrontHwnd = nullptr;
     g_inFrontSince = 0;
-    ReleaseVdm();
     {
         std::lock_guard<std::mutex> lock(g_windowAppIdMutex);
         g_windowAppId.clear();

@@ -190,8 +190,6 @@ Controls::Grid EnsureThumbOverlayHost(Controls::Panel panel) {
                   VerticalAlignment="Stretch">
                 <Rectangle Name="WhRecentFocusThumbGlowL0"
                            IsHitTestVisible="False" Visibility="Collapsed"/>
-                <Rectangle Name="WhRecentFocusThumbGlowL1"
-                           IsHitTestVisible="False" Visibility="Collapsed"/>
                 <Border Name="WhRecentFocusThumbTitleBg"
                         IsHitTestVisible="False" Visibility="Collapsed"/>
                 <Rectangle Name="WhRecentFocusThumbTitleBar"
@@ -269,8 +267,8 @@ void HideThumbOverlayChildren(Controls::Grid host) {
     if (!host) {
         return;
     }
-    for (auto name : {kThumbGlowLayerNames[0], kThumbGlowLayerNames[1],
-                      kThumbTitleBgName, kThumbTitleBarName}) {
+    for (auto name : {kThumbGlowPlateName, kThumbTitleBgName,
+                      kThumbTitleBarName}) {
         if (auto el = FindChildByName(host, name)) {
             try {
                 el.Visibility(Visibility::Collapsed);

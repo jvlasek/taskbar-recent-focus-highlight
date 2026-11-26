@@ -41,22 +41,8 @@
 
 using namespace winrt::Windows::UI::Xaml;
 
-// Public IVirtualDesktopManager (Win10+). Defined here so we do not depend on
-// a particular SDK header / uuid.lib export of the CLSID.
-#ifndef __IVirtualDesktopManager_INTERFACE_DEFINED__
-#define __IVirtualDesktopManager_INTERFACE_DEFINED__
-MIDL_INTERFACE("a5cd92ff-29be-454c-8d04-d82879fb3f1b")
-IVirtualDesktopManager : public IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE IsWindowOnCurrentVirtualDesktop(
-        HWND topLevelWindow,
-        BOOL* onCurrentDesktop) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetWindowDesktopId(HWND topLevelWindow,
-                                                         GUID* desktopId) = 0;
-    virtual HRESULT STDMETHODCALLTYPE MoveWindowToDesktop(HWND topLevelWindow,
-                                                          REFGUID desktopId) = 0;
-};
-#endif
-
+// IVirtualDesktopManager comes from <shobjidl.h>. The CLSID is spelled out
+// so the build does not depend on a uuid library exporting it.
 // AA509086-5CA9-4C25-8F95-589D3C07B48A
 static const CLSID kClsidVirtualDesktopManager = {
     0xaa509086,

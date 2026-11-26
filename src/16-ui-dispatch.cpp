@@ -1,6 +1,5 @@
-// TryRunAsync: do not static_cast the operation object to bool (always true).
-// Some SDKs return IAsyncOperation<bool> (GetResults = queued); others
-// IAsyncAction (Status Error/Canceled = not queued).
+// TryRunAsync returns IAsyncOperation<bool> (GetResults = queued). Do not
+// static_cast the operation object to bool (always true).
 bool DispatcherOpWasQueued(
     winrt::Windows::Foundation::IAsyncOperation<bool> const& op) {
     if (!op) {
@@ -18,15 +17,6 @@ bool DispatcherOpWasQueued(
         return false;
     }
     return true;
-}
-
-bool DispatcherOpWasQueued(winrt::Windows::Foundation::IAsyncAction const& op) {
-    if (!op) {
-        return false;
-    }
-    auto const st = op.Status();
-    return st != winrt::Windows::Foundation::AsyncStatus::Error &&
-           st != winrt::Windows::Foundation::AsyncStatus::Canceled;
 }
 
 bool DispatcherTryRun(

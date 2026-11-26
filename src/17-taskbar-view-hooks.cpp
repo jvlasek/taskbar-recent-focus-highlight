@@ -152,15 +152,19 @@ void WINAPI TaskListButton_UpdateVisualStates_Hook(void* pThis) {
         return;
     }
 
-    TrackButton_UIThread(button);
-    const bool seeded = SeedButtonsFromRepeater_UIThread(button);
-    RefreshButtonHighlight(button);
-    // Only an unknown rank (-1) or a pending sweep needs a full pass. Our
-    // overlays are own elements that Explorer's hover states do not reset,
-    // so a ranked button no longer re-binds every sibling (Fable review 5).
-    const int rank = GetCachedPaintState(button).rank;
-    if (seeded || rank < 0 || g_pendingOverlaySweep.load()) {
-        ScheduleRefreshAllHighlights(button);
+    // Nothing may throw into Explorer's frames.
+    try {
+        TrackButton_UIThread(button);
+        const bool seeded = SeedButtonsFromRepeater_UIThread(button);
+        RefreshButtonHighlight(button);
+        // Only an unknown rank (-1) or a pending sweep needs a full pass. Our
+        // overlays are own elements that Explorer's hover states do not
+        // reset, so a ranked button does not re-bind every sibling.
+        const int rank = GetCachedPaintState(button).rank;
+        if (seeded || rank < 0 || g_pendingOverlaySweep.load()) {
+            ScheduleRefreshAllHighlights(button);
+        }
+    } catch (...) {
     }
 }
 
@@ -226,7 +230,9 @@ int32_t WINAPI TaskItemThumbnailView_put_ThumbnailSource_Hook(void* pThis,
 
 using HoverFlyoutModel_TargetItemKey_t = void(WINAPI*)(void* pThis,
                                                        void* param1);
-extern HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
+extern // Per UI thread; emptied by ReleaseUiThreadLocals_UIThread at unload.
+thread_local std::wstring t_lastFlyoutKey;
+HoverFlyoutModel_TargetItemKey_t HoverFlyoutModel_TargetItemKey_Original;
 void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1);
 
 bool HookTaskbarViewDllSymbols(HMODULE module) {
@@ -338,7 +344,6 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
         // Explorer sets the same key repeatedly while one button's flyout
         // stays open; clearing every tracked card each time was the cost
         // (Fable review 5). Only a different button needs the clear.
-        static thread_local std::wstring lastKey;
         std::wstring key;
         if (param1) {
             key = reinterpret_cast<const winrt::hstring*>(param1)->c_str();
@@ -346,10 +351,10 @@ void WINAPI HoverFlyoutModel_TargetItemKey_Hook(void* pThis, void* param1) {
         // An empty key (flyout closing) clears once, and has no cards to
         // paint (Neon review 1.7.8).
         const bool empty = key.empty();
-        if (empty ? !lastKey.empty() : key != lastKey) {
+        if (empty ? !t_lastFlyoutKey.empty() : key != t_lastFlyoutKey) {
             ClearAllThumbnailHighlights_UIThread();
         }
-        lastKey = std::move(key);
+        t_lastFlyoutKey = std::move(key);
         if (empty) {
             return;
         }

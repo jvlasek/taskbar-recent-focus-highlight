@@ -105,7 +105,14 @@ assign. The UI thread takes `g_stateMutex` to paint. Inside a lock log with
    stale class points into an unmapped image).
 6. `StartWinEventHookThread` returns only after the worker signalled its ready
    event, so the shutdown post cannot be lost.
-7. try/catch around XAML in hooks; a hook must never throw into Explorer.
+7. try/catch around XAML in hooks; a hook must never throw into Explorer
+   (`TaskListButton_UpdateVisualStates_Hook` wraps everything after the
+   original call since 0.12.3).
+12. No heap-owning `thread_local` inside a function on a UI thread. Declare it
+    at namespace scope and empty it in `ReleaseUiThreadLocals_UIThread` (the
+    unload cleanup on that thread): a thread_local destructor runs only at
+    thread exit, after the module is gone, so it leaked on every unload
+    (0.12.3, AI review).
 8. No WinRT event subscription whose handler can run on a thread-pool thread
    (`UISettings::ColorValuesChanged` until 0.12.2): revoking it does not wait
    for a call already running. Use a window message to the worker instead.
