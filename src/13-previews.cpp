@@ -34,7 +34,7 @@ WudkGetObject_t TaskItemThumbnailViewModel_get_TaskItemThumbnail;
 // Strongest resolve: the window Explorer itself bound to this card.
 // card -> ThumbnailSource (view model) -> TaskItemThumbnail -> ParentItem
 // -> WindowId. Per card, no ctor timing, no index; for UWP the WindowId is
-// the ApplicationFrameWindow (shadow log 2026-11-15), matching focus.
+// the ApplicationFrameWindow, matching focus.
 // Why a card did not resolve (diagnostics; 0 = resolved).
 enum class CardResolveFail : int {
     None = 0,
@@ -220,8 +220,8 @@ std::vector<FrameworkElement> CollectSiblingThumbnailViews(
 // ---------------------------------------------------------------------------
 // Closing a window from the flyout removes its card without rebinding the
 // others (no put_ThumbnailSource, no OnApplyTemplate), so the remaining
-// ranks kept their old paint until focus changed or the flyout reopened
-// (capture manual-20261115-152151, 15:23:03 -> 15:23:20). ElementClearing
+// ranks kept their old paint until focus changed or the flyout reopened.
+// ElementClearing
 // fires when the repeater removes or recycles a card. Subscribed once per
 // repeater on its UI thread; revoked there at unload.
 
@@ -238,8 +238,7 @@ std::unordered_map<void*, RepeaterClearingWatch> g_repeaterWatches;
 
 void WatchRepeaterElementClearing_UIThread(muxc::ItemsRepeater const& repeater) {
     // Unload revokes the watch on its dispatcher: subscribe only on one the
-    // drain knows (review-lessons "no SizeChanged without a drainable
-    // dispatcher"; Neon review 1.4.1).
+    // drain knows.
     if (!repeater || g_unloading.load() ||
         !RememberUiDispatcher(repeater.try_as<FrameworkElement>())) {
         return;
@@ -392,7 +391,7 @@ std::vector<FrameworkElement> CollectRepeaterThumbnailViews(
 }
 
 void TrackThumbView_UIThread(FrameworkElement thumbView) {
-    // Untracked without a drainable dispatcher (Neon review 1.4.1).
+    // Untracked without a drainable dispatcher.
     if (!thumbView || !RememberUiDispatcher(thumbView)) {
         return;
     }
@@ -546,7 +545,7 @@ FrameworkElement FindThumbnailBackgroundBorder(FrameworkElement thumbView) {
                 continue;
             }
             auto cn = winrt::get_class_name(child);
-            // Never our own card overlay (Neon review 1.7.6).
+            // Never our own card overlay.
             if (cn == L"Windows.UI.Xaml.Controls.Border" &&
                 child.Name() != kThumbCardOverlayName) {
                 return child;

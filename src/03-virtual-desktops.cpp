@@ -39,7 +39,7 @@ IVirtualDesktopManager* EnsureVdm() {
     // CoCreate on the STA that will use it. UI threads must not create or
     // call this pointer — they read the cached desktop GUID instead.
     // Off that thread: no pointer at all (an STA pointer must not cross
-    // apartments; Neon review 1.6). No caller does this today.
+    // apartments). No caller does this today.
     if (!OnHookThread()) {
         return nullptr;
     }
@@ -127,7 +127,7 @@ GUID ResolveCurrentDesktopId() {
     return g_currentDesktopId;
 }
 
-// Desktop to credit a confirmed focus to (Fable review 2.3). The pending
+// Desktop to credit a confirmed focus to. The pending
 // record keeps the registry's current desktop from when focus arrived, and
 // the registry lags a switch by a moment. At confirm (after min-focus) the
 // registry has caught up: if the window is on the current desktop (public

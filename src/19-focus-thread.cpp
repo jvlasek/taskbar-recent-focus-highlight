@@ -73,9 +73,8 @@ void CALLBACK WinEventProc(HWINEVENTHOOK /*hWinEventHook*/,
 // After a settings change: drop the records of newly excluded apps on every
 // desktop. Focus thread (WM_APP_SETTINGS_CHANGED): it owns the maps and is an
 // STA, which ExclusionAumid (SHGetPropertyStoreForWindow) needs. Windhawk's
-// settings thread gives no COM guarantee, and an AUMID read failing there
-// let a newly excluded app keep its highlight (Neon review 1.6; before
-// 0.12.2 this ran in Wh_ModSettingsChanged).
+// settings thread gives no COM guarantee; an AUMID read failing there
+// would let a newly excluded app keep its highlight.
 void DropExcludedRecords() {
     size_t dropped = 0;
     std::unordered_set<HWND, HwndHash> windowHwnds;
@@ -340,12 +339,12 @@ struct DesktopKeyWatch {
 };
 
 // ---------------------------------------------------------------------------
-// Focus tracking starts with the taskbar (0.12.1). Windhawk loads the mod into
+// Focus tracking starts with the taskbar. Windhawk loads the mod into
 // every explorer.exe, also folder-window and COM-server processes that never
 // load Taskbar.View.dll. There the worker keeps only its hidden window and
 // waits: no shell hook, no WinEvents, no accent refresh, no registry
-// watch, and no focus logs (capture manual-20261120-154409-086197: seven such
-// processes logged the same focus events as the taskbar process).
+// watch, and no focus logs (each such process would log the taskbar
+// process's focus events again).
 // Started by WM_APP_TASKBAR_READY once the Taskbar.View hooks are in, or at
 // worker start when they already are. Focus thread only.
 // ---------------------------------------------------------------------------
@@ -385,7 +384,7 @@ void ActivateFocusTracking(HWND hwnd) {
         SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
                         nullptr, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
     if (!t.foregroundHook) {
-        // Before 0.12.1 this failed Wh_ModInit; now init is long over.
+        // Init is long over: log it, do not fail.
         if (shellHookRegistered) {
             Wh_Log(L"ERROR: SetWinEventHook failed: %u; focus from shell "
                    L"activations only",
@@ -529,7 +528,7 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
                 OnVirtualDesktopSwitched(L"registry");
             }
             // Fall through to the messages: a burst of registry writes must
-            // not hold WM_APP_SHUTDOWN in the queue (Neon review 3.1).
+            // not hold WM_APP_SHUTDOWN in the queue.
         } else if (r != WAIT_OBJECT_0 + handles) {
             Wh_Log(L"Focus thread wait failed: %u", GetLastError());
             break;

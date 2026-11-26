@@ -82,8 +82,7 @@ TaskbarEdge TaskbarEdgeFromAppBar() {
 }
 
 // Prefer OrientationStates. A leftover RunningIndicator VA=Bottom from the
-// previous edge must not win: we used to treat a left taskbar as Bottom and
-// paint full-cell underlines of rank-dependent length.
+// previous edge must not win (a left taskbar would get full-cell underlines).
 // Do not use "wider than tall ⇒ horizontal": a left-edge button is 48×32.
 TaskbarEdge DetectTaskbarEdge(FrameworkElement iconPanel) {
     bool verticalState = IsInVisualState(iconPanel, L"VerticalOrientation");

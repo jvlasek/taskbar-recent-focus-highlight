@@ -14,8 +14,8 @@ TryGetItemFromContainer_TaskListWindowViewModel_t
 // WindowsUdk.UI.Shell public interfaces: task groups and task items
 // ---------------------------------------------------------------------------
 // Layouts from windowsudk.winmd (C:\Windows\SystemApps\
-// MicrosoftWindows.UndockedDevKit_cw5n1h2txyewy, build 26100-era, read
-// 2026-11-15). Only the slots up to the last method we call are declared;
+// MicrosoftWindows.UndockedDevKit_cw5n1h2txyewy, build 26100-era). Only the
+// slots up to the last method we call are declared;
 // earlier slots are placeholders whose parameter types do not matter because
 // we never call them. A changed interface has a new IID, so QueryInterface
 // fails and callers fall back.
@@ -200,7 +200,7 @@ winrt::com_ptr<IUnknown> GetWindowsUdkTaskItemFromTaskListButton(
 // Returns the button's WindowsUdk TaskGroup with its own reference. The
 // capture flag is reset by a scope guard, so an exception cannot leave
 // ITaskGroup::IsRunning answering false for Explorer and other mods on this
-// thread (Neon review 1.3).
+// thread.
 winrt::com_ptr<IUnknown> GetWindowsUdkTaskGroupFromTaskListButton(
     UIElement element) {
     if (!TryGetItemFromContainer_TaskListGroupViewModel_Original ||
@@ -231,8 +231,8 @@ winrt::com_ptr<IUnknown> GetWindowsUdkTaskGroupFromTaskListButton(
     g_capturedTaskGroup = nullptr;
     // If the IsMultiWindow -> ITaskGroup::IsRunning path changes in
     // Explorer, no group is ever captured and a grouped app's second window
-    // is never ranked. Say so once (Fable review 3.1). Single misses are
-    // normal (some view models do not ask their group, 0.11.42 log), so only
+    // is never ranked. Say so once. Single misses are
+    // normal (some view models do not ask their group), so only
     // many misses with no capture at all count.
     static std::atomic<unsigned> captureHits{0}, captureMisses{0};
     static std::atomic<bool> loggedCaptureMiss{false};
@@ -302,9 +302,8 @@ ButtonCapture CaptureButton(FrameworkElement button) {
         // Uncombined button (Never combine / combine when full): it stands
         // for one window. Explorer marks it with AutomationId
         // "Window: 0x<hwnd>" (combined buttons: "Appid: …") and binds it to
-        // that window's own TaskItem, without a group view model (0.11.14
-        // diag: windowVM=1 groupVM=0, one window). Require both to agree.
-        // (0.11.11-0.11.13 wrongly required a group of 2+ windows here.)
+        // that window's own TaskItem, without a group view model. Require
+        // both to agree.
         bool uncombined = false;
         if (HWND idWindow = GetButtonAutomationWindow(button)) {
             if (ownWindow ? ownWindow == idWindow
@@ -367,8 +366,7 @@ ButtonCapture CaptureButton(FrameworkElement button) {
 // Button identity = Explorer's AppId (the key Explorer groups taskbar
 // buttons by) plus the button's window set, read synchronously on the UI
 // thread from the button's public WindowsUdk task item / group (a few COM
-// calls, ~10 us). Replaces the 0.10.3-0.11.31 asynchronous resolver (worker
-// process-path/AUMID lookups with serials, deadlines and rechecks). A
+// calls, ~10 us). A
 // changed AppId or window set invalidates the cached paint rank; a button
 // Explorer recycles for another app simply reports the new AppId.
 std::wstring EnsureButtonIdentity(FrameworkElement button) {
@@ -502,11 +500,10 @@ void ForEachLiveElementOnThisDispatcher(
 }
 
 // ItemsRepeater keeps recycled TaskListButtons parented, parked off-screen
-// (about -10000,-10000), with their last AutomationId / name (UWPSpy capture
-// uwspy-nevercombine). Their cached identity can still match a rank, so a
-// full rebind used to "bind" one rank to every parked copy. GetElementIndex
-// is -1 for an element the repeater does not currently show. No repeater
-// ancestor (unknown layout): treat as shown, as before.
+// (about -10000,-10000), with their last AutomationId / name. Their cached
+// identity can still match a rank and must not bind it. GetElementIndex is
+// -1 for an element the repeater does not currently show. No repeater
+// ancestor (unknown layout): treat as shown.
 bool IsRealizedTaskbarButton(FrameworkElement const& button) {
     try {
         DependencyObject child = button;
@@ -527,9 +524,9 @@ bool IsRealizedTaskbarButton(FrameworkElement const& button) {
 
 // Explorer reports a TaskListButton to the mod only when that button's
 // visual state changes, so after loading into a running Explorer most
-// buttons were unknown until hovered (TODO 2026-11-17). The first button
-// seen on a taskbar seeds every button its ItemsRepeater currently shows
-// (Fable review 3.2, option 1). Once per repeater; buttons realized later
+// buttons were unknown until hovered. The first button
+// seen on a taskbar seeds every button its ItemsRepeater currently shows.
+// Once per repeater; buttons realized later
 // report themselves. Returns true if new buttons were tracked.
 winrt::Microsoft::UI::Xaml::Controls::ItemsRepeater ButtonRepeater(
     FrameworkElement const& button) {
@@ -663,14 +660,14 @@ void ApplyAllHighlights_UIThread() {
                               }),
                live.end());
 
-    // Snapshot IsRunning before eligibility. Empty ranks used to return
-    // here and never refresh lastRunningTick / observedRunning, so idle
-    // decay and desktop-switch clears could not recover.
+    // Snapshot IsRunning before eligibility, also with no ranks: otherwise
+    // lastRunningTick / observedRunning go stale and idle decay and
+    // desktop-switch clears cannot recover.
     std::vector<std::wstring> buttonAppIds(live.size());
     std::vector<ButtonIdentity> idents(live.size());
     std::vector<char> running(live.size(), 0);
     // Bottom <-> top moves keep the panel size (no SizeChanged), so the pass
-    // refreshes the edge; once per pass, not per button (Fable review 5).
+    // refreshes the edge; once per pass, not per button.
     std::optional<TaskbarEdge> passEdge;
     for (size_t bi = 0; bi < live.size(); ++bi) {
         if (auto ip = GetIconPanel(live[bi])) {
@@ -690,7 +687,7 @@ void ApplyAllHighlights_UIThread() {
     }
     // The shown buttons are authoritative for which windows have their own
     // slot: when Never Combine is switched off, no button is uncombined any
-    // more and per-window ranks merge back into one app rank (0.11.35).
+    // more and per-window ranks merge back into one app rank.
     // Captures add windows as they appear; this pass also drops them.
     {
         std::unordered_set<HWND, HwndHash> shownUncombined;
@@ -720,8 +717,8 @@ void ApplyAllHighlights_UIThread() {
     }
 
     // Ladder and bindings are logged only when they differ from this UI
-    // thread's last pass (capture manual-20261120-154409-086197: 1,251 of
-    // 1,565 passes repeated it). Pass 1 matches, pass 2 paints, so a
+    // thread's last pass (most passes repeat it). Pass 1 matches, pass 2
+    // paints, so a
     // "Glow rank" line still follows its "bind rank" line.
     std::vector<int> buttonRank(live.size(), 0);
     std::vector<std::wstring> boundNames(live.size());

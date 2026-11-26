@@ -62,8 +62,8 @@ struct HwndHash {
 
 // Explorer's AppId per taskbar window, from the button captures (UI
 // thread); read by the focus worker to key app recency. Upper case. Stored
-// with the window's PID so a recycled handle does not inherit an AppId
-// (Fable review 2.4). Pruned of dead windows when it grows, and on
+// with the window's PID so a recycled handle does not inherit an AppId.
+// Pruned of dead windows when it grows, and on
 // HSHELL_WINDOWDESTROYED.
 struct WindowAppIdEntry {
     std::wstring appIdUpper;
@@ -135,8 +135,8 @@ struct GuidEqual {
 };
 
 // App + window recency for one virtual desktop (session-wide, not per-monitor).
-// App-level (min-focus) confirmation of one window: the recency record
-// (Fable review 4.3, 0.11.46). The app is not stored with it: each rank
+// App-level (min-focus) confirmation of one window: the recency record.
+// The app is not stored with it: each rank
 // recompute looks the window up in Explorer's window -> AppId map, so a
 // window no captured button lists yet is simply not ranked yet (no
 // provisional keys), and a window whose AppId changes follows it. The same
@@ -454,7 +454,7 @@ constexpr UINT kAccentRefreshDelayMs = 250;
 // Change notification on Explorer's VirtualDesktops registry key (public
 // RegNotifyChangeKeyValue). Windows writes CurrentVirtualDesktop there on a
 // switch, sometimes after the foreground change the switch causes (clicking
-// a flashing button of another desktop, 2026-11-18), so the write itself is
+// a flashing button of another desktop), so the write itself is
 // the signal. Hook thread only. When the watch could not be set up, every
 // foreground change re-reads the value instead.
 bool g_desktopKeyWatchActive = false;
@@ -470,19 +470,18 @@ constexpr ULONGLONG kTransientRetryPollMs = 200;
 
 // All glow layers live on our overlay (never BackgroundElement — hover/active
 // storyboards own that and constantly wipe our styles). The mod writes no
-// property of a native element (the icon size boost went in 0.11.38).
+// property of a native element.
 constexpr PCWSTR kGlowElementName = L"WhRecentFocusGlow";
-// The side bar. Until 0.12.1 a second, 2px larger rectangle at low alpha
-// (L1) acted as a halo; XAML cannot blur it, so it showed as a hard rim.
+// The side bar.
 constexpr PCWSTR kGlowBarName = L"WhRecentFocusGlowBar";
 // Plate / Plate with accent: our copy of BackgroundElement, and of the
-// MultiWindowElement sliver on a multi-window button (0.12.1).
+// MultiWindowElement sliver on a multi-window button.
 constexpr PCWSTR kGlowContourName = L"WhRecentFocusContour";
 constexpr PCWSTR kGlowStackName = L"WhRecentFocusContourStack";
 
 // Intensity for a 0-based rank: the three configured values, then each
 // further rank fades by a quarter (floor 10 %, never above rank 3) so ranks
-// 4+ stay distinguishable (0.11.38; they used to repeat rank 3).
+// 4+ stay distinguishable.
 int RankIntensity(const int (&perRank)[3], int rankIdx) {
     if (rankIdx < 3) {
         return perRank[rankIdx < 0 ? 0 : rankIdx];

@@ -207,7 +207,7 @@ DWORD PidFromHwnd(HWND hwnd) {
 
 // False when the handle was recycled into a different process, or when no
 // PID was stored (the window was already gone when it was recorded):
-// unknown is not a match (Neon review 1.5).
+// unknown is not a match.
 bool HwndMatchesStoredPid(HWND hwnd, DWORD storedPid) {
     if (!hwnd || !storedPid || !IsWindow(hwnd)) {
         return false;
@@ -287,12 +287,12 @@ HWND NormalizeFocusHwnd(HWND hWnd) {
     }
     // Owned windows (dialogs such as Lister's Find box) have no taskbar
     // button of their own; Explorer reports their owner as the active item
-    // (shadow log 2026-11-15: #32770 owned by TLister). Credit the owner, or
+    // (a #32770 dialog owned by Lister). Credit the owner, or
     // a Lister dialog — no AUMID, so path-keyed — counted as Total Commander.
     // Same process only; WS_EX_APPWINDOW asks for its own button, keep it.
     // Climb GW_OWNER step by step and keep the highest *visible* owner:
     // GA_ROOTOWNER would end at a hidden application window (Delphi's
-    // TApplication above Lister's TSEARCHTEXT find box, 0.11.6 capture), and
+    // TApplication above Lister's TSEARCHTEXT find box), and
     // that hidden window has no button. Stop early at an owner that asks for
     // its own button (WS_EX_APPWINDOW).
     if (!(GetWindowLong(hWnd, GWL_EXSTYLE) & WS_EX_APPWINDOW)) {
@@ -351,7 +351,7 @@ std::wstring GetWindowAppUserModelId(HWND hWnd) {
     return id;
 }
 
-// The window AUMID is used only for the exclude list since 0.11.33, and
+// The window AUMID is used only for the exclude list, and
 // SHGetPropertyStoreForWindow is cross-process: skip it when the list is
 // empty (the default).
 std::wstring ExclusionAumid(HWND hWnd) {
@@ -470,16 +470,15 @@ bool ShouldIgnoreHwnd(HWND hWnd) {
 
 bool IsShellHostFileName(const std::wstring& fileNameUpper) {
     // ShellExperienceHost: jump lists, Action Center, clock/calendar flyout
-    // (2026-11-15: "Jump List for Total Commander" cancelled TC's min-focus).
-    // StartMenuExperienceHost was misspelled before 0.11.5 and never matched.
+    // (a Total Commander jump list used to cancel its minimum focus).
     return fileNameUpper == L"EXPLORER.EXE" ||
            fileNameUpper == L"SEARCHHOST.EXE" ||
            fileNameUpper == L"STARTMENUEXPERIENCEHOST.EXE" ||
            fileNameUpper == L"SHELLEXPERIENCEHOST.EXE" ||
            fileNameUpper == L"SHELLHOST.EXE" ||
            fileNameUpper == L"TEXTINPUTHOST.EXE" ||
-           // Lock screen: shell UI, not an app (0.11.49 sleep capture: it
-           // was confirmed as focus on wake).
+           // Lock screen: shell UI, not an app (it was confirmed as focus
+           // on wake).
            fileNameUpper == L"LOCKAPP.EXE";
 }
 
@@ -526,7 +525,7 @@ std::wstring GetWindowTitle(HWND hWnd) {
 }
 
 // App key = APPID:<Explorer AppId> of the taskbar button that lists this
-// window (0.11.33; was the window AUMID or process path). A window that no
+// window. A window that no
 // captured button lists yet (just opened, or the mod just loaded and
 // Explorer has not reported its buttons) gets a per-window key WINDOW:<hwnd>
 // (noButton set). That key only identifies the pending focus; recency is

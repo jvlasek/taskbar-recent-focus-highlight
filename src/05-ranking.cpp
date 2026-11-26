@@ -6,7 +6,7 @@
 // Explorer AppId and still lists a live window of it. Ranks without one keep
 // their history but take no slot. observedRunning is the last UI IsRunning
 // snapshot; it can stay set for a button Explorer parked without a final
-// state update, so a live window is required too (Fable review 2.1).
+// state update, so a live window is required too.
 // Grace covers Alt-Tab flicker, not a heartbeat. No weak.get() here.
 bool AppAppearsOnTaskbar(const std::wstring& key) {
     const std::wstring wantAppId = AppIdFromAppKey(key);

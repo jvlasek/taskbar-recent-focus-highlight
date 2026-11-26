@@ -21,9 +21,7 @@ bool TaskListButton_IsRunning(FrameworkElement taskListButtonElement) {
 // IsRunning, plus a short grace so Alt-Tab flicker does not drop glows.
 // Running states read for the first time (new buttons) or again after a
 // desktop / lock switch reset them. Summed per UI thread and logged once by
-// the next full pass: a lock or unlock used to log one "Identity state"
-// line per button (about 20 per switch, capture
-// manual-20261125-211736-720767).
+// the next full pass instead of one "Identity state" line per button.
 struct RunningReread {
     unsigned running = 0;
     unsigned stopped = 0;
@@ -102,8 +100,8 @@ bool IsWindowAutomationId(const std::wstring& id) {
 
 // Uncombined taskbar buttons (Never Combine / combine when full) carry their
 // window in AutomationProperties.AutomationId: "Window: 0x<hwnd hex>"; group
-// buttons carry "Appid: <AUMID>" (UWPSpy dump 2026-11-15, two VS Code
-// windows). Explorer's identifier, not a display name. Callers must still
+// buttons carry "Appid: <AUMID>". Explorer's identifier, not a display
+// name. Callers must still
 // check the HWND against the group's windows.
 HWND GetButtonAutomationWindow(FrameworkElement button) {
     if (!button) {
@@ -137,7 +135,7 @@ bool IdentityMatchesRank(const ButtonIdentity& ident,
                          const AppFocusInfo& info) {
     // Per-window slot: only the button that lists exactly this window (an
     // uncombined button lists just its own). No AppId match, or every
-    // button of the app would light up (Never Combine, 2026-11-15).
+    // button of the app would light up.
     if (info.perWindow) {
         if (!info.lastHwnd || !info.lastPid ||
             !HwndMatchesStoredPid(info.lastHwnd, info.lastPid)) {
@@ -158,9 +156,7 @@ bool IdentityMatchesRank(const ButtonIdentity& ident,
     }
     // Uncombined buttons (Never Combine) each stand for one window. An
     // app-level rank (window not confirmed on its own yet) lights only the
-    // button of the app's last focused window, not every window of the app
-    // (user report 2026-11-16: all Calculator buttons lit after switching
-    // to Never Combine).
+    // button of the app's last focused window, not every window of the app.
     if (ident.uncombined) {
         return info.lastHwnd && info.lastPid &&
                HwndMatchesStoredPid(info.lastHwnd, info.lastPid) &&

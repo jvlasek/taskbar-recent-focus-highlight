@@ -2,18 +2,17 @@
 // Settings load
 // ---------------------------------------------------------------------------
 
-// Settings transition 0.11 -> 0.12 (remove a release or two after 0.12.0).
-// 0.11.1 had one preview style for all ranks, `previews.style`
-// (plateTitle = default hybrid, plate, titleBg, titleBar). 0.11.16 split it
-// into `previews.topStyle` + `previews.restStyle`. Windhawk keeps the old
-// stored value and has no migration mechanism (m417z, Discord 2026-11-16), so
+// Settings transition from 0.11.1 (remove in 1.0). 0.11.1 had one preview
+// style for all ranks, `previews.style` (plateTitle = default hybrid,
+// plate, titleBg, titleBar), now `previews.topStyle` +
+// `previews.restStyle`. Windhawk keeps the old
+// stored value and has no migration mechanism, so
 // a user who had picked a non-default style would silently get the new
 // defaults. When both new keys are unset or still at their defaults, use the
 // old choice for both ranks until the user first saves settings: from then on
 // the settings page is what they see. A mod cannot write its own settings, so
 // the state lives in mod storage: 0 = not checked yet, 1 = legacy style in
-// use, 2 = done. Older dev-only values (e.g. "ring") and the old default map
-// to nothing.
+// use, 2 = done. Other values and the old default map to nothing.
 constexpr wchar_t kLegacyPreviewStyleState[] = L"legacyPreviewStyleState";
 
 bool LegacyPreviewStyle(PreviewStyle& out) {

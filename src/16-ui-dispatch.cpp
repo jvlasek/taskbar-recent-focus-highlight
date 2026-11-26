@@ -275,7 +275,7 @@ bool RunOnUiThread(const winrt::Windows::UI::Core::DispatchedHandler& handler) {
 
 
 // One queued full pass per UI thread: worker requests (RequestApplyVisuals)
-// and UI requests (ScheduleRefreshAllHighlights) coalesce (Fable review 5).
+// and UI requests (ScheduleRefreshAllHighlights) coalesce.
 // The flag is cleared when the pass starts, so a request made during a pass
 // queues the next one.
 std::mutex g_fullPassQueuedMutex;

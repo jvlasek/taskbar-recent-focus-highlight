@@ -17,8 +17,8 @@ bool StillPendingForeground(const PendingFocus& pending,
                             std::wstring* outTitle) {
     // Same mapping as the focus path (child -> root, owned dialog -> owner),
     // so an owned dialog keeps its owner's pending focus alive. Raw HWND
-    // here made a Lister dialog (no AUMID) look like another app after
-    // 0.11.4/0.11.5, and its owner was never confirmed.
+    // here would make a Lister dialog look like another app, and its owner
+    // would never be confirmed.
     HWND foreground = NormalizeFocusHwnd(GetForegroundWindow());
     HWND confirmHwnd = pending.hwnd;
     std::wstring title = pending.windowTitle;
@@ -65,8 +65,8 @@ bool StillPendingForeground(const PendingFocus& pending,
     return true;
 }
 
-// The app and preview min-focus confirmations are one state machine (Fable
-// review 4.1): the deadline, the still-foreground check with the bounded
+// The app and preview min-focus confirmations are one state machine: the
+// deadline, the still-foreground check with the bounded
 // Alt-Tab grace, then a track-specific confirm. A track names its timer,
 // its seconds, its start tick and its retry field.
 struct MinFocusTrack {
@@ -175,8 +175,7 @@ bool MinFocusDeadlineReached(const MinFocusTrack& track,
             return false;
         }
         ArmHookTimer(track.timerId, delay);
-        // Only the start of a wait: it re-polls every 200 ms (bursts of 40
-        // lines in capture manual-20261120-154409-086197). It ends in a
+        // Only the start of a wait: it re-polls every 200 ms. It ends in a
         // confirmation or the "gave up" line.
         if (!track.preview && firstWait) {
             Wh_Log(L"Min-focus timer: transient FG, waiting on %s",
@@ -268,7 +267,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
         return;  // re-armed, waiting through Alt-Tab, or dropped
     }
     // The deadline check can retarget to a sibling window of the app; the
-    // pending focus is still keyed by the original one (Neon review 1.7.3).
+    // pending focus is still keyed by the original one.
     const HWND pendingHwnd = pending.hwnd;
     pending.hwnd = confirmHwnd;
     if (!title.empty()) {
@@ -310,7 +309,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
 
         // Preview min-focus is independent: do not stamp the current HWND
         // here. A window switch just before the app deadline must wait out
-        // previewStartTick (clicks too, since 0.11.20).
+        // previewStartTick (clicks too).
         if (g_pendingFocus.valid &&
             (g_pendingFocus.hwnd == pending.hwnd ||
              g_pendingFocus.processId == pending.processId)) {
@@ -341,8 +340,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     // The preview track may have given up during a long Alt-Tab while the
     // app track kept waiting; the window is in front again now, so let it
     // confirm too (its deadline has passed: FromTimer re-checks the
-    // foreground). Otherwise this visit left no preview recency
-    // (state-machines.md, observation 2).
+    // foreground). Otherwise this visit left no preview recency.
     if (settings->previewHighlightEnabled) {
         bool previewPending = false;
         {
@@ -381,7 +379,7 @@ void ArmOrConfirmTrack(const MinFocusTrack& track,
 }
 
 // Keep the app min-focus one-shot alive. A stale WM_TIMER KillTimer's the
-// live timer; same-app FOREGROUND used to assume it was still running.
+// live timer, so same-app FOREGROUND cannot assume it is still running.
 void EnsurePendingAppTimer() {
     PendingFocus pending;
     {
@@ -436,14 +434,12 @@ void SchedulePreviewConfirm(bool windowAlreadyTracked) {
 }
 
 // ---------------------------------------------------------------------------
-// Last use (0.12.1): decay counts from when an app was last *used*, not from
+// Last use: decay counts from when an app was last *used*, not from
 // when it was switched to. While a confirmed window is in front, the decay
 // tick moves its recency forward to the last keyboard / mouse input
 // (GetLastInputInfo, session-wide); when it loses the foreground it is
 // stamped with the last input before that. Walking away stops the input
-// time, so everything still ages out from the last input. Before, an app
-// used without switching for longer than decayMinutes lost its highlight
-// while in use (capture manual-20261120-071227: Windows Sandbox).
+// time, so everything still ages out from the last input.
 // Only a stretch in front in which the window was confirmed counts: a visit
 // shorter than the minimum focus refreshes nothing, so it cannot jump ranks.
 // Focus thread only.
@@ -460,7 +456,7 @@ ULONGLONG LastInputTick64(ULONGLONG now) {
     }
     // dwTime is GetTickCount (32-bit); the difference survives wrap. Input
     // after `now` was read (a keystroke between the two calls) makes it
-    // negative: that is "now", not 49.7 days ago (Neon review 1.2).
+    // negative: that is "now", not 49.7 days ago.
     const int32_t ago =
         static_cast<int32_t>(static_cast<DWORD>(now) - lii.dwTime);
     if (ago <= 0) {
@@ -517,7 +513,7 @@ unsigned RefreshLastUseLocked(HWND hwnd, ULONGLONG since, ULONGLONG at) {
 // taskbar, desktop, lock screen): Windows often sends no second foreground
 // event when the user lands back on the same window, and the stretch stayed
 // on the switcher, so the app in use was never refreshed again and decayed
-// while used (Neon review 1.1.1). While a transient window is in front the
+// while used. While a transient window is in front the
 // decay tick refreshes nothing (it is not g_inFrontHwnd); leaving for
 // another app stamps the last input, a switch's own keystrokes included.
 void NoteForegroundForLastUse(HWND hwnd) {
@@ -574,7 +570,7 @@ void HandleForegroundChanged(HWND hWnd) {
     // Without it, read here, before the transient check: switching to an
     // empty desktop gives the desktop / taskbar foreground, which is
     // transient. Every reader that sees the GUID change runs the full
-    // switch steps (state-machines.md, observation 3).
+    // switch steps.
     if (!g_desktopKeyWatchActive && RefreshCurrentDesktopId()) {
         OnVirtualDesktopSwitched(L"foreground");
     }
@@ -680,7 +676,7 @@ void HandleForegroundChanged(HWND hWnd) {
 
         // Same app as the pending focus: same key, or the same window whose
         // button became known meanwhile (WINDOW:<hwnd> -> APPID:), which
-        // must not restart the app wait (state-machines.md, observation 1).
+        // must not restart the app wait.
         const bool sameApp =
             g_pendingFocus.key == key ||
             (g_pendingFocus.hwnd == hWnd &&
@@ -709,7 +705,7 @@ void HandleForegroundChanged(HWND hWnd) {
                 // The app confirm stamped the previous window only; confirm
                 // again so this one gets its own record (last use, Never
                 // Combine slot). Its deadline counts from the app's start,
-                // usually already passed (Neon review 1.1.3).
+                // usually already passed.
                 g_pendingFocus.appConfirmed = false;
             }
             sameAppPending = true;
@@ -775,7 +771,7 @@ void OnDecayTimer() {
     }
     // A tick far past its interval: the machine slept (GetTickCount64 counts
     // sleep, so everything idle that long decays now) or the thread stalled.
-    // Before, only the late "Decay recompute" line showed it.
+    // Logged, since nothing else would show it.
     {
         const ULONGLONG now = GetTickCount64();
         if (g_lastDecayTick &&
@@ -805,7 +801,7 @@ void OnDecayTimer() {
         }
         windowsBefore = CurrentDeskLocked().windowFocusMap.size();
         // Only the current desktop affects paint; the others are pruned
-        // below in separate short holds (Fable review 2.5).
+        // below in separate short holds.
         RecomputeRanksForDesktopLocked(CurrentDeskLocked());
         PruneWindowFocusMapLocked(CurrentDeskLocked());
         const auto& afterApps = CurrentDeskLocked().rankedApps;
@@ -843,8 +839,8 @@ void OnDecayTimer() {
     }
     // Same length can still be a different ladder ([A,B,C] -> [A,C,D]).
     // An empty list requests a few more sweeps so a missed clear can retry,
-    // then stops: an idle desktop used to run a full pass on every decay
-    // tick for hours (capture 2026-11-17, 0.11.39). Focus thread only.
+    // then stops, so an idle desktop does not run a full pass on every decay
+    // tick. Focus thread only.
     static int emptySweepsLeft = 0;
     if (keysBefore != keysAfter) {
         emptySweepsLeft = 2;
@@ -871,7 +867,7 @@ void OnDecayTimer() {
     StopDecayTimerIfIdle();
 }
 
-// HSHELL_WINDOWDESTROYED (Fable review 3.3): forget the window at once
+// HSHELL_WINDOWDESTROYED: forget the window at once
 // instead of on the next decay tick, and repaint so a closed app frees its
 // icon slot and preview mark without waiting. App recency itself stays
 // (other windows of the app, or re-open within decay). The handle is
@@ -883,7 +879,7 @@ void HandleWindowDestroyed(HWND hwnd) {
     bool known = false;
     bool previewChanged = false;
     bool droppedPending = false;
-    // The window in front closed: its last use is now (Neon review 1.1.2).
+    // The window in front closed: its last use is now.
     const bool wasInFront = hwnd == g_inFrontHwnd;
     const ULONGLONG lastUse =
         wasInFront ? LastInputTick64(GetTickCount64()) : 0;
@@ -904,7 +900,7 @@ void HandleWindowDestroyed(HWND hwnd) {
                 w != desk.windowAppFocus.end()) {
                 // Hand the window's recency to its app before the record
                 // goes: the recompute that folds it may not have run since
-                // the last stamp (Neon review 1.1.4). The window is already
+                // the last stamp. The window is already
                 // destroyed, so no liveness check here.
                 ULONGLONG tick = w->second.tick;
                 // Same rule as RefreshLastUseLocked: confirmed in this
