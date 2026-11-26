@@ -1,4 +1,4 @@
-# Taskbar Recent Focus Highlight 0.12.2
+# Taskbar Recent Focus Highlight 0.12.3
 
 Update of the published 0.11.1. Development repository with tests, perf
 results and notes: https://github.com/jvlasek/taskbar-recent-focus-highlight
@@ -138,9 +138,12 @@ title, Not marked (ranks 2+).
   `previews.outlineThickness` (shown as "Accent thickness"),
   `icons.glowAccentThickness`, `previews.singleWindow` (off by default).
   Ranks 4+ fade from the rank 3 intensity instead of repeating it.
-- **Renamed in the UI only** (stored ids unchanged, so no transition): the
-  icon and preview styles above; Thickness / Size are now "Side bar
-  thickness / length", since they only apply to the side bar.
+- **Renamed or reordered in the UI only** (stored ids unchanged, so no
+  transition): the icon and preview styles above; Thickness / Size are now
+  "Side bar thickness / length", since they only apply to the side bar;
+  "Glow color" is "Highlight color". The page now shows the four app-ranking
+  settings first, labelled "Taskbar: …", then the Taskbar icons and Thumbnail
+  previews groups, then the exclude list.
 
 ## Private surface that remains
 
@@ -225,7 +228,7 @@ rank 1.
 
 ## Testing
 
-Live on Windows 11 26100-era builds through 0.11.2-0.12.2: combined and
+Live on Windows 11 26100-era builds through 0.11.2-0.12.3: combined and
 Never Combine taskbars, multiple virtual desktops (including empty ones and
 switches by clicking another desktop's flashing button), sleep / lock,
 taskbar moved to the left and back, mod disable / enable, settings
