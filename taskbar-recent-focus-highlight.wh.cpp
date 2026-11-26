@@ -94,6 +94,10 @@ IDs; with the mod log on, each button's ID is shown as
 - **SOLIDWORKS** and other apps that show each open document as its own
   preview card manage those previews themselves, so their previews are not
   marked. Their taskbar icon is ranked normally.
+- "Use" is keyboard or mouse input anywhere while the app is in front.
+  Watching a long video or reading without touching anything is not use,
+  so such an app drops out after the decay time; mouse movement on another
+  monitor still counts for the app in front.
 - Enabled while Explorer is already running, the ranks appear after the
   first taskbar button changes (hover or a window switch).
 

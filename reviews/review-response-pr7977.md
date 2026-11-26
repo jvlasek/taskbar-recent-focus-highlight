@@ -19,7 +19,7 @@
 | References to documents outside the repo / version history in comments | Removed (about 100); comments keep the reason. Comment-only: the code with comments stripped is identical. |
 | Settings text | `promoteMode` is "Taskbar: coming back to an app" with options matching the description; no "recency map", "confirm", "min-focus"; stale "below" / "Icons →" references fixed. |
 | `LOG_DEFERRED` layer | Open, see below. |
-| `GetLastInputInfo` is session-wide | Known trade-off: any input while the app is in front counts as its use (mouse movement on another monitor too). Per-window input needs low-level input hooks, which we avoid. Documented in `doc/agents/recency.md`. |
+| `GetLastInputInfo` is session-wide | Known trade-off: any input while the app is in front counts as its use (mouse movement on another monitor too). Per-window input needs low-level input hooks, which we avoid; counting media playback as use was considered and dropped (no per-app, reliable public signal). Now also under "Compatibility and limitations" in the README. |
 
 ## LOG_DEFERRED
 
