@@ -88,7 +88,7 @@ focus thread's hidden window (`WM_SETTINGCHANGE` "ImmersiveColorSet",
 `WM_DWMCOLORIZATIONCOLORCHANGED`). There is no WinRT event subscription
 (`UISettings::ColorValuesChanged` ran its handler on a thread-pool thread
 that unload could not wait for). Newly excluded apps are dropped on the
-focus thread, which is an STA. No log line is written while a lock is held.
+focus thread, which is an STA.
 
 The log is quieter: the ladder, the button bindings and the preview
 siblings are printed only when they change, and repeating wait lines are
@@ -256,6 +256,7 @@ If this pull request updates an existing mod, describe the changes inside the ch
 * Icons are matched by Explorer's own app ID, so two buttons of one program (e.g. Total Commander and its Lister) are told apart; the exclude list accepts app IDs too.
 * No native taskbar element is modified any more (the icon size boost is gone), and highlights take no layout space: they follow Taskbar Styler themes that resize the buttons.
 * Less work on the taskbar thread, nothing done in Explorer processes without a taskbar, and a quieter log.
+* The settings page is reordered: the four Taskbar settings first, the exclude list last. Stored settings are kept.
 * Removed settings: icon roundness, glow layers, size boost and "Only apps on the taskbar" (always on now).
 
 <!-- changelog:end -->
