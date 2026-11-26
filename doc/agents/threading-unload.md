@@ -141,6 +141,12 @@ Drain rules:
   `GetResults() == true`) or the UI thread's retained handle is signalled.
   A rejected post, a High completion, a failed status read, a canceled or
   errored operation, or elapsed time is not proof.
+- After the Low sentinel ran, wait until its thread is back in its message
+  loop (`WaitUntilUiThreadLeftModCode`, 0.12.3): `SendMessageTimeout(WM_NULL)`
+  to a window of that thread, repeated until handled or the thread exits.
+  `Completed` wakes the waiter from inside our delegate, before the delegate
+  and the sentinel have returned and been released (windhawk-mods AI review,
+  PR #7977). No window found: logged, one 20 ms pause.
 - `Completed` is the barrier, not a signal from inside the callback. If the
   event or the subscription fails, poll the same operation while watching the
   thread handle. Never drop an operation because its status cannot be read.

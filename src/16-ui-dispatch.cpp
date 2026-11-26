@@ -137,6 +137,49 @@ std::vector<std::shared_ptr<UiDispatcher>> CollectUiDispatchers() {
 
 enum class DrainProof { SentinelRan, ThreadExited };
 
+BOOL CALLBACK TakeFirstThreadWindow(HWND hwnd, LPARAM out) {
+    *reinterpret_cast<HWND*>(out) = hwnd;
+    return FALSE;
+}
+
+// The sentinel ran, but its thread is still on its way out of mod code: the
+// Completed delegate calls SetEvent (which wakes the waiter) before it
+// returns, and the delegate and the sentinel are then released, all code in
+// this module. A message sent to a window of that thread is handled only
+// back in its message loop, after all of that. Unbounded like the rest of
+// the drain, but ends if the thread exits.
+void WaitUntilUiThreadLeftModCode(const UiDispatcher& ui) {
+    if (GetCurrentThreadId() == ui.threadId) {
+        return;  // drained on this thread: nothing of it is still running
+    }
+    bool loggedNoWindow = false;
+    for (;;) {
+        if (UiThreadExited(ui)) {
+            return;
+        }
+        HWND hwnd = nullptr;
+        EnumThreadWindows(ui.threadId, TakeFirstThreadWindow,
+                          reinterpret_cast<LPARAM>(&hwnd));
+        if (!hwnd) {
+            // A XAML UI thread owns windows. If none is found, there is no
+            // barrier to send; the brief wait below is all that is left.
+            if (!loggedNoWindow) {
+                Wh_Log(L"UI drain: thread %u has no window for the return "
+                       L"barrier", ui.threadId);
+                loggedNoWindow = true;
+            }
+            PauseDispatcherAttempt(ui);
+            return;
+        }
+        DWORD_PTR result = 0;
+        if (SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_NORMAL, 100,
+                                &result)) {
+            return;
+        }
+        // Timed out (thread busy) or the window just went away: try again.
+    }
+}
+
 DrainProof DrainOneUiDispatcher(
     const UiDispatcher& ui,
     const winrt::Windows::UI::Core::DispatchedHandler& handler,
@@ -166,6 +209,7 @@ DrainProof DrainOneUiDispatcher(
         }
         if (end == DispatcherOpEnd::Ran) {
             if (highRan) {
+                WaitUntilUiThreadLeftModCode(ui);
                 return DrainProof::SentinelRan;
             }
             highRan = true;
