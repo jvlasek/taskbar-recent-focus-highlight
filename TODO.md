@@ -273,6 +273,19 @@ first, then the low-risk preview fixes, then identity.
   work. Current layered glow can clip at large spread; confirm layout,
   coexistence and unload behavior before adopting a new rendering mechanism.
 
+## Repo cleanup after PR #7977
+
+- [ ] Move `reviews/review-response-pr7977.md` into `reviews/0.12/` (next to
+  `review-response.md`, the reply posted on the PR).
+- [ ] Perf builds are awkward to open in VS Code: they go to `tmp/perf/`,
+  and `tmp/` holds about 90 one-off scripts and DLLs, so the tree panel
+  lists all of them between the perf file and the top-level `.wh.cpp`.
+  Options: write perf builds to a short top-level path (e.g.
+  `perf/<name>.perf.wh.cpp`, gitignored), and/or prune `tmp/` (archive the
+  one-off scripts) or hide it with `files.exclude` in `.vscode/settings.json`.
+- [ ] Other leftovers worth a look then: `doc/readme-draft-0.12.1.md` (merged
+  into `src/00-metadata.cpp`), the long version line in `README.md`.
+
 ## Release gate
 
 - Keep runtime notes and generated diagrams consistent with implementation.
