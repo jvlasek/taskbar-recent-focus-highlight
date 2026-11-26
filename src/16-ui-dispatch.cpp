@@ -341,13 +341,12 @@ void RequestApplyVisuals() {
     }
     if (!any) {
         // Buttons not tracked yet — will apply on next UpdateVisualStates.
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         const auto& ranks = CurrentDeskLocked().rankedApps;
-        LOG_DEFERRED(L"Ranks ready (%zu) — waiting for TaskListButton hooks",
+        Wh_Log(L"Ranks ready (%zu) — waiting for TaskListButton hooks",
                ranks.size());
         for (size_t i = 0; i < ranks.size(); i++) {
-            LOG_DEFERRED(L"  Rank %zu: %s", i + 1, ranks[i].displayName.c_str());
+            Wh_Log(L"  Rank %zu: %s", i + 1, ranks[i].displayName.c_str());
         }
     }
 }

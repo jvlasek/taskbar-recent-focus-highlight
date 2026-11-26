@@ -93,7 +93,9 @@ Short timeline:
   (`WaitUntilUiThreadLeftModCode`, WM_NULL barrier; must-fix); heap
   thread_locals released on unload; try/catch around the UpdateVisualStates
   hook body; dead code removed; comments without review / capture /
-  version references; plainer setting texts.
+  version references; plainer setting texts; `DeferredLogScope` /
+  `LOG_DEFERRED` removed from the mod (plain `Wh_Log`; the perf build
+  defers lines under timed locks with `PERF_LOG`).
 
 ## Review lessons about removed mechanisms
 

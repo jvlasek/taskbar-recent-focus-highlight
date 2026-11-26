@@ -35,6 +35,7 @@ assert destroyed.index('lastConfirmedFocusTick = tick') < destroyed.index('desk.
 
 helpers = '\n'.join(function(s) for s in (
     'ULONGLONG LastInputTick64(ULONGLONG now) {',
+    'PCWSTR LastUseMovedName(unsigned moved) {',
     'unsigned RefreshLastUseLocked(HWND hwnd, ULONGLONG since, ULONGLONG at) {',
     'void NoteForegroundForLastUse(HWND hwnd) {',
     'void RefreshInFrontLastUse() {',
@@ -63,9 +64,7 @@ BOOL GetLastInputInfo(LASTINPUTINFO* lii) {
 HWND GetForegroundWindow() { return foreground; }
 HWND NormalizeFocusHwnd(HWND h) { return h; }
 bool HwndMatchesStoredPid(HWND, DWORD pid) { return pid != 0; }
-struct DeferredLogScope {};
-#define LOG_DEFERRED(...) ((void)0)
-#define L
+template <class... T> void Wh_Log(T...) {}
 std::mutex g_stateMutex;
 struct WindowAppFocus { ULONGLONG tick = 0; DWORD pid = 7; };
 struct WindowFocusInfo { ULONGLONG lastConfirmedTick = 0; DWORD pid = 7; };
@@ -77,7 +76,7 @@ std::map<int, Desk> g_desktopMaps;
 HWND g_inFrontHwnd = 0;
 ULONGLONG g_inFrontSince = 0;
 constexpr unsigned kLastUseMovedApp = 1, kLastUseMovedPreview = 2;
-''' + helpers.replace('L"', '"').replace('%s', '%ls') + r'''
+''' + helpers + r'''
 constexpr ULONGLONG MIN = 60000;
 int main() {
     // LastInputTick64: plain, wrap, race (input after `now`), unknown.

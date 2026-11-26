@@ -112,7 +112,6 @@ void DropExcludedRecords() {
     }
 
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         for (auto& [id, desk] : g_desktopMaps) {
             (void)id;
@@ -560,7 +559,6 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
 }
 
 bool StartWinEventHookThread() {
-    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_winEventHookThreadMutex);
     if (g_winEventHookThread && HookThreadWindow()) {
         return true;
@@ -570,8 +568,8 @@ bool StartWinEventHookThread() {
             CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (!g_hookThreadReadyEvent) {
             const DWORD error = GetLastError();
-            LOG_DEFERRED(L"CreateEventW failed for hook-thread ready: %u",
-                         error);
+            Wh_Log(L"CreateEventW failed for hook-thread ready: %u",
+                   error);
             return false;
         }
     } else {
@@ -581,7 +579,7 @@ bool StartWinEventHookThread() {
         CreateThread(nullptr, 0, WinEventHookThread, nullptr, 0, nullptr);
     if (!hThread) {
         const DWORD error = GetLastError();
-        LOG_DEFERRED(L"CreateThread failed: %u", error);
+        Wh_Log(L"CreateThread failed: %u", error);
         if (g_hookThreadReadyEvent) {
             CloseHandle(g_hookThreadReadyEvent);
             g_hookThreadReadyEvent = nullptr;
@@ -591,7 +589,7 @@ bool StartWinEventHookThread() {
     g_winEventHookThread = hThread;
     WaitForSingleObject(g_hookThreadReadyEvent, INFINITE);
     if (!HookThreadWindow()) {
-        LOG_DEFERRED(L"Focus thread failed to create the message window");
+        Wh_Log(L"Focus thread failed to create the message window");
         WaitForSingleObject(hThread, INFINITE);
         CloseHandle(hThread);
         g_winEventHookThread = nullptr;
@@ -601,7 +599,7 @@ bool StartWinEventHookThread() {
         }
         return false;
     }
-    LOG_DEFERRED(L"WinEvent hook thread started");
+    Wh_Log(L"WinEvent hook thread started");
     return true;
 }
 

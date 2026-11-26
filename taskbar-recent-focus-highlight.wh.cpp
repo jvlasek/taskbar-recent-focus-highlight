@@ -712,49 +712,6 @@ struct DesktopRecencyState {
 
 std::mutex g_stateMutex;
 
-// Log lines produced while g_stateMutex is held are queued per thread and
-// written once the outermost DeferredLogScope ends, prefixed with the
-// function that produced them (Wh_Log's own prefix shows the destructor). Declare the scope before
-// the lock so it is destroyed after it: Wh_Log is OutputDebugString plus
-// file I/O, and the UI thread waits on this lock. Without a scope, logs
-// directly.
-thread_local std::vector<std::wstring> t_deferredLogs;
-thread_local int t_deferredLogDepth = 0;
-
-struct DeferredLogScope {
-    DeferredLogScope() { ++t_deferredLogDepth; }
-    ~DeferredLogScope() {
-        if (--t_deferredLogDepth != 0 || t_deferredLogs.empty()) {
-            return;
-        }
-        std::vector<std::wstring> lines;
-        lines.swap(t_deferredLogs);
-        for (const auto& line : lines) {
-            Wh_Log(L"%s", line.c_str());
-        }
-    }
-    DeferredLogScope(const DeferredLogScope&) = delete;
-    DeferredLogScope& operator=(const DeferredLogScope&) = delete;
-};
-
-#define LOG_DEFERRED(...)                                              \
-    do {                                                               \
-        if (t_deferredLogDepth == 0) {                                 \
-            Wh_Log(__VA_ARGS__);                                       \
-        } else {                                                       \
-            wchar_t deferredLogBuf_[1024];                             \
-            const int deferredLogPre_ = _snwprintf_s(                  \
-                deferredLogBuf_, _countof(deferredLogBuf_), _TRUNCATE, \
-                L"(%S) ", __func__);                                   \
-            if (deferredLogPre_ > 0) {                                 \
-                _snwprintf_s(deferredLogBuf_ + deferredLogPre_,        \
-                             _countof(deferredLogBuf_) -               \
-                                 deferredLogPre_,                      \
-                             _TRUNCATE, __VA_ARGS__);                  \
-            }                                                          \
-            t_deferredLogs.emplace_back(deferredLogBuf_);              \
-        }                                                              \
-    } while (0)
 std::unordered_map<GUID, DesktopRecencyState, GuidHash, GuidEqual> g_desktopMaps;
 GUID g_currentDesktopId{};
 bool g_haveCurrentDesktop = false;
@@ -941,7 +898,6 @@ bool RememberUiDispatcher(FrameworkElement el) {
         if (!dispatcher || !dispatcher.HasThreadAccess()) {
             return false;
         }
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_dispatchersMutex);
         if (!g_uiDispatchers) {
             return false;
@@ -958,7 +914,7 @@ bool RememberUiDispatcher(FrameworkElement el) {
                              GetCurrentProcess(), &thread, SYNCHRONIZE,
                              FALSE, 0)) {
             const DWORD error = GetLastError();
-            LOG_DEFERRED(L"Cannot capture UI thread: %u", error);
+            Wh_Log(L"Cannot capture UI thread: %u", error);
             return false;
         }
         winrt::handle ownedThread{thread};
@@ -1090,7 +1046,6 @@ IVirtualDesktopManager* EnsureVdm() {
     if (!OnHookThread()) {
         return nullptr;
     }
-    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_vdmMutex);
     if (g_vdm) {
         return g_vdm;
@@ -1099,7 +1054,7 @@ IVirtualDesktopManager* EnsureVdm() {
     HRESULT hr = CoCreateInstance(kClsidVirtualDesktopManager, nullptr,
                                   CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&vdm));
     if (FAILED(hr) || !vdm) {
-        LOG_DEFERRED(L"IVirtualDesktopManager create failed %08X", hr);
+        Wh_Log(L"IVirtualDesktopManager create failed %08X", hr);
         return nullptr;
     }
     g_vdm = vdm;
@@ -1200,7 +1155,6 @@ GUID ConfirmDesktopId(const GUID& pendingDesktop, HWND hwnd) {
 // read (i.e. a real switch, not startup). Safe to call without g_stateMutex.
 bool RefreshCurrentDesktopId() {
     const GUID id = ResolveCurrentDesktopId();
-    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_stateMutex);
     const bool first = !g_haveCurrentDesktop;
     const bool changed = !InlineIsEqualGUID(id, g_currentDesktopId);
@@ -1208,7 +1162,7 @@ bool RefreshCurrentDesktopId() {
     g_haveCurrentDesktop = true;
     g_desktopMaps[id];
     if (changed) {
-        LOG_DEFERRED(L"Current virtual desktop: %s (%zu tracked)",
+        Wh_Log(L"Current virtual desktop: %s (%zu tracked)",
                GuidToLogString(id).c_str(), g_desktopMaps.size());
     }
     return !first && changed;
@@ -1252,13 +1206,12 @@ void OnVirtualDesktopSwitched(PCWSTR reason) {
     RefreshCurrentDesktopId();
     bool droppedPending = false;
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         droppedPending = DropPendingIfWrongDesktopLocked();
         // Do not recompute here: grace was just cleared, so every path would
         // fail AppAppearsOnTaskbar. ApplyAllHighlights snapshots IsRunning
         // on the UI thread, then recomputes.
-        LOG_DEFERRED(L"Desktop switch (%s): current %s droppedPending=%d",
+        Wh_Log(L"Desktop switch (%s): current %s droppedPending=%d",
                reason, GuidToLogString(g_currentDesktopId).c_str(),
                droppedPending ? 1 : 0);
     }
@@ -1982,8 +1935,8 @@ void DeriveAppsFromWindowsLocked(DesktopRecencyState& desk,
         const std::wstring key =
             appId.empty() ? std::wstring{} : std::wstring(L"APPID:") + appId;
         if (key != w.key && !key.empty()) {
-            LOG_DEFERRED(L"Window %p (%s) belongs to %s", hwnd,
-                         w.displayName.c_str(), key.c_str());
+            Wh_Log(L"Window %p (%s) belongs to %s", hwnd,
+                   w.displayName.c_str(), key.c_str());
         }
         w.key = key;
         if (!key.empty()) {
@@ -2031,10 +1984,10 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
             // its Lister windows are both TOTALCMD64.EXE).
             const ULONGLONG idleTenths =
                 (now - info.lastConfirmedFocusTick) / 6000;
-            LOG_DEFERRED(L"Decayed: %s key=%s (last use %llu.%llu min ago)",
-                         info.displayName.c_str(), info.key.c_str(),
-                         static_cast<unsigned long long>(idleTenths / 10),
-                         static_cast<unsigned long long>(idleTenths % 10));
+            Wh_Log(L"Decayed: %s key=%s (last use %llu.%llu min ago)",
+                   info.displayName.c_str(), info.key.c_str(),
+                   static_cast<unsigned long long>(idleTenths / 10),
+                   static_cast<unsigned long long>(idleTenths % 10));
             it = desk.appFocusMap.erase(it);
             continue;
         }
@@ -2047,11 +2000,11 @@ void RecomputeRanksForDesktopLocked(DesktopRecencyState& desk) {
         if (hidden != info.hiddenNoButton) {
             info.hiddenNoButton = hidden;
             if (hidden) {
-                LOG_DEFERRED(L"Hidden (no running button): %s key=%s",
-                             info.displayName.c_str(), info.key.c_str());
+                Wh_Log(L"Hidden (no running button): %s key=%s",
+                       info.displayName.c_str(), info.key.c_str());
             } else {
-                LOG_DEFERRED(L"Shown again (running button): %s",
-                             info.displayName.c_str());
+                Wh_Log(L"Shown again (running button): %s",
+                       info.displayName.c_str());
             }
         }
         if (hidden) {
@@ -2174,9 +2127,9 @@ void StampWindowRecencyLocked(DesktopRecencyState& desk,
     auto it = desk.windowFocusMap.find(hwnd);
     if (it != desk.windowFocusMap.end() && it->second.pid != 0 &&
         it->second.pid != pid) {
-        LOG_DEFERRED(L"HWND recycled, dropping stale preview recency: hwnd=%p "
-                     L"oldPid=%u newPid=%u",
-                     hwnd, it->second.pid, pid);
+        Wh_Log(L"HWND recycled, dropping stale preview recency: hwnd=%p "
+               L"oldPid=%u newPid=%u",
+               hwnd, it->second.pid, pid);
         desk.windowFocusMap.erase(it);
     }
     WindowFocusInfo& winfo = desk.windowFocusMap[hwnd];
@@ -2421,7 +2374,6 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
     void* id = InspectableIdentity(button);
     bool grace = false;
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_buttonStateMutex);
         ButtonState* state = FindButtonStateLocked(button, false);
         if (!state) {
@@ -2432,7 +2384,7 @@ bool ButtonCountsAsRunning(FrameworkElement button) {
             e.runningUnknown = false;
             ++(running ? t_runningReread.running : t_runningReread.stopped);
         } else if (running != e.observedRunning) {
-            LOG_DEFERRED(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u appId=%s",
+            Wh_Log(L"Identity state: button=%p running=%d->%d hwnd=%p pid=%u appId=%s",
                    id, e.observedRunning, running, e.sampleHwnd, e.samplePid,
                    e.appIdUpper.c_str());
         }
@@ -3460,7 +3412,6 @@ void RevokeIconPanelLayoutWatchesOnThisDispatcher() {
         }
     }
     if (!keep.empty()) {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
         for (auto& [id, watch] : keep) {
             auto panelRef = watch.panel;
@@ -3473,7 +3424,7 @@ void RevokeIconPanelLayoutWatchesOnThisDispatcher() {
                         }
                     }
                 } catch (...) {
-                    LOG_DEFERRED(L"ERROR: SizeChanged revoke failed");
+                    Wh_Log(L"ERROR: SizeChanged revoke failed");
                 }
             }
         }
@@ -4203,7 +4154,6 @@ ButtonCapture CaptureButton(FrameworkElement button) {
         }
         {
             bool changed = false;
-            DeferredLogScope logScope;  // logs after unlock
             std::lock_guard<std::mutex> lock(g_uncombinedMutex);
             if (uncombined) {
                 changed = g_uncombinedWindowsByThread[GetCurrentThreadId()]
@@ -4214,7 +4164,7 @@ ButtonCapture CaptureButton(FrameworkElement button) {
                               .erase(ownWindow) > 0;
             }
             if (changed) {
-                LOG_DEFERRED(L"Button windows: button=%p own=%p -> %s",
+                Wh_Log(L"Button windows: button=%p own=%p -> %s",
                        data.buttonId, ownWindow,
                        uncombined ? L"uncombined (own slot)" : L"combined");
             }
@@ -4266,7 +4216,6 @@ std::wstring EnsureButtonIdentity(FrameworkElement button) {
         return {};
     }
     ButtonCapture data = CaptureButton(button);
-    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_buttonStateMutex);
     ButtonState* state = FindButtonStateLocked(button, true);
     if (!state) {
@@ -4281,7 +4230,7 @@ std::wstring EnsureButtonIdentity(FrameworkElement button) {
                         return a.hwnd == b.hwnd && a.pid == b.pid;
                     });
     if (e.appIdUpper != data.explorerAppId) {
-        LOG_DEFERRED(L"Button identity: button=%p appId=%s (was %s) windows=%zu "
+        Wh_Log(L"Button identity: button=%p appId=%s (was %s) windows=%zu "
                L"running=%d",
                id, data.explorerAppId.c_str(), e.appIdUpper.c_str(),
                data.windows.size(), data.running);
@@ -4584,11 +4533,10 @@ void ApplyAllHighlights_UIThread() {
                 shownUncombined.insert(idents[bi].sampleHwnd);
             }
         }
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_uncombinedMutex);
         auto& mine = g_uncombinedWindowsByThread[GetCurrentThreadId()];
         if (shownUncombined != mine) {
-            LOG_DEFERRED(L"Uncombined windows (this taskbar): %zu -> %zu",
+            Wh_Log(L"Uncombined windows (this taskbar): %zu -> %zu",
                    mine.size(), shownUncombined.size());
             mine = std::move(shownUncombined);
         }
@@ -4597,7 +4545,6 @@ void ApplyAllHighlights_UIThread() {
     std::vector<AppFocusInfo> ranks;
     GUID deskId{};
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         RecomputeRanksForDesktopLocked(CurrentDeskLocked());
         ranks = CurrentDeskLocked().rankedApps;
@@ -6565,13 +6512,12 @@ void RequestApplyVisuals() {
     }
     if (!any) {
         // Buttons not tracked yet — will apply on next UpdateVisualStates.
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         const auto& ranks = CurrentDeskLocked().rankedApps;
-        LOG_DEFERRED(L"Ranks ready (%zu) — waiting for TaskListButton hooks",
+        Wh_Log(L"Ranks ready (%zu) — waiting for TaskListButton hooks",
                ranks.size());
         for (size_t i = 0; i < ranks.size(); i++) {
-            LOG_DEFERRED(L"  Rank %zu: %s", i + 1, ranks[i].displayName.c_str());
+            Wh_Log(L"  Rank %zu: %s", i + 1, ranks[i].displayName.c_str());
         }
     }
 }
@@ -7212,7 +7158,6 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     const ULONGLONG now = GetTickCount64();
     pending.desktopId = ConfirmDesktopId(pending.desktopId, confirmHwnd);
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto& desk =
             InlineIsEqualGUID(pending.desktopId, GUID_NULL)
@@ -7226,7 +7171,7 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
                 g_pendingFocus = {};
             }
         }
-        LOG_DEFERRED(L"Preview focus confirmed: hwnd=%p %s title=\"%s\" (map=%zu "
+        Wh_Log(L"Preview focus confirmed: hwnd=%p %s title=\"%s\" (map=%zu "
                L"desktop=%s)",
                confirmHwnd, pending.displayName.c_str(), title.c_str(),
                desk.windowFocusMap.size(),
@@ -7276,7 +7221,6 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     const ULONGLONG now = GetTickCount64();
     pending.desktopId = ConfirmDesktopId(pending.desktopId, pending.hwnd);
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto& desk =
             InlineIsEqualGUID(pending.desktopId, GUID_NULL)
@@ -7314,7 +7258,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
             rec == desk.windowAppFocus.end() || rec->second.key.empty()
                 ? std::wstring(L"(no button yet)")
                 : rec->second.key;
-        LOG_DEFERRED(L"Confirmed focus: %s window=%p app=%s (apps=%zu, "
+        Wh_Log(L"Confirmed focus: %s window=%p app=%s (apps=%zu, "
                L"windows=%zu, ranks=%zu, title=\"%s\" desktop=%s)",
                pending.displayName.c_str(), pending.hwnd, derived.c_str(),
                desk.appFocusMap.size(), desk.windowAppFocus.size(),
@@ -7512,15 +7456,14 @@ void NoteForegroundForLastUse(HWND hwnd) {
     if (g_inFrontHwnd) {
         const ULONGLONG at = LastInputTick64(now);
         if (at) {
-            DeferredLogScope logScope;  // logs after unlock
             std::lock_guard<std::mutex> lock(g_stateMutex);
             if (const unsigned moved = RefreshLastUseLocked(
                     g_inFrontHwnd, g_inFrontSince, at)) {
-                LOG_DEFERRED(L"Last use: hwnd=%p left, used until %llus ago "
-                             L"(%s)",
-                             g_inFrontHwnd,
-                             static_cast<unsigned long long>((now - at) / 1000),
-                             LastUseMovedName(moved));
+                Wh_Log(L"Last use: hwnd=%p left, used until %llus ago "
+                       L"(%s)",
+                       g_inFrontHwnd,
+                       static_cast<unsigned long long>((now - at) / 1000),
+                       LastUseMovedName(moved));
             }
         }
     }
@@ -7780,7 +7723,6 @@ void OnDecayTimer() {
     }
     RefreshInFrontLastUse();  // before decay: the app in use is not idle
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         const auto& beforeApps = CurrentDeskLocked().rankedApps;
         keysBefore.reserve(beforeApps.size());
@@ -7810,7 +7752,6 @@ void OnDecayTimer() {
         }
     }
     for (const GUID& id : otherDesktops) {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto it = g_desktopMaps.find(id);
         if (it == g_desktopMaps.end() ||
@@ -8048,7 +7989,6 @@ void DropExcludedRecords() {
     }
 
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         for (auto& [id, desk] : g_desktopMaps) {
             (void)id;
@@ -8496,7 +8436,6 @@ DWORD WINAPI WinEventHookThread(LPVOID /*param*/) {
 }
 
 bool StartWinEventHookThread() {
-    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_winEventHookThreadMutex);
     if (g_winEventHookThread && HookThreadWindow()) {
         return true;
@@ -8506,8 +8445,8 @@ bool StartWinEventHookThread() {
             CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (!g_hookThreadReadyEvent) {
             const DWORD error = GetLastError();
-            LOG_DEFERRED(L"CreateEventW failed for hook-thread ready: %u",
-                         error);
+            Wh_Log(L"CreateEventW failed for hook-thread ready: %u",
+                   error);
             return false;
         }
     } else {
@@ -8517,7 +8456,7 @@ bool StartWinEventHookThread() {
         CreateThread(nullptr, 0, WinEventHookThread, nullptr, 0, nullptr);
     if (!hThread) {
         const DWORD error = GetLastError();
-        LOG_DEFERRED(L"CreateThread failed: %u", error);
+        Wh_Log(L"CreateThread failed: %u", error);
         if (g_hookThreadReadyEvent) {
             CloseHandle(g_hookThreadReadyEvent);
             g_hookThreadReadyEvent = nullptr;
@@ -8527,7 +8466,7 @@ bool StartWinEventHookThread() {
     g_winEventHookThread = hThread;
     WaitForSingleObject(g_hookThreadReadyEvent, INFINITE);
     if (!HookThreadWindow()) {
-        LOG_DEFERRED(L"Focus thread failed to create the message window");
+        Wh_Log(L"Focus thread failed to create the message window");
         WaitForSingleObject(hThread, INFINITE);
         CloseHandle(hThread);
         g_winEventHookThread = nullptr;
@@ -8537,7 +8476,7 @@ bool StartWinEventHookThread() {
         }
         return false;
     }
-    LOG_DEFERRED(L"WinEvent hook thread started");
+    Wh_Log(L"WinEvent hook thread started");
     return true;
 }
 
@@ -8806,7 +8745,6 @@ void ReleaseUiThreadLocals_UIThread() {
     std::wstring().swap(t_lastResolveLog);
     std::wstring().swap(t_lastFlyoutKey);
     std::wstring().swap(g_imagePathCache);
-    std::vector<std::wstring>().swap(t_deferredLogs);
 }
 
 void Wh_ModUninit() {

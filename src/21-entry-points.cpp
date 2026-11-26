@@ -74,7 +74,6 @@ void ReleaseUiThreadLocals_UIThread() {
     std::wstring().swap(t_lastResolveLog);
     std::wstring().swap(t_lastFlyoutKey);
     std::wstring().swap(g_imagePathCache);
-    std::vector<std::wstring>().swap(t_deferredLogs);
 }
 
 void Wh_ModUninit() {

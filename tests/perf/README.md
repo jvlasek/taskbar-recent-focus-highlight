@@ -37,7 +37,9 @@ Reading the lines:
   UI wait means the taskbar thread was blocked by the worker.
 - Logging itself is not timed except where an entry point logs inside its
   scope (most do, with Mod logs on), so compare runs with the same logging
-  level.
+  level. Lines logged while a timed lock is held are written when the
+  thread's last timed lock is released (`PERF_LOG`, 0.12.3), so they never
+  count as lock hold; they carry a `(Function)` prefix.
 
 If an anchor stops matching after a refactor, the script stops with an
 error: update the anchor and keep the slot name, so numbers stay comparable.

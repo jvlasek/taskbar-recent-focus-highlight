@@ -367,7 +367,6 @@ void RevokeIconPanelLayoutWatchesOnThisDispatcher() {
         }
     }
     if (!keep.empty()) {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_layoutWatchMutex);
         for (auto& [id, watch] : keep) {
             auto panelRef = watch.panel;
@@ -380,7 +379,7 @@ void RevokeIconPanelLayoutWatchesOnThisDispatcher() {
                         }
                     }
                 } catch (...) {
-                    LOG_DEFERRED(L"ERROR: SizeChanged revoke failed");
+                    Wh_Log(L"ERROR: SizeChanged revoke failed");
                 }
             }
         }

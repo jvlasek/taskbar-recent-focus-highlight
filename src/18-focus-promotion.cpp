@@ -224,7 +224,6 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     const ULONGLONG now = GetTickCount64();
     pending.desktopId = ConfirmDesktopId(pending.desktopId, confirmHwnd);
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto& desk =
             InlineIsEqualGUID(pending.desktopId, GUID_NULL)
@@ -238,7 +237,7 @@ void OnPreviewMinFocusTimerElapsed(MinFocusConfirmMode mode) {
                 g_pendingFocus = {};
             }
         }
-        LOG_DEFERRED(L"Preview focus confirmed: hwnd=%p %s title=\"%s\" (map=%zu "
+        Wh_Log(L"Preview focus confirmed: hwnd=%p %s title=\"%s\" (map=%zu "
                L"desktop=%s)",
                confirmHwnd, pending.displayName.c_str(), title.c_str(),
                desk.windowFocusMap.size(),
@@ -288,7 +287,6 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
     const ULONGLONG now = GetTickCount64();
     pending.desktopId = ConfirmDesktopId(pending.desktopId, pending.hwnd);
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto& desk =
             InlineIsEqualGUID(pending.desktopId, GUID_NULL)
@@ -326,7 +324,7 @@ void OnMinFocusTimerElapsed(MinFocusConfirmMode mode) {
             rec == desk.windowAppFocus.end() || rec->second.key.empty()
                 ? std::wstring(L"(no button yet)")
                 : rec->second.key;
-        LOG_DEFERRED(L"Confirmed focus: %s window=%p app=%s (apps=%zu, "
+        Wh_Log(L"Confirmed focus: %s window=%p app=%s (apps=%zu, "
                L"windows=%zu, ranks=%zu, title=\"%s\" desktop=%s)",
                pending.displayName.c_str(), pending.hwnd, derived.c_str(),
                desk.appFocusMap.size(), desk.windowAppFocus.size(),
@@ -524,15 +522,14 @@ void NoteForegroundForLastUse(HWND hwnd) {
     if (g_inFrontHwnd) {
         const ULONGLONG at = LastInputTick64(now);
         if (at) {
-            DeferredLogScope logScope;  // logs after unlock
             std::lock_guard<std::mutex> lock(g_stateMutex);
             if (const unsigned moved = RefreshLastUseLocked(
                     g_inFrontHwnd, g_inFrontSince, at)) {
-                LOG_DEFERRED(L"Last use: hwnd=%p left, used until %llus ago "
-                             L"(%s)",
-                             g_inFrontHwnd,
-                             static_cast<unsigned long long>((now - at) / 1000),
-                             LastUseMovedName(moved));
+                Wh_Log(L"Last use: hwnd=%p left, used until %llus ago "
+                       L"(%s)",
+                       g_inFrontHwnd,
+                       static_cast<unsigned long long>((now - at) / 1000),
+                       LastUseMovedName(moved));
             }
         }
     }
@@ -792,7 +789,6 @@ void OnDecayTimer() {
     }
     RefreshInFrontLastUse();  // before decay: the app in use is not idle
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         const auto& beforeApps = CurrentDeskLocked().rankedApps;
         keysBefore.reserve(beforeApps.size());
@@ -822,7 +818,6 @@ void OnDecayTimer() {
         }
     }
     for (const GUID& id : otherDesktops) {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         auto it = g_desktopMaps.find(id);
         if (it == g_desktopMaps.end() ||

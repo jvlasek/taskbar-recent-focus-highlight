@@ -30,6 +30,9 @@ for slot, kind, _ in mpb.SLOTS:
     fn_start = out.rindex("WINAPI ", 0, at)
     assert "_Original(" in out[fn_start:at], slot
 assert "-perf\n" in out.split("// ==/WindhawkMod==")[0]
+head_end = out.index("// ======================= end of PERF BUILD header")
+assert "Wh_Log(" not in out[head_end:], "normal build left a mod Wh_Log"
+assert out[head_end:].count("PERF_LOG(") == source.count("Wh_Log(")
 quiet = mpb.build(source, quiet=True).replace("\r\n", "\n")
 q_head_end = quiet.index("// ======================= end of PERF BUILD header")
 assert "Wh_Log(" not in quiet[q_head_end:], "quiet build left a mod Wh_Log"
@@ -42,6 +45,7 @@ header = out[start:out.index("\n", end) + 1]
 cpp = r'''
 #include <cassert>
 #include <cstdarg>
+#include <vector>
 #include <cstdio>
 #include <cwchar>
 #include <mutex>
@@ -106,6 +110,18 @@ int main() {
         }
         assert(g_log.find(L"PERF interval DecayTimer: n=1", before) != std::wstring::npos);
         assert(g_log.find(L"PERF interval RecomputeRanks: n=1", before) != std::wstring::npos);
+    }
+    {  // A mod line logged under a timed lock is written after the release.
+        std::mutex m;
+        const size_t before = g_log.size();
+        {
+            perf::TimedLock lock(m);
+            PERF_LOG(L"Decayed: %s (%d)", L"App", 7);
+            assert(g_log.size() == before);
+        }
+        assert(g_log.find(L") Decayed: App (7)", before) != std::wstring::npos);
+        PERF_LOG(L"direct %d", 1);  // no lock: written at once
+        assert(g_log.find(L"direct 1", before) != std::wstring::npos);
     }
     fputws(g_log.c_str(), stdout);
 }

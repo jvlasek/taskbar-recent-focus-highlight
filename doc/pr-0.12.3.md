@@ -34,7 +34,7 @@ native element, and counts recency from when an app was last *used*.
 - **The side bar's halo** (a second, slightly larger translucent rectangle;
   XAML cannot blur it, so it showed as a hard-edged rim when magnified).
 - Symbol count: 26 (Taskbar.View.dll + taskbar.dll) -> 12 (Taskbar.View.dll
-  only). Lines: 8294 -> 8891, with the new features below included.
+  only). Lines: 8294 -> 8840, with the new features below included.
 
 ## Identity rule
 

@@ -43,7 +43,6 @@ IVirtualDesktopManager* EnsureVdm() {
     if (!OnHookThread()) {
         return nullptr;
     }
-    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_vdmMutex);
     if (g_vdm) {
         return g_vdm;
@@ -52,7 +51,7 @@ IVirtualDesktopManager* EnsureVdm() {
     HRESULT hr = CoCreateInstance(kClsidVirtualDesktopManager, nullptr,
                                   CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&vdm));
     if (FAILED(hr) || !vdm) {
-        LOG_DEFERRED(L"IVirtualDesktopManager create failed %08X", hr);
+        Wh_Log(L"IVirtualDesktopManager create failed %08X", hr);
         return nullptr;
     }
     g_vdm = vdm;
@@ -153,7 +152,6 @@ GUID ConfirmDesktopId(const GUID& pendingDesktop, HWND hwnd) {
 // read (i.e. a real switch, not startup). Safe to call without g_stateMutex.
 bool RefreshCurrentDesktopId() {
     const GUID id = ResolveCurrentDesktopId();
-    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_stateMutex);
     const bool first = !g_haveCurrentDesktop;
     const bool changed = !InlineIsEqualGUID(id, g_currentDesktopId);
@@ -161,7 +159,7 @@ bool RefreshCurrentDesktopId() {
     g_haveCurrentDesktop = true;
     g_desktopMaps[id];
     if (changed) {
-        LOG_DEFERRED(L"Current virtual desktop: %s (%zu tracked)",
+        Wh_Log(L"Current virtual desktop: %s (%zu tracked)",
                GuidToLogString(id).c_str(), g_desktopMaps.size());
     }
     return !first && changed;
@@ -205,13 +203,12 @@ void OnVirtualDesktopSwitched(PCWSTR reason) {
     RefreshCurrentDesktopId();
     bool droppedPending = false;
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         droppedPending = DropPendingIfWrongDesktopLocked();
         // Do not recompute here: grace was just cleared, so every path would
         // fail AppAppearsOnTaskbar. ApplyAllHighlights snapshots IsRunning
         // on the UI thread, then recomputes.
-        LOG_DEFERRED(L"Desktop switch (%s): current %s droppedPending=%d",
+        Wh_Log(L"Desktop switch (%s): current %s droppedPending=%d",
                reason, GuidToLogString(g_currentDesktopId).c_str(),
                droppedPending ? 1 : 0);
     }

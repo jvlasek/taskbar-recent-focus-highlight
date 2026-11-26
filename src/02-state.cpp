@@ -169,49 +169,6 @@ struct DesktopRecencyState {
 
 std::mutex g_stateMutex;
 
-// Log lines produced while g_stateMutex is held are queued per thread and
-// written once the outermost DeferredLogScope ends, prefixed with the
-// function that produced them (Wh_Log's own prefix shows the destructor). Declare the scope before
-// the lock so it is destroyed after it: Wh_Log is OutputDebugString plus
-// file I/O, and the UI thread waits on this lock. Without a scope, logs
-// directly.
-thread_local std::vector<std::wstring> t_deferredLogs;
-thread_local int t_deferredLogDepth = 0;
-
-struct DeferredLogScope {
-    DeferredLogScope() { ++t_deferredLogDepth; }
-    ~DeferredLogScope() {
-        if (--t_deferredLogDepth != 0 || t_deferredLogs.empty()) {
-            return;
-        }
-        std::vector<std::wstring> lines;
-        lines.swap(t_deferredLogs);
-        for (const auto& line : lines) {
-            Wh_Log(L"%s", line.c_str());
-        }
-    }
-    DeferredLogScope(const DeferredLogScope&) = delete;
-    DeferredLogScope& operator=(const DeferredLogScope&) = delete;
-};
-
-#define LOG_DEFERRED(...)                                              \
-    do {                                                               \
-        if (t_deferredLogDepth == 0) {                                 \
-            Wh_Log(__VA_ARGS__);                                       \
-        } else {                                                       \
-            wchar_t deferredLogBuf_[1024];                             \
-            const int deferredLogPre_ = _snwprintf_s(                  \
-                deferredLogBuf_, _countof(deferredLogBuf_), _TRUNCATE, \
-                L"(%S) ", __func__);                                   \
-            if (deferredLogPre_ > 0) {                                 \
-                _snwprintf_s(deferredLogBuf_ + deferredLogPre_,        \
-                             _countof(deferredLogBuf_) -               \
-                                 deferredLogPre_,                      \
-                             _TRUNCATE, __VA_ARGS__);                  \
-            }                                                          \
-            t_deferredLogs.emplace_back(deferredLogBuf_);              \
-        }                                                              \
-    } while (0)
 std::unordered_map<GUID, DesktopRecencyState, GuidHash, GuidEqual> g_desktopMaps;
 GUID g_currentDesktopId{};
 bool g_haveCurrentDesktop = false;
@@ -398,7 +355,6 @@ bool RememberUiDispatcher(FrameworkElement el) {
         if (!dispatcher || !dispatcher.HasThreadAccess()) {
             return false;
         }
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_dispatchersMutex);
         if (!g_uiDispatchers) {
             return false;
@@ -415,7 +371,7 @@ bool RememberUiDispatcher(FrameworkElement el) {
                              GetCurrentProcess(), &thread, SYNCHRONIZE,
                              FALSE, 0)) {
             const DWORD error = GetLastError();
-            LOG_DEFERRED(L"Cannot capture UI thread: %u", error);
+            Wh_Log(L"Cannot capture UI thread: %u", error);
             return false;
         }
         winrt::handle ownedThread{thread};

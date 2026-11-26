@@ -315,7 +315,6 @@ ButtonCapture CaptureButton(FrameworkElement button) {
         }
         {
             bool changed = false;
-            DeferredLogScope logScope;  // logs after unlock
             std::lock_guard<std::mutex> lock(g_uncombinedMutex);
             if (uncombined) {
                 changed = g_uncombinedWindowsByThread[GetCurrentThreadId()]
@@ -326,7 +325,7 @@ ButtonCapture CaptureButton(FrameworkElement button) {
                               .erase(ownWindow) > 0;
             }
             if (changed) {
-                LOG_DEFERRED(L"Button windows: button=%p own=%p -> %s",
+                Wh_Log(L"Button windows: button=%p own=%p -> %s",
                        data.buttonId, ownWindow,
                        uncombined ? L"uncombined (own slot)" : L"combined");
             }
@@ -378,7 +377,6 @@ std::wstring EnsureButtonIdentity(FrameworkElement button) {
         return {};
     }
     ButtonCapture data = CaptureButton(button);
-    DeferredLogScope logScope;  // logs after unlock
     std::lock_guard<std::mutex> lock(g_buttonStateMutex);
     ButtonState* state = FindButtonStateLocked(button, true);
     if (!state) {
@@ -393,7 +391,7 @@ std::wstring EnsureButtonIdentity(FrameworkElement button) {
                         return a.hwnd == b.hwnd && a.pid == b.pid;
                     });
     if (e.appIdUpper != data.explorerAppId) {
-        LOG_DEFERRED(L"Button identity: button=%p appId=%s (was %s) windows=%zu "
+        Wh_Log(L"Button identity: button=%p appId=%s (was %s) windows=%zu "
                L"running=%d",
                id, data.explorerAppId.c_str(), e.appIdUpper.c_str(),
                data.windows.size(), data.running);
@@ -696,11 +694,10 @@ void ApplyAllHighlights_UIThread() {
                 shownUncombined.insert(idents[bi].sampleHwnd);
             }
         }
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_uncombinedMutex);
         auto& mine = g_uncombinedWindowsByThread[GetCurrentThreadId()];
         if (shownUncombined != mine) {
-            LOG_DEFERRED(L"Uncombined windows (this taskbar): %zu -> %zu",
+            Wh_Log(L"Uncombined windows (this taskbar): %zu -> %zu",
                    mine.size(), shownUncombined.size());
             mine = std::move(shownUncombined);
         }
@@ -709,7 +706,6 @@ void ApplyAllHighlights_UIThread() {
     std::vector<AppFocusInfo> ranks;
     GUID deskId{};
     {
-        DeferredLogScope logScope;  // logs after unlock
         std::lock_guard<std::mutex> lock(g_stateMutex);
         RecomputeRanksForDesktopLocked(CurrentDeskLocked());
         ranks = CurrentDeskLocked().rankedApps;

@@ -80,11 +80,14 @@ dispatcher post, and before touching `Wh_ModInit` / `Wh_ModUninit`.
 reverse, and never publish settings while holding `g_stateMutex`.
 
 **Not under a lock:** XAML calls, `Dispatcher` calls, COM and cross-process
-reads (`SHGetPropertyStoreForWindow`, `GetProcessImagePath`), and `Wh_Log`
-(0.12.2: any mutex, not only `g_stateMutex`). Resolve first, then lock and
-assign. The UI thread takes `g_stateMutex` to paint. Inside a lock log with
-`LOG_DEFERRED` under a `DeferredLogScope` declared before the lock; read
-`GetLastError()` into a local first. `run-review-helper-tests.py` checks it.
+reads (`SHGetPropertyStoreForWindow`, `GetProcessImagePath`). Resolve first,
+then lock and assign. The UI thread takes `g_stateMutex` to paint. `Wh_Log`
+under a lock is fine: with logging off it does nothing, and the mod logs
+only state changes there. 0.12.2 deferred such lines with a
+`DeferredLogScope` / `LOG_DEFERRED` layer; 0.12.3 removed it (windhawk-mods
+review: it formatted and allocated even with logging off). Only the perf
+build defers them (`PERF_LOG`, flushed when the last timed lock of the
+thread is released), so normal perf runs do not count log I/O as lock hold.
 
 ## Rules
 

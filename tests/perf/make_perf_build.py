@@ -7,7 +7,8 @@ Default: taskbar-recent-focus-highlight.wh.cpp -> tmp/perf/<name>.perf.wh.cpp
 --quiet turns every Wh_Log of the mod itself into a no-op (arguments are not
 evaluated), so only the PERF lines remain and the numbers exclude the mod's
 own logging. Use it for release baselines; the normal perf build shows the
-cost with Mod logs on.
+cost with Mod logs on, but writes lines logged under a timed lock only after
+that lock is released, so log I/O does not count as lock hold.
 
 The copy keeps the mod id (settings stay shared) and gets "-perf" appended to
 its version. Paste it into Windhawk's editor, use the taskbar normally, and
@@ -81,9 +82,11 @@ BUTTON_LOCK = "std::lock_guard<std::mutex> lock(g_buttonStateMutex);"
 def build(text, quiet=False):
     crlf = "\r\n" in text
     body = text.replace("\r\n", "\n")
-    if quiet:
-        # Only calls; the "#define Wh_Log" of other code is not in this file.
-        body = re.sub(r"\bWh_Log\(", "PERF_QUIET_LOG(", body)
+    # Only calls; the "#define Wh_Log" of other code is not in this file.
+    # Quiet: every mod log is a no-op. Normal: PERF_LOG queues a line logged
+    # under a timed lock until the lock is released (perf_header.inc).
+    body = re.sub(r"\bWh_Log\(", "PERF_QUIET_LOG(" if quiet else "PERF_LOG(",
+                  body)
     if STATE_LOCK not in body:
         raise SystemExit("no g_stateMutex lock_guard found")
     body = body.replace(STATE_LOCK, "perf::TimedLock lock(g_stateMutex);")
