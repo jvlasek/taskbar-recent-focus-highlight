@@ -7,14 +7,19 @@ YAML keys map to `LoadSettings()`, which fills a local `Settings` then
 `SettingsSnap()`.
 Nested YAML groups (compact-start-menu / accent-color-sync shape) render as
 real groups in the Windhawk UI. `$group` is still rejected by the schema.
-General keys stay top-level; icon/preview keys are dotted.
+The app-ranking keys and the exclude list stay top-level (ids from 0.11.1);
+icon/preview keys are dotted. Position is free, so the page shows the four
+"Taskbar:" settings first, then the groups, then the exclude list (0.12.3).
+Moving a key into a group was tried in 0.12.2 and reverted: Windhawk has no
+migration, the page would show the default and the first save drop the old
+value (windhawk-mods AI review, PR #7977).
 
 | Group | Setting key | Field |
 |-------|-------------|--------|
-| General | `highlightCount` | `Settings::highlightCount` |
-| General | `minFocusSeconds` | `Settings::minFocusSeconds` |
-| General | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
-| General | `decayMinutes` | app decay |
+| Taskbar (top level) | `highlightCount` | `Settings::highlightCount` |
+| Taskbar (top level) | `minFocusSeconds` | `Settings::minFocusSeconds` |
+| Taskbar (top level) | `promoteMode` | `ImmediateTracked` / `ImmediateTopN` / `AlwaysWait` |
+| Taskbar (top level) | `decayMinutes` | app decay |
 | General | `excludedPrograms[i]` | uppercase set |
 | Taskbar icons | `icons.glowColor` / `icons.customGlowColor` | UI "Highlight color" / "Custom highlight color" since 0.12.2 (ids kept) |
 | Taskbar icons | `icons.glowStyle` | `leftBar` (Side bar) / `full` (Plate) / `frame` (Plate with accent) — UI names and look changed in 0.12.1, ids kept; legacy `bottomBar` falls back to Side |

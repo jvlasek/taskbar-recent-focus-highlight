@@ -68,14 +68,15 @@ because saved values still sit under the old names — that is not “unconfigur
 on purpose.” Use **Reset to default** (or save once) so the new keys are
 written. First-time catalog installs get the YAML defaults with no extra step.
 
-### General
+### Taskbar (top of the settings page; top-level ids)
 | Setting | Description | Default |
 |---------|-------------|---------|
-| Number of highlighted apps | How many recent apps to boost (1–6 recommended) | 3 |
-| Minimum focus time (seconds) | How long a new app must stay focused to enter ranks. Re-focus follows “When to skip min-focus” | 8 |
-| When to skip min-focus | Immediate if in map / only if already top-N / always wait | Immediate if in map |
-| Decay time (minutes) | Drop app from ranks this long after you last used it | 30 |
-| Exclude list | Never highlight (exe, path, or AppId) | (empty) |
+| Taskbar: number of highlighted apps | How many recently used apps to highlight (1–6 recommended) | 3 |
+| Taskbar: decay time (minutes) | Drop an app this long after you last used it | 30 |
+| Taskbar: minimum focus time (seconds) | How long a new app must stay in front to count. Coming back follows the next setting | 8 |
+| Taskbar: coming back to an app | At once if still in the list / at once only if highlighted / always wait | At once if still in the list |
+
+Exclude list (last on the page): never highlight (exe, path, or AppId); default empty.
 
 ### Taskbar icons
 | Setting | Description | Default |
